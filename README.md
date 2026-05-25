@@ -57,19 +57,9 @@ main_codex
 grokking
   /home/chenma/Documents/My_AI_Agent/watchdog_demo_05_Grokking
   readonly
-
-agent_host
-  modules/agent-host
-  readonly
-
-discord_adapter
-  modules/discord-adapter
-  readonly
-
-watchdog_vscode
-  modules/codex-watchdog-vscode
-  readonly
 ```
+
+The monorepo modules are tool implementation code. They do not need to be exposed as Agent Host workspaces for normal testing. Add them to your private `config.json` only when you explicitly want Codex to inspect the tool code through the Agent Host.
 
 `main_codex` is the main AI-Agent workspace. It can be `workspace-write`, but write tasks are governed by:
 

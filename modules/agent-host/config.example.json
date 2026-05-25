@@ -47,33 +47,6 @@
       ],
       "description": "Primary AI-Agent workspace for cross-project coordination with workspace-write sandbox."
     },
-    "agent_host": {
-      "path": "/home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host",
-      "label": "agent host",
-      "default_mode": "readonly",
-      "allowed_modes": [
-        "readonly"
-      ],
-      "description": "Agent Host API and Web UI project."
-    },
-    "discord_adapter": {
-      "path": "/home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter",
-      "label": "discord adapter",
-      "default_mode": "readonly",
-      "allowed_modes": [
-        "readonly"
-      ],
-      "description": "Discord Agent Adapter project."
-    },
-    "watchdog_vscode": {
-      "path": "/home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-watchdog-vscode",
-      "label": "watchdog vscode",
-      "default_mode": "readonly",
-      "allowed_modes": [
-        "readonly"
-      ],
-      "description": "Codex Watchdog VSCode project workspace."
-    },
     "grokking": {
       "path": "/home/chenma/Documents/My_AI_Agent/watchdog_demo_05_Grokking",
       "label": "grokking",
