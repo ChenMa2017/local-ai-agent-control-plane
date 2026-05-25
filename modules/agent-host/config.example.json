@@ -19,7 +19,7 @@
       }
     }
   },
-  "codex_bridge_root": "/home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-bridge",
+  "codex_bridge_root": "/home/you/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-bridge",
   "codex_bridge_node_bin": "node",
   "adapters": {
     "web": {
@@ -39,7 +39,7 @@
   },
   "projects": {
     "main_codex": {
-      "path": "/home/chenma/Documents/My_AI_Agent",
+      "path": "/home/you/Documents/My_AI_Agent",
       "label": "main codex",
       "default_mode": "workspace-write",
       "allowed_modes": [
@@ -48,7 +48,7 @@
       "description": "Primary AI-Agent workspace for cross-project coordination with workspace-write sandbox."
     },
     "grokking": {
-      "path": "/home/chenma/Documents/My_AI_Agent/watchdog_demo_Grokking",
+      "path": "/home/you/Documents/My_AI_Agent/watchdog_demo_Grokking",
       "label": "grokking",
       "default_mode": "readonly",
       "allowed_modes": [

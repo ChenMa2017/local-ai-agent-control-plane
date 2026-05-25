@@ -5,7 +5,7 @@ Use this when cloning the project onto another computer.
 ## 1. Clone
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev
+cd $HOME/Documents/My_App_Dev
 git clone git@github.com:ChenMa2017/local-ai-agent-control-plane.git
 cd local-ai-agent-control-plane
 ```
@@ -38,19 +38,19 @@ pip install -r requirements.txt
 ## 4. Create local workspaces
 
 ```bash
-mkdir -p /home/chenma/Documents/My_AI_Agent
+mkdir -p $HOME/Documents/My_AI_Agent
 ```
 
 Create or copy your project:
 
 ```text
-/home/chenma/Documents/My_AI_Agent/watchdog_demo_Grokking
+$HOME/Documents/My_AI_Agent/watchdog_demo_Grokking
 ```
 
 ## 5. Configure Agent Host
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host
+cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host
 cp config.example.json config.json
 nano config.json
 ```
@@ -60,7 +60,7 @@ Change paths and tokens for this machine.
 ## 6. Configure Discord Adapter
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter
+cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter
 cp config.example.json config.json
 nano config.json
 ```
@@ -85,7 +85,7 @@ chmod 600 ~/.config/agent-host/secrets.env
 ## 8. Check
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane
+cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane
 scripts/check_all.sh
 ```
 
@@ -101,7 +101,7 @@ python3 bridge.py --config config.json
 Systemd:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane
+cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane
 scripts/install_user_services.sh
 scripts/start_services.sh
 ```

@@ -24,7 +24,7 @@ bypass Agent Host permissions
 Create Python environment:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter
+cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt

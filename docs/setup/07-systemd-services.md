@@ -10,7 +10,7 @@ systemd/user/discord-agent-adapter.service
 Install:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane
+cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane
 scripts/install_user_services.sh
 ```
 

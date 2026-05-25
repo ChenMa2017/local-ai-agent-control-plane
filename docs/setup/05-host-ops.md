@@ -28,7 +28,7 @@ git-status
 Check:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/host-ops
+cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/host-ops
 python3 -m unittest discover -s tests
 python3 host_ops.py capabilities
 ```

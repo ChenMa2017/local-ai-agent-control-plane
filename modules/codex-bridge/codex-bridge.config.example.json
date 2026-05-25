@@ -3,16 +3,16 @@
   "users": ["chenma"],
   "projects": {
     "main_codex": {
-      "path": "/home/chenma/Documents/My_AI_Agent",
+      "path": "/home/you/Documents/My_AI_Agent",
       "mode": "workspace-write",
       "allowedModes": ["workspace-write"]
     },
     "bridge_core": {
-      "path": "/home/chenma/Documents/My_App_Dev/codex-bridge",
+      "path": "/home/you/Documents/My_App_Dev/codex-bridge",
       "mode": "readonly"
     },
     "grokking": {
-      "path": "/home/chenma/Documents/My_AI_Agent/watchdog_demo_Grokking",
+      "path": "/home/you/Documents/My_AI_Agent/watchdog_demo_Grokking",
       "mode": "readonly"
     }
   },

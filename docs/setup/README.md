@@ -21,11 +21,11 @@ The normal test workspaces are intentionally small:
 
 ```text
 main_codex
-  /home/chenma/Documents/My_AI_Agent
+  $HOME/Documents/My_AI_Agent
   workspace-write
 
 grokking
-  /home/chenma/Documents/My_AI_Agent/watchdog_demo_Grokking
+  $HOME/Documents/My_AI_Agent/watchdog_demo_Grokking
   readonly
 ```
 

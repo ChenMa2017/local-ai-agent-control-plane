@@ -7,7 +7,7 @@ PID_PATH="$ROOT_DIR/.bridge.pid"
 LOG_DIR="$ROOT_DIR/logs"
 LOG_PATH="$LOG_DIR/bridge.log"
 
-DEFAULT_PROJECT_ROOT="/home/chenma/Documents/My_AI_Agent/watchdog_demo_Grokking"
+DEFAULT_PROJECT_ROOT="$HOME/Documents/My_AI_Agent/watchdog_demo_Grokking"
 
 usage() {
   cat <<'EOF'
@@ -28,7 +28,7 @@ Optional env vars for init/start:
   BRIDGE_ALLOWED_USER=chenma
   BRIDGE_PROJECT_NAME=grokking
   BRIDGE_PROJECT_ROOT=/path/to/watchdog/project
-  CODEX_BRIDGE_ROOT=/home/chenma/Documents/My_App_Dev/codex-bridge
+  CODEX_BRIDGE_ROOT=$HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-bridge
   CODEX_WEB_TOKEN=...        Browser/API bearer token for /codex/* and /whoami
   BRIDGE_CONFIG=/path/to/config.json
 
@@ -55,7 +55,7 @@ write_config() {
   local user="${BRIDGE_ALLOWED_USER:-chenma}"
   local project_name="${BRIDGE_PROJECT_NAME:-grokking}"
   local project_root="${BRIDGE_PROJECT_ROOT:-$DEFAULT_PROJECT_ROOT}"
-  local codex_bridge_root="${CODEX_BRIDGE_ROOT:-/home/chenma/Documents/My_App_Dev/codex-bridge}"
+  local codex_bridge_root="${CODEX_BRIDGE_ROOT:-$HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-bridge}"
   local codex_web_token="${CODEX_WEB_TOKEN:-replace-with-codex-web-token}"
 
   python3 - "$CONFIG_PATH" "$token" "$host" "$port" "$user" "$project_name" "$project_root" "$codex_bridge_root" "$codex_web_token" <<'PY'

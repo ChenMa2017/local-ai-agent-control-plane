@@ -148,9 +148,8 @@ def load_config(path: Path) -> BridgeConfig:
 
     tokens = tuple(str(x) for x in data.get("mattermost_tokens", []) if str(x))
     allowed_users = tuple(str(x) for x in data.get("allowed_users", []) if str(x))
-    codex_bridge_root = Path(
-        str(data.get("codex_bridge_root", "/home/chenma/Documents/My_App_Dev/codex-bridge"))
-    ).resolve()
+    default_codex_bridge_root = Path(__file__).resolve().parents[1] / "codex-bridge"
+    codex_bridge_root = Path(str(data.get("codex_bridge_root", default_codex_bridge_root))).resolve()
     auth_tokens = load_auth_tokens(data)
 
     return BridgeConfig(

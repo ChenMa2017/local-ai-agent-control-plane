@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_ROOT="/home/chenma/Documents/My_App_Dev"
+REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
+APP_ROOT="$REPO_ROOT"
 SECRETS_FILE="${HOME}/.config/agent-host/secrets.env"
 
 if [ -f "$SECRETS_FILE" ]; then
@@ -51,7 +52,8 @@ for path in ("/codex/capabilities", "/codex/workspaces"):
         data = json.loads(response.read().decode())
         print(path, "ok=", data.get("ok"))
         text = json.dumps(data, ensure_ascii=False)
-        if "/home/chenma" in text:
+        home = os.path.expanduser("~")
+        if home in text:
             raise SystemExit(f"{path} leaked a home path")
 PY
 else
@@ -61,14 +63,14 @@ fi
 
 echo
 echo "== Discord adapter config =="
-if [ -x "$APP_ROOT/discord_agent_adapter/.venv/bin/python" ]; then
-  "$APP_ROOT/discord_agent_adapter/.venv/bin/python" \
-    "$APP_ROOT/discord_agent_adapter/bot.py" \
-    --config "$APP_ROOT/discord_agent_adapter/config.json" \
+if [ -x "$APP_ROOT/modules/discord-adapter/.venv/bin/python" ]; then
+  "$APP_ROOT/modules/discord-adapter/.venv/bin/python" \
+    "$APP_ROOT/modules/discord-adapter/bot.py" \
+    --config "$APP_ROOT/modules/discord-adapter/config.json" \
     --check-config
 else
-  python3 "$APP_ROOT/discord_agent_adapter/bot.py" \
-    --config "$APP_ROOT/discord_agent_adapter/config.json" \
+  python3 "$APP_ROOT/modules/discord-adapter/bot.py" \
+    --config "$APP_ROOT/modules/discord-adapter/config.json" \
     --check-config
 fi
 
@@ -80,7 +82,7 @@ systemctl --user is-active discord-agent-adapter.service || true
 echo
 echo "== Codex Bridge cleanup dry-run =="
 cleanup_args=(cleanup --dry-run --older-than-days 30 --keep-last 200)
-if [ -f "$APP_ROOT/codex-bridge/.codex-bridge/web-adapter.config.json" ]; then
-  cleanup_args+=(--config "$APP_ROOT/codex-bridge/.codex-bridge/web-adapter.config.json")
+if [ -f "$APP_ROOT/modules/codex-bridge/.codex-bridge/web-adapter.config.json" ]; then
+  cleanup_args+=(--config "$APP_ROOT/modules/codex-bridge/.codex-bridge/web-adapter.config.json")
 fi
-node "$APP_ROOT/codex-bridge/scripts/codex-bridge.js" "${cleanup_args[@]}"
+node "$APP_ROOT/modules/codex-bridge/scripts/codex-bridge.js" "${cleanup_args[@]}"

@@ -1,16 +1,16 @@
 [Unit]
 Description=Discord Agent Adapter
-Documentation=file:/home/chenma/Documents/My_App_Dev/discord_agent_adapter/README.md
+Documentation=file:%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/README.md
 After=network-online.target agent-host-web.service
 Wants=network-online.target agent-host-web.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/chenma/Documents/My_App_Dev/discord_agent_adapter
+WorkingDirectory=%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=%h/.config/agent-host/secrets.env
-ExecStartPre=/home/chenma/Documents/My_App_Dev/discord_agent_adapter/.venv/bin/python /home/chenma/Documents/My_App_Dev/discord_agent_adapter/bot.py --config /home/chenma/Documents/My_App_Dev/discord_agent_adapter/config.json --check-config
-ExecStart=/home/chenma/Documents/My_App_Dev/discord_agent_adapter/.venv/bin/python /home/chenma/Documents/My_App_Dev/discord_agent_adapter/bot.py --config /home/chenma/Documents/My_App_Dev/discord_agent_adapter/config.json
+ExecStartPre=%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/.venv/bin/python %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/bot.py --config %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/config.json --check-config
+ExecStart=%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/.venv/bin/python %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/bot.py --config %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/config.json
 Restart=on-failure
 RestartSec=5
 

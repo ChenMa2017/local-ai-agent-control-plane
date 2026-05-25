@@ -23,7 +23,7 @@ Mattermost 入口会验证 token、用户白名单和项目白名单，然后把
 网页入口会调用独立项目：
 
 ```text
-/home/chenma/Documents/My_App_Dev/codex-bridge
+$HOME/Documents/My_App_Dev/codex-bridge
 ```
 
 并通过 `codex-bridge` 创建 task、返回 task_id，再允许网页查询 status / result / logs / cancel。
@@ -39,7 +39,7 @@ Mattermost 入口会验证 token、用户白名单和项目白名单，然后把
 其中网页入口会启动一个受控的本地子进程：
 
 ```text
-node /home/chenma/Documents/My_App_Dev/codex-bridge/scripts/codex-bridge.js ...
+node $HOME/Documents/My_App_Dev/codex-bridge/scripts/codex-bridge.js ...
 ```
 
 它不拼接 shell 字符串，真实 Codex 执行仍由 `codex-bridge` 自己的项目白名单、用户白名单和 read-only runner 管理。
@@ -47,7 +47,7 @@ node /home/chenma/Documents/My_App_Dev/codex-bridge/scripts/codex-bridge.js ...
 最快启动方式：
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/mattermpst_chat
+cd $HOME/Documents/My_App_Dev/mattermpst_chat
 MATTERMOST_TOKEN=你的slash-command-token CODEX_WEB_TOKEN=你的网页访问token ./watchdog_bridge.sh init
 ./watchdog_bridge.sh start
 ./watchdog_bridge.sh status
@@ -202,7 +202,7 @@ readonly         只读分析，不修改文件。
 workspace-write 允许 Codex 在该 workspace root 内修改文件，适合明确授权的本地工作区。
 ```
 
-当前主入口是 `main_codex`，路径是 `/home/chenma/Documents/My_AI_Agent`，模式为 `workspace-write`。`grokking` 是主入口下的项目级只读 workspace。旧入口 `self` 和 `codex` 已从 Agent Host workspace 列表中移除。
+当前主入口是 `main_codex`，路径是 `$HOME/Documents/My_AI_Agent`，模式为 `workspace-write`。`grokking` 是主入口下的项目级只读 workspace。旧入口 `self` 和 `codex` 已从 Agent Host workspace 列表中移除。
 
 查看 Agent Host 能力：
 
@@ -242,7 +242,7 @@ curl 'http://127.0.0.1:8787/codex/tasks?limit=50' \
 `/codex/tasks` 会从独立 `codex-bridge` 的任务目录读取元数据：
 
 ```text
-/home/chenma/Documents/My_App_Dev/codex-bridge/.codex-bridge/tasks/<task_id>/task.json
+$HOME/Documents/My_App_Dev/codex-bridge/.codex-bridge/tasks/<task_id>/task.json
 ```
 
 支持的查询参数：
@@ -299,7 +299,7 @@ Discord Gateway Bot
 For long-running use, install user-level systemd services:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/mattermpst_chat
+cd $HOME/Documents/My_App_Dev/mattermpst_chat
 scripts/install_user_services.sh
 ```
 

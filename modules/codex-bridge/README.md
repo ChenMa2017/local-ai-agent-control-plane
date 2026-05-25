@@ -89,7 +89,7 @@ Config fields:
 
 - `users`: allowed external users.
 - `projects`: project whitelist. External messages use project names, never raw paths. Each project can be `readonly` or explicitly `workspace-write`.
-  A common pattern is to define `main_codex` at `/home/chenma/Documents/My_AI_Agent` with `workspace-write`, while keeping individual project aliases readonly until they need write access.
+  A common pattern is to define `main_codex` at `$HOME/Documents/My_AI_Agent` with `workspace-write`, while keeping individual project aliases readonly until they need write access.
 - `stateDir`: where task JSON, logs, stdout JSONL, stderr, and results are saved.
 - `codexBin`: Codex executable.
 - `maxConcurrent`: how many bridge tasks may run at once.

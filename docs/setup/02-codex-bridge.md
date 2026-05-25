@@ -15,7 +15,7 @@ Turn external requests into safe, logged, cancellable Codex CLI tasks.
 Install/check:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-bridge
+cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-bridge
 npm install
 npm test
 ```

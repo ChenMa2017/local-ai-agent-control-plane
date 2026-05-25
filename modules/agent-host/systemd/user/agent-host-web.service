@@ -1,14 +1,14 @@
 [Unit]
 Description=Local Agent Host Web API
-Documentation=file:/home/chenma/Documents/My_App_Dev/mattermpst_chat/README.md
+Documentation=file:%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/README.md
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/chenma/Documents/My_App_Dev/mattermpst_chat
+WorkingDirectory=%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host
 Environment=PYTHONUNBUFFERED=1
-ExecStartPre=/usr/bin/python3 /home/chenma/Documents/My_App_Dev/mattermpst_chat/bridge.py --config /home/chenma/Documents/My_App_Dev/mattermpst_chat/config.json --check-config
-ExecStart=/usr/bin/python3 /home/chenma/Documents/My_App_Dev/mattermpst_chat/bridge.py --config /home/chenma/Documents/My_App_Dev/mattermpst_chat/config.json
+ExecStartPre=/usr/bin/python3 %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/bridge.py --config %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/config.json --check-config
+ExecStart=/usr/bin/python3 %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/bridge.py --config %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/config.json
 Restart=on-failure
 RestartSec=5
 

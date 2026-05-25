@@ -17,6 +17,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent
+HOME = Path.home()
+APP_ROOT = HOME / "Documents" / "My_App_Dev"
 DEFAULT_CONFIG = {
     "systemd_user_units": [
         "agent-host-web.service",
@@ -27,15 +29,15 @@ DEFAULT_CONFIG = {
         "discord-agent-adapter.service",
     ],
     "path_aliases": {
-        "my_ai_agent": "/home/chenma/Documents/My_AI_Agent",
-        "my_app_dev": "/home/chenma/Documents/My_App_Dev",
+        "my_ai_agent": str(HOME / "Documents" / "My_AI_Agent"),
+        "my_app_dev": str(APP_ROOT),
     },
     "git_workspaces": {
-        "codex-bridge": "/home/chenma/Documents/My_App_Dev/codex-bridge",
-        "mattermpst_chat": "/home/chenma/Documents/My_App_Dev/mattermpst_chat",
-        "discord_agent_adapter": "/home/chenma/Documents/My_App_Dev/discord_agent_adapter",
-        "codex-watchdog-vscode": "/home/chenma/Documents/My_App_Dev/codex-watchdog-vscode",
-        "host_ops": "/home/chenma/Documents/My_App_Dev/host_ops",
+        "codex-bridge": str(APP_ROOT / "local-ai-agent-control-plane" / "modules" / "codex-bridge"),
+        "agent-host": str(APP_ROOT / "local-ai-agent-control-plane" / "modules" / "agent-host"),
+        "discord-adapter": str(APP_ROOT / "local-ai-agent-control-plane" / "modules" / "discord-adapter"),
+        "codex-watchdog-vscode": str(APP_ROOT / "local-ai-agent-control-plane" / "modules" / "codex-watchdog-vscode"),
+        "host-ops": str(APP_ROOT / "local-ai-agent-control-plane" / "modules" / "host-ops"),
     },
     "max_journal_lines": 200,
     "max_output_chars": 20000,

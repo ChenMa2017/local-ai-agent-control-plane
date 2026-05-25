@@ -158,7 +158,7 @@ def sanitize_discord_text(text: str) -> str:
     home = str(Path.home())
     if home:
         value = value.replace(home, "~")
-    value = value.replace("/home/chenma", "~")
+    value = re.sub(r"/home/[^/\s]+", "~", value)
     value = json_safe_redactions(value)
     return value
 
@@ -501,7 +501,7 @@ def validate_check_config(config: AdapterConfig, cwd: Path | None = None) -> lis
         leaked = any(
             marker and marker in text
             for marker in (
-                "/home/chenma",
+                str(Path.home()),
                 str(cwd),
                 os.getcwd(),
             )

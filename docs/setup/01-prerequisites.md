@@ -24,15 +24,15 @@ Codex CLI installed and authenticated locally
 Recommended directory layout:
 
 ```text
-/home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane
-/home/chenma/Documents/My_AI_Agent
-/home/chenma/Documents/My_AI_Agent/watchdog_demo_Grokking
+$HOME/Documents/My_App_Dev/local-ai-agent-control-plane
+$HOME/Documents/My_AI_Agent
+$HOME/Documents/My_AI_Agent/watchdog_demo_Grokking
 ```
 
 Create the main AI workspace if needed:
 
 ```bash
-mkdir -p /home/chenma/Documents/My_AI_Agent
+mkdir -p $HOME/Documents/My_AI_Agent
 ```
 
 Secrets are stored outside the repo:

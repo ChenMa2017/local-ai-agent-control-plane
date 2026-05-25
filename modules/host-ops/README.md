@@ -28,7 +28,7 @@ Forbidden:
 ## Usage
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/host_ops
+cd $HOME/Documents/My_App_Dev/host_ops
 python3 host_ops.py capabilities
 python3 host_ops.py systemd-user-status agent-host-web.service
 python3 host_ops.py systemd-user-status discord-agent-adapter.service

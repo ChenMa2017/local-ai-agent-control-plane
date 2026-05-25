@@ -27,7 +27,7 @@ Enable the bot in your target server with the `applications.commands` scope and 
 Install dependencies:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/discord_agent_adapter
+cd $HOME/Documents/My_App_Dev/discord_agent_adapter
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -r requirements.txt
@@ -85,14 +85,14 @@ export AGENT_HOST_TOKEN="your-agent-host-token"
 Start the Agent Host first:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/mattermpst_chat
+cd $HOME/Documents/My_App_Dev/mattermpst_chat
 ./watchdog_bridge.sh status
 ```
 
 Check the adapter configuration before starting the bot:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/discord_agent_adapter
+cd $HOME/Documents/My_App_Dev/discord_agent_adapter
 python3 bot.py --config config.json --check-config
 ```
 
@@ -111,26 +111,26 @@ Agent Host /health is reachable
 Then start the bot:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/discord_agent_adapter
+cd $HOME/Documents/My_App_Dev/discord_agent_adapter
 python3 bot.py --config config.json
 ```
 
 The bot logs must not contain `DISCORD_BOT_TOKEN`, `AGENT_HOST_TOKEN`, or local paths such as
-`/home/chenma/Documents/My_App_Dev/...`.
+`$HOME/Documents/My_App_Dev/...`.
 
 ## Long-Running Service Mode
 
 The recommended long-running setup is managed from the Agent Host project:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/mattermpst_chat
+cd $HOME/Documents/My_App_Dev/mattermpst_chat
 scripts/install_user_services.sh
 ```
 
 The Discord service template is:
 
 ```text
-/home/chenma/Documents/My_App_Dev/discord_agent_adapter/systemd/user/discord-agent-adapter.service
+$HOME/Documents/My_App_Dev/discord_agent_adapter/systemd/user/discord-agent-adapter.service
 ```
 
 It loads secrets from:

@@ -2,15 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_ROOT="/home/chenma/Documents/My_App_Dev"
+REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 USER_SYSTEMD_DIR="${HOME}/.config/systemd/user"
 SECRETS_DIR="${HOME}/.config/agent-host"
 
 mkdir -p "$USER_SYSTEMD_DIR" "$SECRETS_DIR"
 
-install -m 0644 "$ROOT_DIR/systemd/user/agent-host-web.service" \
+install -m 0644 "$REPO_ROOT/systemd/user/agent-host-web.service" \
   "$USER_SYSTEMD_DIR/agent-host-web.service"
-install -m 0644 "$APP_ROOT/discord_agent_adapter/systemd/user/discord-agent-adapter.service" \
+install -m 0644 "$REPO_ROOT/systemd/user/discord-agent-adapter.service" \
   "$USER_SYSTEMD_DIR/discord-agent-adapter.service"
 
 if [ ! -f "$SECRETS_DIR/secrets.env" ]; then

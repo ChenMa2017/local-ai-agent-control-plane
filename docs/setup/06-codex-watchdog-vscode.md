@@ -15,7 +15,7 @@ VSCode/project watchdog prototype.
 Install/check:
 
 ```bash
-cd /home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-watchdog-vscode
+cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-watchdog-vscode
 npm install
 node --check extension.js
 ```
@@ -31,7 +31,7 @@ This module is implementation tooling. It does not need to be exposed as an Agen
 Project watchdogs should live under project workspaces, for example:
 
 ```text
-/home/chenma/Documents/My_AI_Agent/watchdog_demo_Grokking/agent/
+$HOME/Documents/My_AI_Agent/watchdog_demo_Grokking/agent/
 ```
 
 Recommended project report protocol:
