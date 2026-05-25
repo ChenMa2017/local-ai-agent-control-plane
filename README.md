@@ -55,7 +55,7 @@ main_codex
   workspace-write
 
 grokking
-  /home/chenma/Documents/My_AI_Agent/watchdog_demo_05_Grokking
+  /home/chenma/Documents/My_AI_Agent/watchdog_demo_Grokking
   readonly
 ```
 
@@ -74,6 +74,12 @@ workspace write lock
 ```
 
 ## Bootstrap
+
+For detailed setup instructions, see:
+
+```text
+docs/setup/
+```
 
 Install Node dependencies for modules that need them:
 

@@ -7,7 +7,7 @@ PID_PATH="$ROOT_DIR/.bridge.pid"
 LOG_DIR="$ROOT_DIR/logs"
 LOG_PATH="$LOG_DIR/bridge.log"
 
-DEFAULT_PROJECT_ROOT="/home/chenma/Documents/My_App_Dev/watchdog_demo_05_Grokking"
+DEFAULT_PROJECT_ROOT="/home/chenma/Documents/My_AI_Agent/watchdog_demo_Grokking"
 
 usage() {
   cat <<'EOF'
