@@ -1,0 +1,16 @@
+[Unit]
+Description=Local Agent Host Web API
+Documentation=file:/home/chenma/Documents/My_App_Dev/mattermpst_chat/README.md
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/chenma/Documents/My_App_Dev/mattermpst_chat
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/usr/bin/python3 /home/chenma/Documents/My_App_Dev/mattermpst_chat/bridge.py --config /home/chenma/Documents/My_App_Dev/mattermpst_chat/config.json --check-config
+ExecStart=/usr/bin/python3 /home/chenma/Documents/My_App_Dev/mattermpst_chat/bridge.py --config /home/chenma/Documents/My_App_Dev/mattermpst_chat/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

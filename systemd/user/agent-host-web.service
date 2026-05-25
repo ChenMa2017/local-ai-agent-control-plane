@@ -1,0 +1,15 @@
+[Unit]
+Description=Local Agent Host Web API
+Documentation=file:%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/README.md
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host
+EnvironmentFile=%h/.config/agent-host/secrets.env
+ExecStartPre=/usr/bin/python3 %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/bridge.py --config %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/config.json --check-config
+ExecStart=/usr/bin/python3 %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/bridge.py --config %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

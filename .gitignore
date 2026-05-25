@@ -1,0 +1,45 @@
+# Secrets and local config
+.env
+.env.*
+!.env.example
+config.json
+secrets.env
+*.pem
+*.key
+
+# Runtime state
+.codex-bridge/
+state/
+logs/
+*.log
+*.pid
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Node / VSCode extension build output
+node_modules/
+npm-debug.log*
+dist/
+out/
+*.vsix
+
+# Module-local runtime/config
+modules/**/config.json
+modules/**/.env
+modules/**/secrets.env
+modules/**/.codex-bridge/
+modules/**/state/
+modules/**/logs/
+modules/**/todo/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/extensions.json

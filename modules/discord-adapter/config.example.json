@@ -1,0 +1,31 @@
+{
+  "agent_host": {
+    "base_url": "http://127.0.0.1:8787",
+    "token_env": "AGENT_HOST_TOKEN",
+    "timeout_seconds": 30
+  },
+  "discord": {
+    "bot_token_env": "DISCORD_BOT_TOKEN",
+    "guild_id_env": "DISCORD_GUILD_ID",
+    "allowed_guild_ids": [
+      "replace-with-discord-guild-id"
+    ],
+    "allowed_channel_ids": [
+      "replace-with-discord-channel-id"
+    ],
+    "default_workspace": "main_codex",
+    "command_prefix": "agent",
+    "users": {
+      "replace-with-discord-user-id": {
+        "internal_user": "chenma",
+        "role": "admin"
+      }
+    }
+  },
+  "limits": {
+    "max_prompt_chars": 3000,
+    "max_result_chars": 1800
+  },
+  "state_dir": "state",
+  "watcher_interval_seconds": 10
+}

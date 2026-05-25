@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "users": ["chenma"],
+  "projects": {
+    "main_codex": {
+      "path": "/home/chenma/Documents/My_AI_Agent",
+      "mode": "workspace-write",
+      "allowedModes": ["workspace-write"]
+    },
+    "bridge_core": {
+      "path": "/home/chenma/Documents/My_App_Dev/codex-bridge",
+      "mode": "readonly"
+    },
+    "grokking": {
+      "path": "/home/chenma/Documents/My_AI_Agent/watchdog_demo_05_Grokking",
+      "mode": "readonly"
+    }
+  },
+  "stateDir": ".codex-bridge",
+  "codexBin": "codex",
+  "maxConcurrent": 1,
+  "timeoutSeconds": 900,
+  "cancelGraceMs": 5000,
+  "watchdogIntervalMs": 1000,
+  "dryRunStepMs": 450,
+  "redaction": {
+    "enabled": true,
+    "redactHomePath": true,
+    "redactProjectPaths": true,
+    "redactTokens": true,
+    "maxLogChars": 20000,
+    "maxResultChars": 80000
+  }
+}

@@ -1,0 +1,21 @@
+node_modules/
+.codex-bridge/
+todo/
+dist/
+*.vsix
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.log
+*.tmp
+*.bak
+npm-debug.log*
+.DS_Store
+
+# Codex Bridge was split into ../codex-bridge; keep local stubs out of this repo.
+CODEX_BRIDGE_CORE.md
+codex-bridge.config.example.json
+scripts/codex-bridge.js

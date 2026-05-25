@@ -1,0 +1,14 @@
+.codex-bridge/
+codex-bridge.config.json
+node_modules/
+npm-debug.log*
+*.log
+*.tmp
+*.bak
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+.DS_Store

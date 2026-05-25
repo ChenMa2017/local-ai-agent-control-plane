@@ -1,0 +1,87 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "mattermost_tokens": [
+    "replace-with-mattermost-slash-command-token"
+  ],
+  "allowed_users": [
+    "chenma"
+  ],
+  "auth": {
+    "tokens": {
+      "replace-with-codex-web-token": {
+        "user": "chenma",
+        "role": "admin"
+      },
+      "replace-with-discord-adapter-token": {
+        "user": "chenma",
+        "role": "user"
+      }
+    }
+  },
+  "codex_bridge_root": "/home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-bridge",
+  "codex_bridge_node_bin": "node",
+  "adapters": {
+    "web": {
+      "enabled": true
+    },
+    "discord": {
+      "enabled": false,
+      "allowed_guild_ids": [],
+      "allowed_channel_ids": [],
+      "users": {
+        "replace-with-discord-user-id": {
+          "internal_user": "chenma",
+          "role": "admin"
+        }
+      }
+    }
+  },
+  "projects": {
+    "main_codex": {
+      "path": "/home/chenma/Documents/My_AI_Agent",
+      "label": "main codex",
+      "default_mode": "workspace-write",
+      "allowed_modes": [
+        "workspace-write"
+      ],
+      "description": "Primary AI-Agent workspace for cross-project coordination with workspace-write sandbox."
+    },
+    "agent_host": {
+      "path": "/home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host",
+      "label": "agent host",
+      "default_mode": "readonly",
+      "allowed_modes": [
+        "readonly"
+      ],
+      "description": "Agent Host API and Web UI project."
+    },
+    "discord_adapter": {
+      "path": "/home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter",
+      "label": "discord adapter",
+      "default_mode": "readonly",
+      "allowed_modes": [
+        "readonly"
+      ],
+      "description": "Discord Agent Adapter project."
+    },
+    "watchdog_vscode": {
+      "path": "/home/chenma/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-watchdog-vscode",
+      "label": "watchdog vscode",
+      "default_mode": "readonly",
+      "allowed_modes": [
+        "readonly"
+      ],
+      "description": "Codex Watchdog VSCode project workspace."
+    },
+    "grokking": {
+      "path": "/home/chenma/Documents/My_AI_Agent/watchdog_demo_05_Grokking",
+      "label": "grokking",
+      "default_mode": "readonly",
+      "allowed_modes": [
+        "readonly"
+      ],
+      "description": "Grokking watchdog project under main_codex."
+    }
+  }
+}

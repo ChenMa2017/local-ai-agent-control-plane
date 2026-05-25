@@ -1,0 +1,14 @@
+{
+  "name": "local-ai-agent-control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Monorepo for the local Discord/Web controlled Codex Agent Host.",
+  "scripts": {
+    "check": "bash scripts/check_all.sh",
+    "test:codex-bridge": "cd modules/codex-bridge && npm test",
+    "test:agent-host": "cd modules/agent-host && python3 -m unittest tests/test_bridge.py",
+    "test:discord-adapter": "cd modules/discord-adapter && .venv/bin/python -m unittest discover -s tests",
+    "test:host-ops": "cd modules/host-ops && python3 -m unittest discover -s tests",
+    "check:watchdog-vscode": "cd modules/codex-watchdog-vscode && node --check extension.js"
+  }
+}

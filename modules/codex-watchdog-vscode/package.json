@@ -1,0 +1,167 @@
+{
+  "name": "codex-watchdog",
+  "displayName": "Codex Watchdog",
+  "description": "Controls a server-side scheduled Codex watcher from VSCode Remote.",
+  "version": "0.1.39",
+  "publisher": "chenma",
+  "engines": {
+    "vscode": "^1.92.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:codexWatchdog.openControlPanel",
+    "onCommand:codexWatchdog.selectProjectRoot",
+    "onCommand:codexWatchdog.bootstrapProject",
+    "onCommand:codexWatchdog.createDemoProjectTemplate",
+    "onCommand:codexWatchdog.prepareProject",
+    "onCommand:codexWatchdog.refreshGeneratedFiles",
+    "onCommand:codexWatchdog.prepareEveningHandoff",
+    "onCommand:codexWatchdog.openMorningBrief",
+    "onCommand:codexWatchdog.startGuard",
+    "onCommand:codexWatchdog.pauseGuard",
+    "onCommand:codexWatchdog.resumeGuard",
+    "onCommand:codexWatchdog.stopGuard",
+    "onCommand:codexWatchdog.runOnce",
+    "onCommand:codexWatchdog.startTimer",
+    "onCommand:codexWatchdog.stopTimer",
+    "onCommand:codexWatchdog.showTimerStatus",
+    "onCommand:codexWatchdog.openLatestReport",
+    "onCommand:codexWatchdog.acceptStateUpdate"
+  ],
+  "main": "./extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexWatchdog.openControlPanel",
+        "title": "Codex Watchdog: Open Control Panel"
+      },
+      {
+        "command": "codexWatchdog.selectProjectRoot",
+        "title": "Codex Watchdog: Select Project Root"
+      },
+      {
+        "command": "codexWatchdog.bootstrapProject",
+        "title": "Codex Watchdog: Bootstrap Project"
+      },
+      {
+        "command": "codexWatchdog.createDemoProjectTemplate",
+        "title": "Codex Watchdog: Create Demo Project Template"
+      },
+      {
+        "command": "codexWatchdog.prepareProject",
+        "title": "Codex Watchdog: Prepare Project Template"
+      },
+      {
+        "command": "codexWatchdog.refreshGeneratedFiles",
+        "title": "Codex Watchdog: Refresh Generated Watcher Files"
+      },
+      {
+        "command": "codexWatchdog.prepareEveningHandoff",
+        "title": "Codex Watchdog: Prepare Evening Handoff"
+      },
+      {
+        "command": "codexWatchdog.openMorningBrief",
+        "title": "Codex Watchdog: Open Morning Brief"
+      },
+      {
+        "command": "codexWatchdog.startGuard",
+        "title": "Codex Watchdog: Start Guard"
+      },
+      {
+        "command": "codexWatchdog.pauseGuard",
+        "title": "Codex Watchdog: Pause Guard"
+      },
+      {
+        "command": "codexWatchdog.resumeGuard",
+        "title": "Codex Watchdog: Resume Guard"
+      },
+      {
+        "command": "codexWatchdog.stopGuard",
+        "title": "Codex Watchdog: Stop Guard"
+      },
+      {
+        "command": "codexWatchdog.runOnce",
+        "title": "Codex Watchdog: Run Once Now"
+      },
+      {
+        "command": "codexWatchdog.startTimer",
+        "title": "Codex Watchdog: Run Once and Start Timer"
+      },
+      {
+        "command": "codexWatchdog.stopTimer",
+        "title": "Codex Watchdog: Stop Timer"
+      },
+      {
+        "command": "codexWatchdog.showTimerStatus",
+        "title": "Codex Watchdog: Show Timer Status"
+      },
+      {
+        "command": "codexWatchdog.openLatestReport",
+        "title": "Codex Watchdog: Open Latest Report"
+      },
+      {
+        "command": "codexWatchdog.acceptStateUpdate",
+        "title": "Codex Watchdog: Accept Proposed State Update"
+      }
+    ],
+    "configuration": {
+      "title": "Codex Watchdog",
+      "properties": {
+        "codexWatchdog.intervalMinutes": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "description": "Interval for the systemd user timer."
+        },
+        "codexWatchdog.projectRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to the project folder controlled by Codex Watchdog. If empty, the extension uses the remembered project root selected from the Command Palette."
+        },
+        "codexWatchdog.timeoutMinutes": {
+          "type": "number",
+          "default": 25,
+          "minimum": 1,
+          "description": "Maximum duration for one watchdog run."
+        },
+        "codexWatchdog.compactEveryRuns": {
+          "type": "number",
+          "default": 6,
+          "minimum": 0,
+          "description": "Run a report-curation/compaction cycle every N watchdog runs. Set to 0 to disable scheduled compaction."
+        },
+        "codexWatchdog.codexBin": {
+          "type": "string",
+          "default": "codex",
+          "description": "Codex CLI executable. If set to codex, the extension tries to resolve an absolute path when installing the timer."
+        },
+        "codexWatchdog.codexHome": {
+          "type": "string",
+          "default": "~/.codex-watcher",
+          "description": "Separate CODEX_HOME for unattended watcher runs."
+        },
+        "codexWatchdog.sandboxMode": {
+          "type": "string",
+          "default": "read-only",
+          "enum": [
+            "read-only",
+            "workspace-write"
+          ],
+          "description": "Sandbox mode for scheduled codex exec runs. workspace-write is forced back to read-only unless agent/workspace_write_policy.json enables it."
+        },
+        "codexWatchdog.servicePrefix": {
+          "type": "string",
+          "default": "codex-watchdog",
+          "pattern": "^[A-Za-z0-9_.@-]+$",
+          "description": "Prefix for generated systemd user service and timer units."
+        }
+      }
+    }
+  }
+}

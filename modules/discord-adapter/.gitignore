@@ -1,0 +1,15 @@
+config.json
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.log
+logs/
+state/
+.pytest_cache/
+.mypy_cache/
+*.zip
+*.tar
+*.tar.gz
+*.tgz

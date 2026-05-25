@@ -1,0 +1,16 @@
+[Unit]
+Description=Discord Agent Adapter
+Documentation=file:%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/README.md
+After=agent-host-web.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter
+EnvironmentFile=%h/.config/agent-host/secrets.env
+ExecStartPre=%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/.venv/bin/python %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/bot.py --config %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/config.json --check-config
+ExecStart=%h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/.venv/bin/python %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/bot.py --config %h/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

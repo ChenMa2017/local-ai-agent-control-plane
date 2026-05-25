@@ -1,0 +1,24 @@
+{
+  "systemd_user_units": [
+    "agent-host-web.service",
+    "discord-agent-adapter.service"
+  ],
+  "journal_units": [
+    "agent-host-web.service",
+    "discord-agent-adapter.service"
+  ],
+  "path_aliases": {
+    "my_ai_agent": "/home/chenma/Documents/My_AI_Agent",
+    "my_app_dev": "/home/chenma/Documents/My_App_Dev"
+  },
+  "git_workspaces": {
+    "codex-bridge": "/home/chenma/Documents/My_App_Dev/codex-bridge",
+    "mattermpst_chat": "/home/chenma/Documents/My_App_Dev/mattermpst_chat",
+    "discord_agent_adapter": "/home/chenma/Documents/My_App_Dev/discord_agent_adapter",
+    "codex-watchdog-vscode": "/home/chenma/Documents/My_App_Dev/codex-watchdog-vscode",
+    "host_ops": "/home/chenma/Documents/My_App_Dev/host_ops"
+  },
+  "max_journal_lines": 200,
+  "max_output_chars": 20000,
+  "command_timeout_seconds": 10
+}
