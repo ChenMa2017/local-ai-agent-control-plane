@@ -106,6 +106,9 @@ class AgentHostClient:
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/health", auth=False)
 
+    def health_summary(self) -> dict[str, Any]:
+        return self._request("GET", "/health/summary")
+
     def capabilities(self) -> dict[str, Any]:
         return self._request("GET", "/codex/capabilities")
 
@@ -160,6 +163,12 @@ class AgentHostClient:
         if max_chars:
             payload["max_chars"] = str(max_chars)
         return self._request("POST", "/codex/result", payload)
+
+    def result_page(self, task_id: str, page: int, page_size: int | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"task_id": task_id, "page": str(page)}
+        if page_size:
+            payload["page_size"] = str(page_size)
+        return self._request("POST", "/codex/result-page", payload)
 
     def cancel(self, task_id: str) -> dict[str, Any]:
         return self._request("POST", "/codex/cancel", {"task_id": task_id})

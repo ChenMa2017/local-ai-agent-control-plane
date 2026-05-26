@@ -55,6 +55,13 @@ class RecordingHandler(BaseHTTPRequestHandler):
         item = self.record()
         if item["path"] == "/health":
             self.send_payload(200, {"ok": True})
+        elif item["path"] == "/health/summary":
+            self.send_payload(200, {
+                "ok": True,
+                "agent_host": {"active": True, "version": "mvp-v0.7"},
+                "workspaces": {"modes": ["readonly"], "items": [{"id": "self"}]},
+                "tasks": {"recent_count": 1, "active_count": 0, "latest_terminal": {"task_id": "task_123", "status": "done"}},
+            })
         elif item["path"] == "/codex/capabilities":
             self.send_payload(200, {
                 "ok": True,
@@ -80,6 +87,8 @@ class RecordingHandler(BaseHTTPRequestHandler):
             self.send_payload(200, {"ok": True, "text": "task_id: task_123\nstatus: done\n"})
         elif item["path"] == "/codex/result":
             self.send_payload(200, {"ok": True, "text": "safe result", "raw": False})
+        elif item["path"] == "/codex/result-page":
+            self.send_payload(200, {"ok": True, "task_id": "task_123", "page": 2, "total_pages": 3, "text": "page text", "raw": False})
         elif item["path"] == "/codex/cancel":
             self.send_payload(409, {
                 "ok": False,
@@ -109,7 +118,7 @@ class ClientTests(unittest.TestCase):
         self.server.server_close()
 
     def client(self):
-        return AgentHostClient(self.base_url, "secret-agent-host-token", timeout_seconds=5)
+        return AgentHostClient(self.base_url, "demo", timeout_seconds=5)
 
     def test_run_constructs_agent_host_request(self):
         response = self.client().run(
@@ -127,7 +136,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(response["task_id"], "task_123")
         record = RecordingHandler.records[-1]
         self.assertEqual(record["path"], "/codex/run")
-        self.assertEqual(record["authorization"], "Bearer secret-agent-host-token")
+        self.assertEqual(record["authorization"], "Bearer demo")
         payload = record["payload"]
         self.assertEqual(payload["source"], "discord")
         self.assertEqual(payload["workspace"], "self")
@@ -148,12 +157,28 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "task_already_finished")
         self.assertEqual(ctx.exception.status, 409)
-        self.assertNotIn("secret-agent-host-token", str(ctx.exception))
+        self.assertNotIn("demo", str(ctx.exception))
 
     def test_health_does_not_send_bearer_token(self):
         self.client().health()
         self.assertEqual(RecordingHandler.records[-1]["path"], "/health")
         self.assertEqual(RecordingHandler.records[-1]["authorization"], "")
+
+    def test_health_summary_uses_bearer_token(self):
+        response = self.client().health_summary()
+        self.assertTrue(response["agent_host"]["active"])
+        record = RecordingHandler.records[-1]
+        self.assertEqual(record["path"], "/health/summary")
+        self.assertEqual(record["authorization"], "Bearer demo")
+
+    def test_result_page_constructs_request(self):
+        response = self.client().result_page("task_123", page=2, page_size=1200)
+        self.assertEqual(response["text"], "page text")
+        record = RecordingHandler.records[-1]
+        self.assertEqual(record["path"], "/codex/result-page")
+        self.assertEqual(record["payload"]["task_id"], "task_123")
+        self.assertEqual(record["payload"]["page"], "2")
+        self.assertEqual(record["payload"]["page_size"], "1200")
 
 
 class BotHelperTests(unittest.TestCase):
@@ -240,6 +265,45 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("/server_agent_run", response)
         self.assertIn("/server_agent_task", response)
 
+    def test_format_health_summary_is_safe(self):
+        response = bot.format_health_summary(
+            {
+                "agent_host": {"active": True, "version": "mvp-v0.7"},
+                "workspaces": {
+                    "modes": ["readonly", "workspace-write"],
+                    "items": [{"id": "main_codex"}, {"id": "grokking"}],
+                },
+                "tasks": {
+                    "recent_count": 3,
+                    "active_count": 1,
+                    "latest_terminal": {"task_id": "task_123", "status": "done"},
+                },
+            },
+            command_prefix="server_agent",
+        )
+
+        self.assertIn("Agent Host 健康摘要", response)
+        self.assertIn("main_codex, grokking", response)
+        self.assertIn("/server_agent_task_page", response)
+        self.assertNotIn("/home/chenma", response)
+
+    def test_format_task_page_response(self):
+        response = bot.format_task_page_response(
+            {
+                "task_id": "task_123",
+                "page": 1,
+                "total_pages": 3,
+                "has_next": True,
+                "text": "/home/example/Documents/My_App_Dev/x Authorization: Bearer demo",
+            },
+            500,
+        )
+
+        self.assertIn("Page: 1/3", response)
+        self.assertIn("Next page: 2", response)
+        self.assertNotIn("/home/example", response)
+        self.assertNotIn("Bearer demo", response)
+
     def test_thread_state_store_persists_mapping(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = bot.ThreadStateStore(Path(tmp))
@@ -307,16 +371,52 @@ class BotHelperTests(unittest.TestCase):
         self.assertEqual(len(notifier.messages), 1)
         self.assertIn("任务完成", notifier.messages[0][1])
 
+    def test_completion_watcher_marks_stale_terminal_thread_repaired(self):
+        class FakeAgent:
+            def status(self, task_id):
+                return {"ok": True, "text": f"task_id: {task_id}\nstatus: done\n"}
+
+            def result(self, task_id, max_chars=None):
+                return {"ok": True, "text": "safe result", "raw": False}
+
+        class FakeNotifier:
+            async def send(self, record, message):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = bot.ThreadStateStore(Path(tmp))
+            store.upsert_thread(
+                task_id="task_123",
+                guild_id="guild-1",
+                channel_id="channel-1",
+                thread_id="thread-1",
+                created_by="user-1",
+                workspace="self",
+                status="done",
+            )
+
+            sent = asyncio.run(bot.process_completion_notifications(
+                store=store,
+                agent=FakeAgent(),
+                notifier=FakeNotifier(),
+                max_result_chars=100,
+            ))
+            record = store.load()["task_123"]
+
+        self.assertEqual(sent, 1)
+        self.assertTrue(record["notified_done"])
+        self.assertIn("repaired_at", record)
+
     def test_completion_message_sanitizes_result(self):
         response = bot.format_completion_message(
             "task_123",
             {"text": "task_id: task_123\nstatus: done\n"},
-            {"text": "/home/chenma/Documents/My_App_Dev/x Authorization: Bearer secret-token-value"},
+            {"text": "/home/example/Documents/My_App_Dev/x Authorization: Bearer demo"},
             500,
         )
 
-        self.assertNotIn("/home/chenma", response)
-        self.assertNotIn("secret-token-value", response)
+        self.assertNotIn("/home/example", response)
+        self.assertNotIn("Bearer demo", response)
         self.assertIn("Authorization: Bearer [REDACTED]", response)
 
     def test_completion_message_uses_result_for_policy_violation(self):
@@ -411,9 +511,9 @@ class BotHelperTests(unittest.TestCase):
         try:
             config = bot.AdapterConfig(
                 agent_host_base_url=f"http://127.0.0.1:{server.server_port}",
-                agent_host_token="agent-secret-token",
+                agent_host_token="demo",
                 agent_host_timeout_seconds=5,
-                discord_bot_token="discord-secret-token",
+                discord_bot_token="demo",
                 discord_guild_id="guild-1",
                 allowed_guild_ids=("guild-1",),
                 allowed_channel_ids=("channel-1",),
@@ -441,9 +541,9 @@ class BotHelperTests(unittest.TestCase):
         try:
             config = bot.AdapterConfig(
                 agent_host_base_url=f"http://127.0.0.1:{server.server_port}",
-                agent_host_token="agent-secret-token",
+                agent_host_token="demo",
                 agent_host_timeout_seconds=5,
-                discord_bot_token="discord-secret-token",
+                discord_bot_token="demo",
                 discord_guild_id="guild-1",
                 allowed_guild_ids=("guild-1",),
                 allowed_channel_ids=("channel-1",),

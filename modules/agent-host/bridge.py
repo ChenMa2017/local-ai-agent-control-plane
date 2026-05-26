@@ -38,6 +38,8 @@ SUPPORTED_CODEX_MODES = {"readonly", "workspace-write"}
 TASK_LIST_DEFAULT_LIMIT = 50
 TASK_LIST_MAX_LIMIT = 200
 PROMPT_PREVIEW_CHARS = 110
+RESULT_PAGE_DEFAULT_SIZE = 1800
+RESULT_PAGE_MAX_SIZE = 8000
 CODEX_FINAL_STATUSES = {"done", "failed", "cancelled", "timeout", "stale", "policy_violation"}
 CODEX_ACTIVE_STATUSES = {"queued", "running", "cancelling", "cancel_requested"}
 STREAM_TOKEN_TTL_SECONDS = 300
@@ -783,6 +785,69 @@ def handle_codex_capabilities(config: BridgeConfig, _principal: AuthPrincipal) -
     }
 
 
+def read_recent_task_summaries(config: BridgeConfig, principal: AuthPrincipal, limit: int = 50) -> list[dict[str, Any]]:
+    root = codex_tasks_root(config)
+    if not root.exists():
+        return []
+
+    items: list[tuple[str, dict[str, Any]]] = []
+    for task_file in root.glob("*/task.json"):
+        task_dir = task_file.parent
+        if not CODEX_TASK_ID_RE.match(task_dir.name):
+            continue
+        try:
+            task = json.loads(task_file.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(task, dict):
+            continue
+        task_project = str(task.get("project", ""))
+        if task_project and task_project not in config.projects:
+            continue
+        if not can_access_task(task, principal):
+            continue
+        items.append((task_sort_value(task), codex_task_summary(task_dir, task)))
+    items.sort(key=lambda item: item[0], reverse=True)
+    return [summary for _sort, summary in items[: max(1, limit)]]
+
+
+def handle_health_summary(config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
+    recent = read_recent_task_summaries(config, principal, limit=50)
+    active = [task for task in recent if task.get("status") in CODEX_ACTIVE_STATUSES]
+    terminal = [task for task in recent if task.get("status") in CODEX_FINAL_STATUSES]
+    modes = sorted({mode for project in config.projects.values() for mode in project.allowed_modes})
+    return {
+        "ok": True,
+        "agent_host": {
+            "active": True,
+            "version": AGENT_HOST_VERSION,
+        },
+        "workspaces": {
+            "count": len(config.projects),
+            "modes": modes,
+            "items": [
+                {
+                    "id": project.name,
+                    "default_mode": project.default_mode,
+                    "allowed_modes": list(project.allowed_modes),
+                }
+                for project in sorted(config.projects.values(), key=lambda item: item.name)
+            ],
+        },
+        "tasks": {
+            "recent_count": len(recent),
+            "active_count": len(active),
+            "terminal_count": len(terminal),
+            "latest_terminal": terminal[0] if terminal else None,
+        },
+        "safety": {
+            "safe_output": True,
+            "raw_output": False,
+            "host_ops_direct": False,
+        },
+    }
+
+
 def safe_codex_status_text(config: BridgeConfig, task: dict[str, Any], text: str) -> str:
     safe = str(text or "")
     project_alias = str(task.get("project") or "")
@@ -973,6 +1038,67 @@ def handle_codex_query(
         "command": command,
         "user": principal.user,
         "text": safe_codex_status_text(config, task, output) if command == "status" else output,
+    }
+
+
+def parse_positive_int(value: str | None, default: int, max_value: int, field: str) -> int:
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise BridgeError(f"{field} must be a number", 400, "invalid_request") from exc
+    if parsed < 1:
+        raise BridgeError(f"{field} must be at least 1", 400, "invalid_request")
+    return min(parsed, max_value)
+
+
+def paginate_text(text: str, page: int, page_size: int) -> dict[str, Any]:
+    value = str(text or "")
+    total_chars = len(value)
+    total_pages = max(1, (total_chars + page_size - 1) // page_size)
+    if page > total_pages:
+        raise BridgeError(f"page out of range; total_pages={total_pages}", 400, "invalid_request")
+    start = (page - 1) * page_size
+    end = start + page_size
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "total_chars": total_chars,
+        "has_next": page < total_pages,
+        "has_prev": page > 1,
+        "text": value[start:end],
+    }
+
+
+def handle_codex_result_page(
+    payload: dict[str, str],
+    config: BridgeConfig,
+    principal: AuthPrincipal,
+) -> dict[str, Any]:
+    page = parse_positive_int(payload.get("page"), 1, 1000000, "page")
+    page_size = parse_positive_int(payload.get("page_size") or payload.get("pageSize"), RESULT_PAGE_DEFAULT_SIZE, RESULT_PAGE_MAX_SIZE, "page_size")
+    result = handle_codex_query(
+        {
+            "task_id": payload.get("task_id", ""),
+            "max_chars": str(RESULT_PAGE_MAX_SIZE * 100),
+        },
+        config,
+        "result",
+        principal,
+    )
+    if result.get("raw"):
+        raise BridgeError("result pages only support safe output", 403, "permission_denied")
+    page_data = paginate_text(str(result.get("text", "")), page, page_size)
+    return {
+        "ok": True,
+        "task_id": result.get("task_id"),
+        "command": "result-page",
+        "redacted": bool(result.get("redacted", True)),
+        "raw": False,
+        "source_truncated": bool(result.get("truncated", False)),
+        **page_data,
     }
 
 
@@ -1945,6 +2071,15 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             self.send_json(200, {"ok": True})
             return
+        if parsed.path == "/health/summary":
+            try:
+                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
+                self.send_json(200, handle_health_summary(self.config, principal))
+            except BridgeError as exc:
+                self.send_api_error(exc)
+            except Exception as exc:
+                self.send_api_error(exc)
+            return
         if parsed.path == "/whoami":
             try:
                 principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
@@ -1994,6 +2129,16 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_api_error(exc)
             return
+        if parsed.path == "/codex/result-page":
+            payload = {key: values[-1] if values else "" for key, values in parse_qs(parsed.query).items()}
+            try:
+                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
+                self.send_json(200, handle_codex_result_page(payload, self.config, principal))
+            except BridgeError as exc:
+                self.send_api_error(exc)
+            except Exception as exc:
+                self.send_api_error(exc)
+            return
         if parsed.path in {"/codex/status", "/codex/result", "/codex/logs", "/codex/cancel"}:
             payload = {key: values[-1] if values else "" for key, values in parse_qs(parsed.query).items()}
             try:
@@ -2020,6 +2165,7 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
             "/codex/result",
             "/codex/logs",
             "/codex/cancel",
+            "/codex/result-page",
             "/codex/stream-token",
         }:
             if route.startswith("/codex"):
@@ -2046,6 +2192,10 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
                     return
                 if route == "/codex/stream-token":
                     response = handle_stream_token(payload, self.config, principal)
+                    self.send_json(200, response)
+                    return
+                if route == "/codex/result-page":
+                    response = handle_codex_result_page(payload, self.config, principal)
                     self.send_json(200, response)
                     return
                 command = route.rsplit("/", 1)[-1]

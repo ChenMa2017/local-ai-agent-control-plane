@@ -137,6 +137,38 @@ scripts/check_all.sh
 
 This runs the module tests and syntax checks that can be run locally.
 
+## Operational Safety Checks
+
+The monorepo includes a read-only safety helper:
+
+```bash
+python3 scripts/control_plane.py config validate
+python3 scripts/control_plane.py migrate check --dry-run
+python3 scripts/control_plane.py migrate rollback --dry-run
+```
+
+It validates config shape, prints redacted reports, detects scattered old installs, and prints a rollback plan. It does not stop services, restart services, delete files, or modify systemd units.
+
+Agent Host also provides safe operational read APIs:
+
+```text
+GET /health/summary
+POST /codex/result-page
+```
+
+Discord Adapter maps them to:
+
+```text
+/agent_health
+/agent_task_page
+```
+
+See:
+
+```text
+docs/setup/10-operational-safety.md
+```
+
 ## Systemd User Services
 
 The root service templates are in:

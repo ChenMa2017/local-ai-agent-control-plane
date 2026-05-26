@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+echo "== control-plane safety tools =="
+(cd "$ROOT" && python3 -m py_compile scripts/control_plane.py tests/test_control_plane.py && python3 -m unittest tests/test_control_plane.py)
+
+echo
 echo "== codex-bridge =="
 (cd "$ROOT/modules/codex-bridge" && node --check scripts/codex-bridge.js && npm test)
 

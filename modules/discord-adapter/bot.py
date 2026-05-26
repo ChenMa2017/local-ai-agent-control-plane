@@ -56,7 +56,7 @@ def safe_command_prefix(value: Any) -> str:
     prefix = str(value or "agent").strip().lower().replace(" ", "_")
     if not re.match(r"^[a-z0-9_-]{1,20}$", prefix):
         raise ValueError("discord.command_prefix must be 1-20 lowercase letters, numbers, underscore, or dash")
-    for action in ("status", "workspaces", "run", "task", "cancel"):
+    for action in ("status", "health", "workspaces", "run", "task", "task_page", "cancel"):
         if len(slash_command_name(prefix, action)) > 32:
             raise ValueError("discord.command_prefix makes slash command names too long")
     return prefix
@@ -235,6 +235,32 @@ def format_status(
     return "\n".join(lines)
 
 
+def format_health_summary(data: dict[str, Any], command_prefix: str = "agent") -> str:
+    agent = data.get("agent_host", {}) if isinstance(data.get("agent_host"), dict) else {}
+    workspaces = data.get("workspaces", {}) if isinstance(data.get("workspaces"), dict) else {}
+    tasks = data.get("tasks", {}) if isinstance(data.get("tasks"), dict) else {}
+    latest = tasks.get("latest_terminal") if isinstance(tasks.get("latest_terminal"), dict) else None
+    workspace_items = workspaces.get("items") if isinstance(workspaces.get("items"), list) else []
+    workspace_text = ", ".join(str(item.get("id")) for item in workspace_items if isinstance(item, dict) and item.get("id")) or "(none)"
+    latest_text = "none"
+    if latest:
+        latest_text = f"{latest.get('task_id')} / {latest.get('status')}"
+    lines = [
+        "Agent Host 健康摘要：",
+        "",
+        f"- Agent Host: {'active' if agent.get('active') else 'unknown'}",
+        f"- Version: {agent.get('version', 'unknown')}",
+        f"- Workspaces: {workspace_text}",
+        f"- Modes: {', '.join(workspaces.get('modes', []) or []) or '(none)'}",
+        f"- Recent tasks: {tasks.get('recent_count', 0)}",
+        f"- Active tasks: {tasks.get('active_count', 0)}",
+        f"- Latest terminal task: {latest_text}",
+        "",
+        f"分页查看长结果：/{slash_command_name(command_prefix, 'task_page')} task_id:<id> page:1",
+    ]
+    return sanitize_discord_text("\n".join(lines))
+
+
 def format_workspaces(data: dict[str, Any]) -> str:
     workspaces = data.get("workspaces", [])
     if not workspaces:
@@ -315,6 +341,22 @@ def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any
     suffix = "\n\nResult truncated. Open Web UI for full result." if truncated else ""
     title = "Task done." if status == "done" else "Task finished with policy violation."
     return f"{title}\n\nResult:\n{summary}{suffix}"
+
+
+def format_task_page_response(data: dict[str, Any], max_chars: int) -> str:
+    task_id = str(data.get("task_id") or "")
+    page = data.get("page", "?")
+    total_pages = data.get("total_pages", "?")
+    text = sanitize_discord_text(str(data.get("text") or ""))
+    text, truncated = truncate_text(text, max_chars)
+    suffix = ""
+    if data.get("has_next"):
+        suffix += f"\n\nNext page: {int(data.get('page', 1)) + 1}"
+    if data.get("source_truncated"):
+        suffix += "\n\nSource safe result was truncated by Agent Host limits."
+    if truncated:
+        suffix += "\n\nDiscord page output truncated."
+    return f"Task result page\n\nTask: {task_id}\nPage: {page}/{total_pages}\n\n{text}{suffix}"
 
 
 def format_completion_message(task_id: str, status_data: dict[str, Any], result_data: dict[str, Any] | None, max_chars: int) -> str:
@@ -407,12 +449,14 @@ class ThreadStateStore:
             records[task_id]["updated_at"] = utc_now()
             self.save(records)
 
-    def mark_notified(self, task_id: str, status: str) -> None:
+    def mark_notified(self, task_id: str, status: str, repaired: bool = False) -> None:
         records = self.load()
         if task_id in records:
             records[task_id]["last_status"] = status
             records[task_id]["notified_done"] = True
             records[task_id]["notified_at"] = utc_now()
+            if repaired:
+                records[task_id]["repaired_at"] = utc_now()
             records[task_id]["updated_at"] = utc_now()
             self.save(records)
 
@@ -434,13 +478,15 @@ async def process_completion_notifications(
         except AgentHostError:
             continue
         status = parse_status_text(str(status_data.get("text", "")))
+        previous_status = str(record.get("last_status") or "")
         store.update_status(task_id, status)
         if status not in FINAL_TASK_STATUSES:
             continue
+        repaired = previous_status in FINAL_TASK_STATUSES
         result_data = agent.result(task_id, max_chars=max_result_chars) if status in {"done", "policy_violation"} else None
         message = format_completion_message(task_id, status_data, result_data, max_result_chars)
         await notifier.send(record, message)
-        store.mark_notified(task_id, status)
+        store.mark_notified(task_id, status, repaired=repaired)
         sent += 1
     return sent
 
@@ -665,6 +711,18 @@ def run_bot(config: AdapterConfig) -> None:
                 except Exception as error:
                     await self.reply_error(interaction, error)
 
+            @self.tree.command(name=slash_command_name(config.command_prefix, "health"), description="Show safe Agent Host health summary")
+            async def agent_health(interaction: Any) -> None:
+                try:
+                    self.require_user(interaction)
+                    await interaction.response.defer(ephemeral=True, thinking=True)
+                    await interaction.followup.send(
+                        format_health_summary(self.agent.health_summary(), config.command_prefix),
+                        ephemeral=True,
+                    )
+                except Exception as error:
+                    await self.reply_error(interaction, error)
+
             @self.tree.command(name=slash_command_name(config.command_prefix, "workspaces"), description="List available Agent Host workspaces")
             async def agent_workspaces(interaction: Any) -> None:
                 try:
@@ -732,6 +790,19 @@ def run_bot(config: AdapterConfig) -> None:
                     result_data = self.agent.result(task_id, max_chars=config.max_result_chars)
                     await interaction.followup.send(
                         format_task_response(status_data, result_data, config.max_result_chars),
+                        ephemeral=True,
+                    )
+                except Exception as error:
+                    await self.reply_error(interaction, error)
+
+            @self.tree.command(name=slash_command_name(config.command_prefix, "task_page"), description="Show one page of a long safe task result")
+            async def agent_task_page(interaction: Any, task_id: str, page: int = 1) -> None:
+                try:
+                    self.require_user(interaction)
+                    await interaction.response.defer(ephemeral=True, thinking=True)
+                    data = self.agent.result_page(task_id, page=page, page_size=config.max_result_chars)
+                    await interaction.followup.send(
+                        format_task_page_response(data, config.max_result_chars),
                         ephemeral=True,
                     )
                 except Exception as error:

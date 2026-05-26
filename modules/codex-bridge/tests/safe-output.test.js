@@ -9,6 +9,9 @@ const cp = require("child_process");
 
 const repoRoot = path.resolve(__dirname, "..");
 const bridgeScript = path.join(repoRoot, "scripts", "codex-bridge.js");
+const OPENAI_KEY_FIXTURE = `sk-proj-${"a".repeat(32)}`;
+const OPENAI_SHORT_KEY_FIXTURE = `sk-${"b".repeat(32)}`;
+const GITHUB_TOKEN_FIXTURE = `ghp_${"c".repeat(32)}`;
 
 function runBridge(args, options = {}) {
   const result = cp.spawnSync(process.execPath, [bridgeScript, ...args], {
@@ -90,8 +93,8 @@ function makeFixture() {
     `Project path: ${project}/README.md`,
     `Home path: ${os.homedir()}/.config/example`,
     "Authorization: Bearer abc.def.secret-token",
-    "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456",
-    "GitHub: ghp_abcdefghijklmnopqrstuvwxyz123456",
+    `OPENAI_API_KEY=${OPENAI_KEY_FIXTURE}`,
+    `GitHub: ${GITHUB_TOKEN_FIXTURE}`,
     "-----BEGIN OPENSSH PRIVATE KEY-----",
     "secret-key-material",
     "-----END OPENSSH PRIVATE KEY-----"
@@ -99,7 +102,7 @@ function makeFixture() {
   fs.writeFileSync(task.bridge_log_file, [
     `[time] reading ${project}/README.md`,
     "[time] Authorization: Bearer abc.def.secret-token",
-    `[time] ${"x".repeat(400)} sk-abcdefghijklmnopqrstuvwxyz123456`
+    `[time] ${"x".repeat(400)} ${OPENAI_SHORT_KEY_FIXTURE}`
   ].join("\n"));
   fs.writeFileSync(task.stdout_file, `{"message":"${project}/package.json"}\n`);
   fs.writeFileSync(task.stderr_file, "PASSWORD=super-secret-value\n");
@@ -113,15 +116,15 @@ function testSafeResultDefaultAndRawOverride() {
   assert(safe.includes("[workspace:self]/README.md"));
   assert(!safe.includes(fixture.project));
   assert(!safe.includes(os.homedir()));
-  assert(!safe.includes("sk-proj-abcdefghijklmnopqrstuvwxyz123456"));
-  assert(!safe.includes("ghp_abcdefghijklmnopqrstuvwxyz123456"));
+  assert(!safe.includes(OPENAI_KEY_FIXTURE));
+  assert(!safe.includes(GITHUB_TOKEN_FIXTURE));
   assert(!safe.includes("secret-key-material"));
   assert(safe.includes("[REDACTED_PRIVATE_KEY]"));
   assert(fs.existsSync(path.join(fixture.taskDir, "result.safe.md")));
 
   const raw = runBridge(["result", "--config", fixture.configPath, fixture.taskId, "--raw"]).stdout;
   assert(raw.includes(fixture.project));
-  assert(raw.includes("sk-proj-abcdefghijklmnopqrstuvwxyz123456"));
+  assert(raw.includes(OPENAI_KEY_FIXTURE));
 }
 
 function testSafeResultJsonMetadata() {
@@ -153,7 +156,7 @@ function testSafeLogsTailAndTruncation() {
   assert.strictEqual(data.truncated, true);
   assert(data.lines_returned > 0);
   assert(!data.text.includes(fixture.project));
-  assert(!data.text.includes("sk-abcdefghijklmnopqrstuvwxyz123456"));
+  assert(!data.text.includes(OPENAI_SHORT_KEY_FIXTURE));
   assert(fs.existsSync(path.join(fixture.taskDir, "logs.safe.txt")));
 }
 

@@ -15,6 +15,7 @@ Read in this order:
 07-systemd-services.md
 08-new-machine-checklist.md
 09-github-ssh.md
+10-operational-safety.md
 ```
 
 The normal test workspaces are intentionally small:

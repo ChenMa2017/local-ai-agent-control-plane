@@ -9,6 +9,7 @@ const cp = require("child_process");
 
 const repoRoot = path.resolve(__dirname, "..");
 const bridgeScript = path.join(repoRoot, "scripts", "codex-bridge.js");
+const OPENAI_KEY_FIXTURE = `sk-${"d".repeat(32)}`;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -440,7 +441,7 @@ async function testReferenceTaskContextIsInjected() {
     safe_logs_file: path.join(refDir, "logs.safe.txt"),
     bridge_log_file: path.join(refDir, "bridge.log")
   }, null, 2)}\n`);
-  fs.writeFileSync(path.join(refDir, "result.md"), `raw ${fixture.project} token sk-abcdefghijklmnopqrstuvwxyz123456\n`);
+  fs.writeFileSync(path.join(refDir, "result.md"), `raw ${fixture.project} token ${OPENAI_KEY_FIXTURE}\n`);
   fs.writeFileSync(path.join(refDir, "result.safe.md"), "prior safe result\n");
 
   const captureFile = path.join(fixture.root, "captured-prompt.txt");
@@ -470,7 +471,7 @@ async function testReferenceTaskContextIsInjected() {
   assert(captured.includes("prior safe result"), captured);
   assert(captured.includes("Current user request:"), captured);
   assert(captured.includes("continue from previous"), captured);
-  assert(!captured.includes("sk-abcdefghijklmnopqrstuvwxyz123456"), captured);
+  assert(!captured.includes(OPENAI_KEY_FIXTURE), captured);
 }
 
 function writeFinishedTask(fixture, id, updatedAt) {

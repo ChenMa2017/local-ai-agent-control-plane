@@ -386,6 +386,53 @@ class BridgeTests(unittest.TestCase):
             self.assertTrue(task["protected_path_violation"])
             self.assertNotIn(str(root), json.dumps(response, ensure_ascii=False))
 
+    def test_health_summary_counts_tasks_without_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            self.write_codex_task(root, "task_20260523_120000_done01", status="done")
+            self.write_codex_task(root, "task_20260523_130000_run001", status="running")
+
+            response = bridge.handle_health_summary(
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+            text = json.dumps(response, ensure_ascii=False)
+
+            self.assertTrue(response["ok"])
+            self.assertTrue(response["agent_host"]["active"])
+            self.assertEqual(response["workspaces"]["count"], 1)
+            self.assertEqual(response["tasks"]["recent_count"], 2)
+            self.assertEqual(response["tasks"]["active_count"], 1)
+            self.assertEqual(response["tasks"]["terminal_count"], 1)
+            self.assertNotIn("secret-real-project-path", text)
+            self.assertNotIn(str(root), text)
+
+    def test_result_page_returns_safe_slice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "codex-bridge.js"
+            script.parent.mkdir()
+            script.write_text(
+                "console.log(JSON.stringify({task_id:'task_20260523_120000_page01',"
+                "text:'abcdefghi',raw:false,redacted:true,truncated:false}))\n"
+            )
+            config = self.make_config(root)
+            self.write_codex_task(root, "task_20260523_120000_page01", status="done")
+
+            response = bridge.handle_codex_result_page(
+                {"task_id": "task_20260523_120000_page01", "page": "2", "page_size": "3"},
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["text"], "def")
+            self.assertEqual(response["page"], 2)
+            self.assertEqual(response["total_pages"], 3)
+            self.assertTrue(response["has_next"])
+            self.assertFalse(response["raw"])
+
     def test_codex_tasks_filters_and_user_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

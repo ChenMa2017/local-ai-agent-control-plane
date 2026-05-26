@@ -36,9 +36,9 @@ class HostOpsTest(unittest.TestCase):
         raw = "\n".join(
             [
                 f"path={config['path_aliases']['tmp_root']}/file.txt",
-                "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
-                "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz",
-                "GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz",
+                "Authorization: Bearer " + ("a" * 32),
+                "OPENAI_API_KEY=sk-" + ("b" * 32),
+                "GITHUB_TOKEN=ghp_" + ("c" * 32),
                 "DISCORD_TOKEN=AAAAAAAAAAAAAAAAAAAAAA.BBBBBB.CCCCCCCCCCCCCCCCCCCCCCCCCC",
                 "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
             ]

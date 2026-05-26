@@ -5,6 +5,9 @@
   "description": "Monorepo for the local Discord/Web controlled Codex Agent Host.",
   "scripts": {
     "check": "bash scripts/check_all.sh",
+    "control-plane:validate": "python3 scripts/control_plane.py config validate",
+    "control-plane:migrate-check": "python3 scripts/control_plane.py migrate check --dry-run",
+    "test:control-plane": "python3 -m unittest tests/test_control_plane.py",
     "test:codex-bridge": "cd modules/codex-bridge && npm test",
     "test:agent-host": "cd modules/agent-host && python3 -m unittest tests/test_bridge.py",
     "test:discord-adapter": "cd modules/discord-adapter && .venv/bin/python -m unittest discover -s tests",
