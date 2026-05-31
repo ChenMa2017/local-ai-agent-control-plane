@@ -48,6 +48,18 @@ SSE_HEARTBEAT_SECONDS = 15.0
 SSE_LOG_TAIL_LINES = 200
 SSE_LOG_MAX_CHARS = 20000
 SSE_LOG_EVENT_MAX_CHARS = 8000
+SUPERVISOR_TEXT_MAX_CHARS = 500
+SUPERVISOR_ALLOWED_BLOCKERS = {
+    "env",
+    "queue",
+    "permission",
+    "reviewer",
+    "model",
+    "data",
+    "stale_state",
+    "none",
+    "unknown",
+}
 STREAM_TOKENS: dict[str, dict[str, Any]] = {}
 STREAM_TOKEN_LOCK = threading.Lock()
 
@@ -811,11 +823,122 @@ def read_recent_task_summaries(config: BridgeConfig, principal: AuthPrincipal, l
     return [summary for _sort, summary in items[: max(1, limit)]]
 
 
+def safe_control_text(config: BridgeConfig, text: str) -> str:
+    safe = str(text or "")
+    replacements = [(str(project.root), f"[workspace:{name}]") for name, project in config.projects.items()]
+    for raw_path, replacement in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
+        if raw_path:
+            safe = re.sub(re.escape(raw_path), replacement, safe)
+
+    home = str(Path.home())
+    if home:
+        safe = re.sub(re.escape(home), "~", safe)
+
+    safe = re.sub(r"Authorization:\s*Bearer\s+[A-Za-z0-9._~+/=-]+", "Authorization: Bearer [REDACTED]", safe, flags=re.I)
+    safe = re.sub(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b", "[REDACTED_OPENAI_KEY]", safe)
+    safe = re.sub(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b", "[REDACTED_GITHUB_TOKEN]", safe)
+    safe = re.sub(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}\b", "[REDACTED_DISCORD_TOKEN]", safe)
+    safe = re.sub(
+        r"(?im)\b([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|KEY|PASSWORD|PASS|CREDENTIAL)[A-Z0-9_]*)\s*=\s*([^\s]+)",
+        r"\1=[REDACTED_SECRET]",
+        safe,
+    )
+    safe = re.sub(
+        r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+        "[REDACTED_PRIVATE_KEY]",
+        safe,
+    )
+    return safe
+
+
+def compact_control_text(config: BridgeConfig, text: str, max_chars: int = SUPERVISOR_TEXT_MAX_CHARS) -> str:
+    safe = " ".join(safe_control_text(config, text).split())
+    if len(safe) > max_chars:
+        return safe[: max(0, max_chars - 16)].rstrip() + "...(truncated)"
+    return safe
+
+
+def read_limited_text(path: Path, max_chars: int = 8192) -> str:
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        return path.read_text(errors="replace")[:max_chars]
+    except OSError:
+        return ""
+
+
+def read_limited_json(path: Path, max_chars: int = 65536) -> dict[str, Any] | None:
+    text = read_limited_text(path, max_chars=max_chars)
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def safe_blocker_type(value: Any) -> str:
+    blocker = str(value or "unknown").strip().lower().replace("-", "_")
+    if blocker not in SUPERVISOR_ALLOWED_BLOCKERS:
+        return "unknown"
+    return blocker
+
+
+def workspace_supervisor_signal(config: BridgeConfig, project: Project) -> dict[str, Any]:
+    agent_dir = project.root / "agent"
+    run_state_path = agent_dir / "RUN_STATE.json"
+    next_action_path = agent_dir / "NEXT_ACTION.md"
+    blockers_path = agent_dir / "BLOCKERS.md"
+    run_state = read_limited_json(run_state_path) or {}
+    next_action = run_state.get("next_action") if isinstance(run_state.get("next_action"), dict) else {}
+    role = str(run_state.get("role") or "unknown").strip().lower()
+    if role not in {"runner", "supervisor"}:
+        role = "unknown"
+
+    description = str(next_action.get("description") or "")
+    if not description:
+        description = read_limited_text(next_action_path, max_chars=2000)
+
+    return {
+        "workspace": project.name,
+        "role": role,
+        "status": compact_control_text(config, str(run_state.get("status") or "unknown"), max_chars=80),
+        "blocker_type": safe_blocker_type(run_state.get("blocker_type")),
+        "requires_human_review": bool(run_state.get("requires_human_review", False)),
+        "updated_utc": compact_control_text(config, str(run_state.get("updated_utc") or ""), max_chars=80),
+        "next_action": {
+            "kind": compact_control_text(config, str(next_action.get("kind") or "unknown"), max_chars=80),
+            "description": compact_control_text(config, description),
+            "can_execute_automatically": bool(next_action.get("can_execute_automatically", False)),
+            "reason": compact_control_text(config, str(next_action.get("reason") or ""), max_chars=240),
+        },
+        "blockers_preview": compact_control_text(config, read_limited_text(blockers_path, max_chars=3000)),
+        "files": {
+            "run_state": run_state_path.exists(),
+            "next_action": next_action_path.exists(),
+            "blockers": blockers_path.exists(),
+            "current_state": (agent_dir / "CURRENT_STATE.md").exists(),
+            "anti_snowball": (agent_dir / "ANTI_SNOWBALL.md").exists(),
+        },
+    }
+
+
+def workspace_supervisor_signals(config: BridgeConfig) -> list[dict[str, Any]]:
+    return [
+        workspace_supervisor_signal(config, project)
+        for project in sorted(config.projects.values(), key=lambda item: item.name)
+    ]
+
+
 def handle_health_summary(config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
     recent = read_recent_task_summaries(config, principal, limit=50)
     active = [task for task in recent if task.get("status") in CODEX_ACTIVE_STATUSES]
     terminal = [task for task in recent if task.get("status") in CODEX_FINAL_STATUSES]
     modes = sorted({mode for project in config.projects.values() for mode in project.allowed_modes})
+    supervisor_signals = workspace_supervisor_signals(config)
+    blocked = [item for item in supervisor_signals if item.get("blocker_type") not in {"none", "unknown"}]
+    review_required = [item for item in supervisor_signals if item.get("requires_human_review")]
     return {
         "ok": True,
         "agent_host": {
@@ -839,6 +962,12 @@ def handle_health_summary(config: BridgeConfig, principal: AuthPrincipal) -> dic
             "active_count": len(active),
             "terminal_count": len(terminal),
             "latest_terminal": terminal[0] if terminal else None,
+        },
+        "supervisor": {
+            "workspace_count": len(supervisor_signals),
+            "blocked_count": len(blocked),
+            "review_required_count": len(review_required),
+            "signals": supervisor_signals,
         },
         "safety": {
             "safe_output": True,
@@ -876,7 +1005,7 @@ def safe_codex_status_text(config: BridgeConfig, task: dict[str, Any], text: str
             safe,
             flags=re.MULTILINE,
         )
-    return safe
+    return safe_control_text(config, safe)
 
 
 def validate_codex_project(config: BridgeConfig, project: str) -> Project:

@@ -389,6 +389,30 @@ class BridgeTests(unittest.TestCase):
     def test_health_summary_counts_tasks_without_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            agent_dir = root / "agent"
+            agent_dir.mkdir()
+            (agent_dir / "RUN_STATE.json").write_text(
+                json.dumps(
+                    {
+                        "role": "runner",
+                        "status": "blocked",
+                        "blocker_type": "env",
+                        "requires_human_review": True,
+                        "updated_utc": "2026-05-31T12:00:00Z",
+                        "next_action": {
+                            "kind": "repair",
+                            "description": f"Inspect {root}/private and Authorization: {'Bearer'} secret-token-12345",
+                            "can_execute_automatically": False,
+                            "reason": "Needs reviewer approval",
+                        },
+                    }
+                )
+            )
+            (agent_dir / "NEXT_ACTION.md").write_text("Fallback next action")
+            fake_github_token = "ghp_" + "abcdefghijklmnopqrstuvwxyz123456"
+            (agent_dir / "BLOCKERS.md").write_text(
+                f"Blocker references {root}/private and {fake_github_token}"
+            )
             config = self.make_config(root)
             self.write_codex_task(root, "task_20260523_120000_done01", status="done")
             self.write_codex_task(root, "task_20260523_130000_run001", status="running")
@@ -405,8 +429,20 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(response["tasks"]["recent_count"], 2)
             self.assertEqual(response["tasks"]["active_count"], 1)
             self.assertEqual(response["tasks"]["terminal_count"], 1)
+            self.assertEqual(response["supervisor"]["workspace_count"], 1)
+            self.assertEqual(response["supervisor"]["blocked_count"], 1)
+            self.assertEqual(response["supervisor"]["review_required_count"], 1)
+            signal = response["supervisor"]["signals"][0]
+            self.assertEqual(signal["workspace"], "demo")
+            self.assertEqual(signal["role"], "runner")
+            self.assertEqual(signal["status"], "blocked")
+            self.assertEqual(signal["blocker_type"], "env")
+            self.assertTrue(signal["requires_human_review"])
+            self.assertIn("[workspace:demo]", signal["next_action"]["description"])
             self.assertNotIn("secret-real-project-path", text)
             self.assertNotIn(str(root), text)
+            self.assertNotIn("secret-token-12345", text)
+            self.assertNotIn(fake_github_token, text)
 
     def test_result_page_returns_safe_slice(self):
         with tempfile.TemporaryDirectory() as tmp:

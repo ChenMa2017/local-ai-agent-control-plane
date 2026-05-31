@@ -239,6 +239,7 @@ def format_health_summary(data: dict[str, Any], command_prefix: str = "agent") -
     agent = data.get("agent_host", {}) if isinstance(data.get("agent_host"), dict) else {}
     workspaces = data.get("workspaces", {}) if isinstance(data.get("workspaces"), dict) else {}
     tasks = data.get("tasks", {}) if isinstance(data.get("tasks"), dict) else {}
+    supervisor = data.get("supervisor", {}) if isinstance(data.get("supervisor"), dict) else {}
     latest = tasks.get("latest_terminal") if isinstance(tasks.get("latest_terminal"), dict) else None
     workspace_items = workspaces.get("items") if isinstance(workspaces.get("items"), list) else []
     workspace_text = ", ".join(str(item.get("id")) for item in workspace_items if isinstance(item, dict) and item.get("id")) or "(none)"
@@ -255,9 +256,36 @@ def format_health_summary(data: dict[str, Any], command_prefix: str = "agent") -
         f"- Recent tasks: {tasks.get('recent_count', 0)}",
         f"- Active tasks: {tasks.get('active_count', 0)}",
         f"- Latest terminal task: {latest_text}",
-        "",
-        f"分页查看长结果：/{slash_command_name(command_prefix, 'task_page')} task_id:<id> page:1",
     ]
+    signals = supervisor.get("signals") if isinstance(supervisor.get("signals"), list) else []
+    if signals:
+        lines.extend(
+            [
+                "",
+                "Supervisor signals:",
+                f"- Blocked workspaces: {supervisor.get('blocked_count', 0)}",
+                f"- Review required: {supervisor.get('review_required_count', 0)}",
+            ]
+        )
+        for signal in signals[:3]:
+            if not isinstance(signal, dict):
+                continue
+            next_action = signal.get("next_action") if isinstance(signal.get("next_action"), dict) else {}
+            next_text = str(next_action.get("description") or next_action.get("kind") or "none")
+            if len(next_text) > 110:
+                next_text = next_text[:107].rstrip() + "..."
+            lines.append(
+                f"- {signal.get('workspace', 'unknown')}: "
+                f"status={signal.get('status', 'unknown')}, "
+                f"blocker={signal.get('blocker_type', 'unknown')}, "
+                f"next={next_text or 'none'}"
+            )
+    lines.extend(
+        [
+            "",
+            f"分页查看长结果：/{slash_command_name(command_prefix, 'task_page')} task_id:<id> page:1",
+        ]
+    )
     return sanitize_discord_text("\n".join(lines))
 
 

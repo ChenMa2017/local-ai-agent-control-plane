@@ -19,6 +19,8 @@ const STATUS_REFRESH_MS = 60000;
 const DEFAULT_INTERVAL_MINUTES = 30;
 const DEFAULT_TIMEOUT_MINUTES = 25;
 const DEFAULT_COMPACT_EVERY_RUNS = 6;
+const DEFAULT_PHASE_OFFSET_MINUTES = 10;
+const DEFAULT_WATCHDOG_ROLE = "runner";
 const DEFAULT_SERVICE_PREFIX = "codex-watchdog";
 const LOGIN_READY_RE = /(?:logged\s+in|authenticated)/i;
 
@@ -1097,6 +1099,8 @@ async function watchdogCommandEnv(root) {
     WATCHDOG_INTERVAL_MINUTES: String(settings.intervalMinutes),
     WATCHDOG_TIMEOUT_MINUTES: String(settings.timeoutMinutes),
     WATCHDOG_COMPACT_EVERY_RUNS: String(settings.compactEveryRuns),
+    WATCHDOG_ROLE: settings.role,
+    WATCHDOG_PHASE_OFFSET_MINUTES: String(settings.phaseOffsetMinutes),
     WATCHDOG_SERVICE_PREFIX: settings.servicePrefix,
     CUDA_VISIBLE_DEVICES: ""
   };
@@ -1116,6 +1120,8 @@ async function effectiveWatchdogSettings(root) {
     intervalMinutes: positiveNumberSetting(root, "codexWatchdog.intervalMinutes", extensionSetting("intervalMinutes", DEFAULT_INTERVAL_MINUTES), 5, DEFAULT_INTERVAL_MINUTES),
     timeoutMinutes: positiveNumberSetting(root, "codexWatchdog.timeoutMinutes", extensionSetting("timeoutMinutes", DEFAULT_TIMEOUT_MINUTES), 1, DEFAULT_TIMEOUT_MINUTES),
     compactEveryRuns: positiveNumberSetting(root, "codexWatchdog.compactEveryRuns", extensionSetting("compactEveryRuns", DEFAULT_COMPACT_EVERY_RUNS), 0, DEFAULT_COMPACT_EVERY_RUNS),
+    role: watchdogRoleSetting(root),
+    phaseOffsetMinutes: positiveNumberSetting(root, "codexWatchdog.phaseOffsetMinutes", extensionSetting("phaseOffsetMinutes", DEFAULT_PHASE_OFFSET_MINUTES), 0, DEFAULT_PHASE_OFFSET_MINUTES),
     servicePrefix: servicePrefixSetting(root)
   };
 }
@@ -1131,6 +1137,8 @@ async function renderWatchdogEnv(root) {
     `WATCHDOG_INTERVAL_MINUTES=${shellQuote(String(settings.intervalMinutes))}`,
     `WATCHDOG_TIMEOUT_MINUTES=${shellQuote(String(settings.timeoutMinutes))}`,
     `WATCHDOG_COMPACT_EVERY_RUNS=${shellQuote(String(settings.compactEveryRuns))}`,
+    `WATCHDOG_ROLE=${shellQuote(settings.role)}`,
+    `WATCHDOG_PHASE_OFFSET_MINUTES=${shellQuote(String(settings.phaseOffsetMinutes))}`,
     `WATCHDOG_SERVICE_PREFIX=${shellQuote(settings.servicePrefix)}`,
     ""
   ].join("\n");
@@ -1162,6 +1170,8 @@ async function runOnceCommand() {
       WATCHDOG_INTERVAL_MINUTES: String(settings.intervalMinutes),
       WATCHDOG_TIMEOUT_MINUTES: String(settings.timeoutMinutes),
       WATCHDOG_COMPACT_EVERY_RUNS: String(settings.compactEveryRuns),
+      WATCHDOG_ROLE: settings.role,
+      WATCHDOG_PHASE_OFFSET_MINUTES: String(settings.phaseOffsetMinutes),
       WATCHDOG_SERVICE_PREFIX: settings.servicePrefix,
       CUDA_VISIBLE_DEVICES: ""
     }
@@ -1291,12 +1301,20 @@ async function bootstrapProject(root) {
     await writeIfAbsent(root, path.join(root, "agent", "AGENTS.watchdog.example.md"), templates.agents(), created, skipped);
   }
   await writeIfAbsent(root, path.join(root, "agent", "CODEX_TAKEOVER.md"), templates.codexTakeover(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "WATCHDOG_PROTOCOL.md"), templates.watchdogProtocol(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "TASK_REQUEST.md"), templates.taskRequest(), created, skipped);
 
   await writeIfAbsent(root, path.join(root, "agent", "PLAN.md"), templates.plan(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "STATE.md"), templates.state(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "STATE.json"), templates.stateJson(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "PROGRESS_STATE.json"), templates.progressStateJson(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "CURRENT_STATE.md"), templates.currentState(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "RUN_STATE.json"), templates.runStateJson(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "NEXT_ACTION.md"), templates.nextAction(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "BLOCKERS.md"), templates.blockers(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "REVIEW_PENDING.md"), templates.reviewPending(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "ANTI_SNOWBALL.md"), templates.antiSnowball(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "EXPERIMENT_LEDGER.md"), templates.experimentLedger(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "RUNTIME_STATE.md"), templates.runtimeState(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "DAILY_HANDOFF.md"), templates.dailyHandoff(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "MORNING_BRIEF.md"), templates.morningBrief(), created, skipped);
@@ -1469,6 +1487,7 @@ async function refreshGeneratedWatcherFiles(root) {
     [path.join(root, "agent", "watchdog.env"), watchdogEnv, 0o644],
     [path.join(root, "README.codex-watchdog.md"), templates.watchdogReadme(), 0o644],
     [path.join(root, "agent", "CODEX_TAKEOVER.md"), templates.codexTakeover(), 0o644],
+    [path.join(root, "agent", "WATCHDOG_PROTOCOL.md"), templates.watchdogProtocol(), 0o644],
     [path.join(root, "agent", "prompts", "wakeup.md"), templates.wakeup(), 0o644],
     [path.join(root, "agent", "schemas", "watch_decision.schema.json"), templates.schema(), 0o644],
     [path.join(root, "agent", "schemas", "state.schema.json"), templates.stateSchema(), 0o644],
@@ -1500,6 +1519,7 @@ async function refreshGeneratedWatcherFiles(root) {
 	    await fsp.writeFile(runtimeState, templates.runtimeState());
 	    output.appendLine("Created agent/RUNTIME_STATE.md");
 	  }
+  await ensureCollaborationHandoffFiles(root);
   const stateJson = path.join(root, "agent", "STATE.json");
   if (!fs.existsSync(stateJson)) {
     await fsp.writeFile(stateJson, templates.stateJson());
@@ -1540,6 +1560,26 @@ async function refreshGeneratedWatcherFiles(root) {
 	  await ensureHandoffFiles(root);
 	}
 
+async function ensureCollaborationHandoffFiles(root) {
+  const files = [
+    ["agent/CURRENT_STATE.md", templates.currentState()],
+    ["agent/RUN_STATE.json", templates.runStateJson()],
+    ["agent/NEXT_ACTION.md", templates.nextAction()],
+    ["agent/BLOCKERS.md", templates.blockers()],
+    ["agent/REVIEW_PENDING.md", templates.reviewPending()],
+    ["agent/ANTI_SNOWBALL.md", templates.antiSnowball()],
+    ["agent/EXPERIMENT_LEDGER.md", templates.experimentLedger()]
+  ];
+  for (const [rel, content] of files) {
+    const file = path.join(root, rel);
+    if (!fs.existsSync(file)) {
+      await ensureDir(path.dirname(file));
+      await fsp.writeFile(file, content);
+      output.appendLine(`Created ${rel}`);
+    }
+  }
+}
+
 async function ensureHandoffFiles(root) {
   const dailyHandoff = path.join(root, "agent", "DAILY_HANDOFF.md");
   if (!fs.existsSync(dailyHandoff)) {
@@ -1568,6 +1608,8 @@ async function writeSystemdUnits(root, units) {
   const codexHome = settings.codexHome;
   const sandboxMode = settings.sandboxMode;
   const compactEveryRuns = settings.compactEveryRuns;
+  const role = settings.role;
+  const phaseOffsetMinutes = settings.phaseOffsetMinutes;
 
   const service = [
     "[Unit]",
@@ -1582,6 +1624,8 @@ async function writeSystemdUnits(root, units) {
     `Environment=CODEX_SANDBOX_MODE=${systemdEnvValue(sandboxMode)}`,
     `Environment=WATCHDOG_TIMEOUT_MINUTES=${timeout}`,
     `Environment=WATCHDOG_COMPACT_EVERY_RUNS=${compactEveryRuns}`,
+    `Environment=WATCHDOG_ROLE=${systemdEnvValue(role)}`,
+    `Environment=WATCHDOG_PHASE_OFFSET_MINUTES=${phaseOffsetMinutes}`,
     "Environment=CUDA_VISIBLE_DEVICES=",
     "NoNewPrivileges=yes",
     "PrivateTmp=yes",
@@ -1595,7 +1639,7 @@ async function writeSystemdUnits(root, units) {
     `Description=Run Codex project watcher every ${interval} minutes for ${path.basename(root)}`,
     "",
     "[Timer]",
-    "OnBootSec=10min",
+    `OnActiveSec=${phaseOffsetMinutes}min`,
     `OnUnitActiveSec=${interval}min`,
     "AccuracySec=1min",
     `Unit=${units.service}`,
@@ -2174,6 +2218,15 @@ function sandboxModeSetting(root) {
   return "read-only";
 }
 
+function watchdogRoleSetting(root) {
+  const value = String(projectSetting(root, "codexWatchdog.role", extensionSetting("role", DEFAULT_WATCHDOG_ROLE)) || DEFAULT_WATCHDOG_ROLE).toLowerCase();
+  if (value === "runner" || value === "supervisor") {
+    return value;
+  }
+  output.appendLine(`[warning] Ignoring invalid codexWatchdog.role=${JSON.stringify(value)}; using ${DEFAULT_WATCHDOG_ROLE}.`);
+  return DEFAULT_WATCHDOG_ROLE;
+}
+
 function workspaceWritePolicyAllowed(root) {
   const policyPath = path.join(root, "agent", "workspace_write_policy.json");
   if (!fs.existsSync(policyPath)) {
@@ -2557,11 +2610,19 @@ Codex Watchdog is a scheduled handoff system. Daily Codex mode and the human ope
 \`\`\`text
 agent/
   TASK_REQUEST.md          natural-language task request for daily Codex
+  WATCHDOG_PROTOCOL.md     runner/supervisor cooperation contract
   PLAN.md                  approved plan for unattended work
   TODO.md                  current task queue
   STATE.md                 human-approved durable state
   DAILY_HANDOFF.md         evening handoff from daily mode
   SAFETY.md                hard safety rules and allowed scope
+  CURRENT_STATE.md         current canonical facts for the next actor
+  RUN_STATE.json           machine-readable wakeup status
+  NEXT_ACTION.md           one next safe action, not a history dump
+  BLOCKERS.md              classified blockers and owner
+  REVIEW_PENDING.md        reviewer bundle/send state
+  ANTI_SNOWBALL.md         stopped routes and context compaction notes
+  EXPERIMENT_LEDGER.md     concise hypothesis/model/loss/data/result ledger
   RUNTIME_STATE.md         compact memory refreshed by watchdog mode
   MORNING_BRIEF.md         summary for daily mode when the user returns
   STATE.proposed.md        candidate state update for human review
@@ -2592,6 +2653,19 @@ agent/
    - \`agent/RUNTIME_STATE.md\`
    - \`agent/MORNING_BRIEF.md\`
    - \`agent/STATE.proposed.md\`
+   - \`agent/CURRENT_STATE.md\`
+   - \`agent/RUN_STATE.json\`
+   - \`agent/NEXT_ACTION.md\`
+   - \`agent/BLOCKERS.md\`
+   - \`agent/REVIEW_PENDING.md\`
+
+## Runner / Supervisor Cooperation
+
+Set \`codexWatchdog.role\` to \`runner\` for project-local worker watchdogs and \`supervisor\` for low-frequency audit watchdogs. They use the same runtime and scripts; only the responsibility boundary changes.
+
+Runner watchdogs should execute one bounded project-local cycle and update the canonical handoff files. Supervisor watchdogs should read runner canonical handoff files, classify stale/blocking states, prepare reviewer-pending work, and prevent redundant information snowballing. A supervisor must not become a fourth runner: it should not launch training, change model code, delete files, or bypass external-service approval.
+
+Use \`codexWatchdog.phaseOffsetMinutes\` to stagger timers. For example, runners can use offsets 0/10/20 minutes and the supervisor can use 30 minutes, while all runners repeat every 45 minutes and the supervisor repeats every 180 minutes.
 
 ## Initial Setup For Daily Codex Mode
 
@@ -3032,6 +3106,156 @@ Only durable, evidence-backed facts belong here. Do not paste raw logs or transi
   ledgerNotes: () => `# Ledger Notes
 
 Use this file for proposed ledger fragments or uncertain observations. Do not overwrite RESEARCH_LEDGER.md unless producing a complete document that starts with "# Research Ledger".
+`,
+
+  watchdogProtocol: () => `# Watchdog Cooperation Protocol
+
+This generated protocol keeps runner watchdogs and supervisor watchdogs compatible.
+
+## Roles
+
+- \`runner\`: execute one bounded project-local work cycle, monitor/queue/evaluate project jobs, and update canonical handoff files.
+- \`supervisor\`: run less frequently, inspect runner handoff files, classify blockers, compact repeated history, and coordinate reviewer-pending requests.
+
+Both roles use the same Codex runtime and generated scripts. The supervisor is not a privileged fourth runner.
+
+## Canonical Handoff Files
+
+Each wakeup should leave these files coherent:
+
+- \`agent/CURRENT_STATE.md\`: current facts only.
+- \`agent/RUN_STATE.json\`: machine-readable role/status/blocker/next-action summary.
+- \`agent/NEXT_ACTION.md\`: exactly one next safe action.
+- \`agent/BLOCKERS.md\`: blockers grouped as env, queue, permission, reviewer, model, data, stale_state, or none.
+- \`agent/REVIEW_PENDING.md\`: reviewer bundle state, sanitization state, send state, and response state.
+- \`agent/ANTI_SNOWBALL.md\`: stopped routes, stale facts to avoid repeating, and compaction notes.
+- \`agent/EXPERIMENT_LEDGER.md\`: durable experimental hypotheses, model/loss/data protocol, provenance, results, and conclusions.
+
+## Supervisor Rules
+
+- Prefer canonical handoff files over old reports.
+- If a runner is active, do not wait on or interrupt it.
+- Fix only stale state, stale pause markers, stale queue metadata, reviewer-pending bookkeeping, and anti-snowball summaries.
+- For environment or external reviewer blockers, write the exact needed action and evidence path.
+- For model/data/loss decisions, prepare a concise reviewer or Deep Research evidence bundle; do not invent a new model line.
+`,
+
+  currentState: () => `# Current State
+
+Updated: never
+
+## Role
+
+- Unknown. Generated watchdogs should set this from WATCHDOG_ROLE.
+
+## Current Facts
+
+- No current facts recorded yet.
+
+## Latest Evidence
+
+- None yet.
+`,
+
+  runStateJson: () => JSON.stringify({
+    schema_version: 1,
+    updated_utc: null,
+    role: "runner",
+    status: "unknown",
+    primary_skill: null,
+    report_type: null,
+    progress_changed: false,
+    active_task_id: null,
+    blocker_type: "none",
+    requires_human_review: false,
+    next_action: {
+      kind: "none",
+      description: "",
+      can_execute_automatically: false,
+      reason: ""
+    },
+    evidence: []
+  }, null, 2) + "\n",
+
+  nextAction: () => `# Next Action
+
+Updated: never
+
+## One Next Safe Action
+
+- None recorded yet.
+
+## Stop Condition
+
+- Stop after one bounded action and update canonical handoff files.
+`,
+
+  blockers: () => `# Blockers
+
+Updated: never
+
+Use blocker types: env, queue, permission, reviewer, model, data, stale_state, none.
+
+## Active Blockers
+
+- none: no blocker recorded yet.
+`,
+
+  reviewPending: () => `# Review Pending
+
+Updated: never
+
+## Reviewer Bundle State
+
+- drafted: no
+- sanitized: no
+- pending_send: no
+- sent: no
+- blocked_by_env_policy: no
+- response_received: no
+- triaged: no
+
+## Notes
+
+- External reviewer sending may require environment-level approval. If blocked, write the exact bundle path and reason here instead of repeating it in every report.
+`,
+
+  antiSnowball: () => `# Anti-Snowball Notes
+
+Updated: never
+
+## Current Facts To Preserve
+
+- None yet.
+
+## Stopped Or Deprecated Routes
+
+- None yet.
+
+## Do Not Repeat
+
+- Do not copy long historical reports into new reports. Reference paths instead.
+`,
+
+  experimentLedger: () => `# Experiment Ledger
+
+Record durable experimental evidence for later Code Reviewer Agent / ChatGPT Deep Research use.
+
+## Template
+
+### Experiment ID
+
+- Hypothesis:
+- Model forward / structure:
+- Loss / objective:
+- Data protocol:
+- Evaluation protocol:
+- Provenance:
+- Main metrics:
+- Possible cheating paths:
+- Failure classification:
+- Conclusion:
+- Next minimal diagnostic:
 `,
 
   runtimeState: () => `# Runtime State
@@ -3585,6 +3809,14 @@ You are being awakened by a timer. Treat this as a fresh handoff. Do not assume 
 - agent/SAFETY.md
 - agent/TODO.md
 - agent/DAILY_HANDOFF.md
+- agent/WATCHDOG_PROTOCOL.md
+- agent/CURRENT_STATE.md
+- agent/RUN_STATE.json
+- agent/NEXT_ACTION.md
+- agent/BLOCKERS.md
+- agent/REVIEW_PENDING.md
+- agent/ANTI_SNOWBALL.md
+- agent/EXPERIMENT_LEDGER.md
 - agent/RUNTIME_STATE.md
 - agent/MORNING_BRIEF.md
 - agent/SKILL_ROUTER.md
@@ -3598,8 +3830,15 @@ You are being awakened by a timer. Treat this as a fresh handoff. Do not assume 
 Mode boundary:
 
 - Daily mode owns agent/PLAN.md, agent/TODO.md, agent/STATE.md, agent/SAFETY.md, and agent/DAILY_HANDOFF.md.
-- Watchdog mode owns agent/RUNTIME_STATE.md, agent/MORNING_BRIEF.md, agent/status/, agent/reports/, agent/logs/, and agent/pending/.
+- Watchdog mode owns agent/CURRENT_STATE.md, agent/RUN_STATE.json, agent/NEXT_ACTION.md, agent/BLOCKERS.md, agent/REVIEW_PENDING.md, agent/ANTI_SNOWBALL.md, agent/EXPERIMENT_LEDGER.md, agent/RUNTIME_STATE.md, agent/MORNING_BRIEF.md, agent/status/, agent/reports/, agent/logs/, and agent/pending/.
 - Do not rewrite daily-mode files. Propose changes through state_update_markdown or review-required pending records.
+
+Runner / supervisor cooperation:
+
+- Read WATCHDOG_ROLE from the snapshot. If it is \`runner\`, perform one bounded project-local cycle and update the canonical handoff files through your structured output.
+- If it is \`supervisor\`, audit runner states in the project plan/TODO, classify blockers, prepare reviewer-pending work, and compact repeated history. Do not launch training, change model code, delete files, or bypass external-service approval.
+- Prefer agent/CURRENT_STATE.md, agent/RUN_STATE.json, agent/NEXT_ACTION.md, agent/BLOCKERS.md, and agent/REVIEW_PENDING.md over old reports when deciding what is currently true.
+- Blockers must be classified as env, queue, permission, reviewer, model, data, stale_state, or none.
 
 Runtime curation:
 
@@ -3681,6 +3920,8 @@ The final output must follow the JSON schema.
       "state_update_markdown",
       "runtime_state_markdown",
       "morning_brief_markdown",
+      "ledger_update_markdown",
+      "proposal_markdown",
       "report_markdown"
     ],
     properties: {
@@ -3926,6 +4167,8 @@ write_queue_status
   echo "- Run count: \${WATCHDOG_RUN_COUNT:-unknown}"
   echo "- Compact every runs: \${WATCHDOG_COMPACT_EVERY_RUNS:-6}"
   echo "- Compaction due this cycle: \${WATCHDOG_COMPACTION_DUE:-0}"
+  echo "- Watchdog role: \${WATCHDOG_ROLE:-runner}"
+  echo "- Phase offset minutes: \${WATCHDOG_PHASE_OFFSET_MINUTES:-10}"
   echo "- Raw log tails included: \${WATCHDOG_INCLUDE_LOG_TAILS:-0}"
   if [ -f agent/control/PAUSE ]; then
     echo "- Pause: active"
@@ -4000,6 +4243,46 @@ write_queue_status
   echo "## Runtime state"
   echo
   cat agent/RUNTIME_STATE.md 2>/dev/null || echo "No runtime state yet."
+  echo
+
+  echo "## Cooperation protocol"
+  echo
+  preview_file agent/WATCHDOG_PROTOCOL.md "No watchdog cooperation protocol yet."
+  echo
+
+  echo "## Canonical current state"
+  echo
+  preview_file agent/CURRENT_STATE.md "No CURRENT_STATE.md yet."
+  echo
+
+  echo "## Canonical run state"
+  echo
+  preview_file agent/RUN_STATE.json "No RUN_STATE.json yet."
+  echo
+
+  echo "## Next action"
+  echo
+  preview_file agent/NEXT_ACTION.md "No NEXT_ACTION.md yet."
+  echo
+
+  echo "## Blockers"
+  echo
+  preview_file agent/BLOCKERS.md "No BLOCKERS.md yet."
+  echo
+
+  echo "## Review pending"
+  echo
+  preview_file agent/REVIEW_PENDING.md "No REVIEW_PENDING.md yet."
+  echo
+
+  echo "## Anti-snowball"
+  echo
+  preview_file agent/ANTI_SNOWBALL.md "No ANTI_SNOWBALL.md yet."
+  echo
+
+  echo "## Experiment ledger"
+  echo
+  preview_file agent/EXPERIMENT_LEDGER.md "No EXPERIMENT_LEDGER.md yet."
   echo
 
   echo "## Queue status"
@@ -4103,6 +4386,9 @@ ENV_CODEX_SANDBOX_MODE="\${CODEX_SANDBOX_MODE-}"
 ENV_WATCHDOG_INTERVAL_MINUTES="\${WATCHDOG_INTERVAL_MINUTES-}"
 ENV_WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES-}"
 ENV_WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS-}"
+ENV_WATCHDOG_ROLE="\${WATCHDOG_ROLE-}"
+ENV_WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES-}"
+ENV_WATCHDOG_INITIAL_DELAY_MINUTES="\${WATCHDOG_INITIAL_DELAY_MINUTES-}"
 ENV_WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX-}"
 
 if [ -f "$PROJECT_ROOT/agent/watchdog.env" ]; then
@@ -4117,6 +4403,9 @@ fi
 [ -n "$ENV_WATCHDOG_INTERVAL_MINUTES" ] && WATCHDOG_INTERVAL_MINUTES="$ENV_WATCHDOG_INTERVAL_MINUTES"
 [ -n "$ENV_WATCHDOG_TIMEOUT_MINUTES" ] && WATCHDOG_TIMEOUT_MINUTES="$ENV_WATCHDOG_TIMEOUT_MINUTES"
 [ -n "$ENV_WATCHDOG_COMPACT_EVERY_RUNS" ] && WATCHDOG_COMPACT_EVERY_RUNS="$ENV_WATCHDOG_COMPACT_EVERY_RUNS"
+[ -n "$ENV_WATCHDOG_ROLE" ] && WATCHDOG_ROLE="$ENV_WATCHDOG_ROLE"
+[ -n "$ENV_WATCHDOG_PHASE_OFFSET_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_PHASE_OFFSET_MINUTES"
+[ -z "\${WATCHDOG_PHASE_OFFSET_MINUTES:-}" ] && [ -n "$ENV_WATCHDOG_INITIAL_DELAY_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_INITIAL_DELAY_MINUTES"
 [ -n "$ENV_WATCHDOG_SERVICE_PREFIX" ] && WATCHDOG_SERVICE_PREFIX="$ENV_WATCHDOG_SERVICE_PREFIX"
 
 CODEX_BIN="\${CODEX_BIN:-codex}"
@@ -4125,6 +4414,8 @@ CODEX_SANDBOX_MODE="\${CODEX_SANDBOX_MODE:-read-only}"
 WATCHDOG_INTERVAL_MINUTES="\${WATCHDOG_INTERVAL_MINUTES:-30}"
 WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES:-25}"
 WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS:-6}"
+WATCHDOG_ROLE="\${WATCHDOG_ROLE:-runner}"
+WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES:-10}"
 WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX:-codex-watchdog}"
 
 export PATH="\${WATCHDOG_LOCAL_BIN:-$HOME/.local/bin}:$PATH"
@@ -4183,7 +4474,9 @@ fi
 WATCHDOG_INTERVAL_MINUTES="$(sanitize_minutes WATCHDOG_INTERVAL_MINUTES "$WATCHDOG_INTERVAL_MINUTES" 5 30)"
 WATCHDOG_TIMEOUT_MINUTES="$(sanitize_minutes WATCHDOG_TIMEOUT_MINUTES "$WATCHDOG_TIMEOUT_MINUTES" 1 25)"
 WATCHDOG_COMPACT_EVERY_RUNS="$(sanitize_minutes WATCHDOG_COMPACT_EVERY_RUNS "$WATCHDOG_COMPACT_EVERY_RUNS" 0 6)"
-export CODEX_BIN CODEX_HOME CODEX_SANDBOX_MODE WATCHDOG_INTERVAL_MINUTES WATCHDOG_TIMEOUT_MINUTES WATCHDOG_COMPACT_EVERY_RUNS WATCHDOG_SERVICE_PREFIX
+WATCHDOG_PHASE_OFFSET_MINUTES="$(sanitize_minutes WATCHDOG_PHASE_OFFSET_MINUTES "$WATCHDOG_PHASE_OFFSET_MINUTES" 0 10)"
+case "$WATCHDOG_ROLE" in runner|supervisor) ;; *) WATCHDOG_ROLE="runner" ;; esac
+export CODEX_BIN CODEX_HOME CODEX_SANDBOX_MODE WATCHDOG_INTERVAL_MINUTES WATCHDOG_TIMEOUT_MINUTES WATCHDOG_COMPACT_EVERY_RUNS WATCHDOG_ROLE WATCHDOG_PHASE_OFFSET_MINUTES WATCHDOG_SERVICE_PREFIX
 
 mkdir -p agent/reports agent/logs agent/status agent/pending/review_required "$CODEX_HOME"
 
@@ -4372,16 +4665,29 @@ CODEX_STATUS="$?"
 set -e
 
 if [ "$CODEX_STATUS" -ne 0 ]; then
+  echo "[$(date -Is)] codex exec failed with status $CODEX_STATUS; building offline fallback report"
+  if python3 agent/bin/build_fallback_report.py "$JSON_OUT" "$STDERR_OUT" \\
+    && python3 agent/bin/render_report.py "$JSON_OUT" > "$MD_OUT" 2> "$RENDER_STDERR_OUT"; then
+    ln -sfn "$(basename "$MD_OUT")" agent/reports/latest.md
+    echo "[$(date -Is)] fallback report written to $MD_OUT"
+    exit 0
+  fi
+
   {
     echo "# Codex Watchdog Failure"
     echo
     echo "Timestamp: $TS"
     echo
-    echo "Codex exited with status: $CODEX_STATUS"
+    echo "Codex exited with status: $CODEX_STATUS, and fallback rendering also failed."
     echo
     echo "## stderr"
     echo '\`\`\`'
     tail -n 200 "$STDERR_OUT" || true
+    echo '\`\`\`'
+    echo
+    echo "## fallback render stderr"
+    echo '\`\`\`'
+    tail -n 200 "$RENDER_STDERR_OUT" || true
     echo '\`\`\`'
   } > "$MD_OUT"
 
@@ -4432,6 +4738,9 @@ ENV_CODEX_SANDBOX_MODE="\${CODEX_SANDBOX_MODE-}"
 ENV_WATCHDOG_INTERVAL_MINUTES="\${WATCHDOG_INTERVAL_MINUTES-}"
 ENV_WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES-}"
 ENV_WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS-}"
+ENV_WATCHDOG_ROLE="\${WATCHDOG_ROLE-}"
+ENV_WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES-}"
+ENV_WATCHDOG_INITIAL_DELAY_MINUTES="\${WATCHDOG_INITIAL_DELAY_MINUTES-}"
 ENV_WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX-}"
 
 if [ -f "$PROJECT_ROOT/agent/watchdog.env" ]; then
@@ -4446,6 +4755,9 @@ fi
 [ -n "$ENV_WATCHDOG_INTERVAL_MINUTES" ] && WATCHDOG_INTERVAL_MINUTES="$ENV_WATCHDOG_INTERVAL_MINUTES"
 [ -n "$ENV_WATCHDOG_TIMEOUT_MINUTES" ] && WATCHDOG_TIMEOUT_MINUTES="$ENV_WATCHDOG_TIMEOUT_MINUTES"
 [ -n "$ENV_WATCHDOG_COMPACT_EVERY_RUNS" ] && WATCHDOG_COMPACT_EVERY_RUNS="$ENV_WATCHDOG_COMPACT_EVERY_RUNS"
+[ -n "$ENV_WATCHDOG_ROLE" ] && WATCHDOG_ROLE="$ENV_WATCHDOG_ROLE"
+[ -n "$ENV_WATCHDOG_PHASE_OFFSET_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_PHASE_OFFSET_MINUTES"
+[ -z "\${WATCHDOG_PHASE_OFFSET_MINUTES:-}" ] && [ -n "$ENV_WATCHDOG_INITIAL_DELAY_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_INITIAL_DELAY_MINUTES"
 [ -n "$ENV_WATCHDOG_SERVICE_PREFIX" ] && WATCHDOG_SERVICE_PREFIX="$ENV_WATCHDOG_SERVICE_PREFIX"
 
 CODEX_HOME="\${CODEX_HOME:-$HOME/.codex-watcher}"
@@ -4453,6 +4765,8 @@ CODEX_SANDBOX_MODE="\${CODEX_SANDBOX_MODE:-read-only}"
 WATCHDOG_INTERVAL_MINUTES="\${WATCHDOG_INTERVAL_MINUTES:-30}"
 WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES:-25}"
 WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS:-6}"
+WATCHDOG_ROLE="\${WATCHDOG_ROLE:-runner}"
+WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES:-10}"
 WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX:-codex-watchdog}"
 
 export CUDA_VISIBLE_DEVICES=""
@@ -4523,6 +4837,8 @@ CODEX_BIN="$(resolve_codex_bin)"
 WATCHDOG_INTERVAL_MINUTES="$(sanitize_minutes WATCHDOG_INTERVAL_MINUTES "$WATCHDOG_INTERVAL_MINUTES" 5 30)"
 WATCHDOG_TIMEOUT_MINUTES="$(sanitize_minutes WATCHDOG_TIMEOUT_MINUTES "$WATCHDOG_TIMEOUT_MINUTES" 1 25)"
 WATCHDOG_COMPACT_EVERY_RUNS="$(sanitize_minutes WATCHDOG_COMPACT_EVERY_RUNS "$WATCHDOG_COMPACT_EVERY_RUNS" 0 6)"
+WATCHDOG_PHASE_OFFSET_MINUTES="$(sanitize_minutes WATCHDOG_PHASE_OFFSET_MINUTES "$WATCHDOG_PHASE_OFFSET_MINUTES" 0 10)"
+case "$WATCHDOG_ROLE" in runner|supervisor) ;; *) WATCHDOG_ROLE="runner" ;; esac
 if [ "$CODEX_SANDBOX_MODE" = "workspace-write" ] && ! workspace_write_allowed; then
   echo "warning: workspace-write requested but agent/workspace_write_policy.json is missing or invalid; using read-only" >&2
   CODEX_SANDBOX_MODE="read-only"
@@ -4531,7 +4847,7 @@ if [ "$CODEX_SANDBOX_MODE" != "read-only" ] && [ "$CODEX_SANDBOX_MODE" != "works
   echo "warning: invalid CODEX_SANDBOX_MODE=$CODEX_SANDBOX_MODE; using read-only" >&2
   CODEX_SANDBOX_MODE="read-only"
 fi
-export CODEX_BIN CODEX_HOME CODEX_SANDBOX_MODE WATCHDOG_INTERVAL_MINUTES WATCHDOG_TIMEOUT_MINUTES WATCHDOG_COMPACT_EVERY_RUNS WATCHDOG_SERVICE_PREFIX
+export CODEX_BIN CODEX_HOME CODEX_SANDBOX_MODE WATCHDOG_INTERVAL_MINUTES WATCHDOG_TIMEOUT_MINUTES WATCHDOG_COMPACT_EVERY_RUNS WATCHDOG_ROLE WATCHDOG_PHASE_OFFSET_MINUTES WATCHDOG_SERVICE_PREFIX
 
 print_header() {
   echo "Codex Watchdog Guard"
@@ -4540,6 +4856,8 @@ print_header() {
   echo "CODEX_HOME=$CODEX_HOME"
   echo "CODEX_SANDBOX_MODE=$CODEX_SANDBOX_MODE"
   echo "WATCHDOG_COMPACT_EVERY_RUNS=$WATCHDOG_COMPACT_EVERY_RUNS"
+  echo "WATCHDOG_ROLE=$WATCHDOG_ROLE"
+  echo "WATCHDOG_PHASE_OFFSET_MINUTES=$WATCHDOG_PHASE_OFFSET_MINUTES"
   echo
 }
 
@@ -4872,6 +5190,9 @@ ENV_CODEX_SANDBOX_MODE="\${CODEX_SANDBOX_MODE-}"
 ENV_WATCHDOG_INTERVAL_MINUTES="\${WATCHDOG_INTERVAL_MINUTES-}"
 ENV_WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES-}"
 ENV_WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS-}"
+ENV_WATCHDOG_ROLE="\${WATCHDOG_ROLE-}"
+ENV_WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES-}"
+ENV_WATCHDOG_INITIAL_DELAY_MINUTES="\${WATCHDOG_INITIAL_DELAY_MINUTES-}"
 ENV_WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX-}"
 
 if [ -f "$PROJECT_ROOT/agent/watchdog.env" ]; then
@@ -4886,12 +5207,17 @@ fi
 [ -n "$ENV_WATCHDOG_INTERVAL_MINUTES" ] && WATCHDOG_INTERVAL_MINUTES="$ENV_WATCHDOG_INTERVAL_MINUTES"
 [ -n "$ENV_WATCHDOG_TIMEOUT_MINUTES" ] && WATCHDOG_TIMEOUT_MINUTES="$ENV_WATCHDOG_TIMEOUT_MINUTES"
 [ -n "$ENV_WATCHDOG_COMPACT_EVERY_RUNS" ] && WATCHDOG_COMPACT_EVERY_RUNS="$ENV_WATCHDOG_COMPACT_EVERY_RUNS"
+[ -n "$ENV_WATCHDOG_ROLE" ] && WATCHDOG_ROLE="$ENV_WATCHDOG_ROLE"
+[ -n "$ENV_WATCHDOG_PHASE_OFFSET_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_PHASE_OFFSET_MINUTES"
+[ -z "\${WATCHDOG_PHASE_OFFSET_MINUTES:-}" ] && [ -n "$ENV_WATCHDOG_INITIAL_DELAY_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_INITIAL_DELAY_MINUTES"
 [ -n "$ENV_WATCHDOG_SERVICE_PREFIX" ] && WATCHDOG_SERVICE_PREFIX="$ENV_WATCHDOG_SERVICE_PREFIX"
 
 WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX:-codex-watchdog}"
 WATCHDOG_INTERVAL_MINUTES="\${WATCHDOG_INTERVAL_MINUTES:-30}"
 WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES:-25}"
 WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS:-6}"
+WATCHDOG_ROLE="\${WATCHDOG_ROLE:-runner}"
+WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES:-10}"
 CODEX_BIN="\${CODEX_BIN:-codex}"
 CODEX_HOME="\${CODEX_HOME:-$HOME/.codex-watcher}"
 CODEX_SANDBOX_MODE="\${CODEX_SANDBOX_MODE:-read-only}"
@@ -4992,6 +5318,8 @@ write_units() {
   WATCHDOG_INTERVAL_MINUTES="$(sanitize_minutes WATCHDOG_INTERVAL_MINUTES "$WATCHDOG_INTERVAL_MINUTES" 5 30)"
   WATCHDOG_TIMEOUT_MINUTES="$(sanitize_minutes WATCHDOG_TIMEOUT_MINUTES "$WATCHDOG_TIMEOUT_MINUTES" 1 25)"
   WATCHDOG_COMPACT_EVERY_RUNS="$(sanitize_minutes WATCHDOG_COMPACT_EVERY_RUNS "$WATCHDOG_COMPACT_EVERY_RUNS" 0 6)"
+  WATCHDOG_PHASE_OFFSET_MINUTES="$(sanitize_minutes WATCHDOG_PHASE_OFFSET_MINUTES "$WATCHDOG_PHASE_OFFSET_MINUTES" 0 10)"
+  case "$WATCHDOG_ROLE" in runner|supervisor) ;; *) WATCHDOG_ROLE="runner" ;; esac
   if [ "$CODEX_SANDBOX_MODE" = "workspace-write" ] && ! workspace_write_allowed; then
     echo "warning: workspace-write requested but agent/workspace_write_policy.json is missing or invalid; using read-only" >&2
     CODEX_SANDBOX_MODE="read-only"
@@ -5016,6 +5344,8 @@ Environment=CODEX_HOME=$(systemd_value "$CODEX_HOME")
 Environment=CODEX_SANDBOX_MODE=$(systemd_value "$CODEX_SANDBOX_MODE")
 Environment=WATCHDOG_TIMEOUT_MINUTES=$WATCHDOG_TIMEOUT_MINUTES
 Environment=WATCHDOG_COMPACT_EVERY_RUNS=$WATCHDOG_COMPACT_EVERY_RUNS
+Environment=WATCHDOG_ROLE=$(systemd_value "$WATCHDOG_ROLE")
+Environment=WATCHDOG_PHASE_OFFSET_MINUTES=$WATCHDOG_PHASE_OFFSET_MINUTES
 Environment=CUDA_VISIBLE_DEVICES=
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -5028,7 +5358,7 @@ SERVICE_EOF
 Description=Run Codex project watcher every $WATCHDOG_INTERVAL_MINUTES minutes for $(basename "$PROJECT_ROOT")
 
 [Timer]
-OnBootSec=10min
+OnActiveSec=\${WATCHDOG_PHASE_OFFSET_MINUTES}min
 OnUnitActiveSec=\${WATCHDOG_INTERVAL_MINUTES}min
 AccuracySec=1min
 Unit=$SERVICE
@@ -5449,6 +5779,7 @@ if errors:
 
   renderReport: () => `#!/usr/bin/env python3
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -5499,6 +5830,141 @@ progress_state = {
     "next_safe_action": data.get("next_safe_action", {})
 }
 Path("agent/PROGRESS_STATE.json").write_text(json.dumps(progress_state, indent=2) + "\\n")
+
+def blocker_type(blocked_items, requires_review, human_reason):
+    text = " ".join(str(x) for x in (blocked_items or [])) + " " + str(human_reason or "")
+    lowered = text.lower()
+    if not lowered.strip():
+        return "none"
+    if any(k in lowered for k in ("cuda", "nvml", "conda", "systemd", "gpu", "environment", "env")):
+        return "env"
+    if "queue" in lowered or "runner" in lowered:
+        return "queue"
+    if any(k in lowered for k in ("approval", "permission", "allowlist", "sandbox", "policy")):
+        return "permission"
+    if any(k in lowered for k in ("reviewer", "bluecode", "claude", "external")):
+        return "reviewer"
+    if any(k in lowered for k in ("model", "loss", "gate", "architecture", "training")):
+        return "model"
+    if "data" in lowered or "dataset" in lowered:
+        return "data"
+    if "stale" in lowered or "snowball" in lowered:
+        return "stale_state"
+    if requires_review:
+        return "permission"
+    return "stale_state"
+
+def write_lines(path, lines):
+    Path(path).write_text("\\n".join(lines).rstrip() + "\\n")
+
+updated = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+next_action = data.get("next_safe_action") or {}
+blocked_items = data.get("blocked_items") or []
+completed_items = data.get("completed_items") or []
+running_items = data.get("running_items") or []
+evidence = data.get("evidence") or []
+human_reason = data.get("human_review_reason") or ""
+requires_review = bool(data.get("requires_human_review"))
+blocker = blocker_type(blocked_items, requires_review, human_reason)
+
+Path("agent").mkdir(parents=True, exist_ok=True)
+write_lines("agent/CURRENT_STATE.md", [
+    "# Current State",
+    "",
+    f"Updated: {updated}",
+    f"Role: {os.environ.get('WATCHDOG_ROLE', 'runner')}",
+    f"Status: {data.get('overall_status', 'uncertain')}",
+    f"Report type: {data.get('report_type', 'heartbeat')}",
+    f"Primary skill: {data.get('primary_skill', '')}",
+    "",
+    "## Current Facts",
+    "",
+    data.get("work_cycle_summary", "").strip() or "- No summary provided.",
+    "",
+    "## Completed Items",
+    "",
+    *(f"- {item}" for item in completed_items),
+    *(["- None."] if not completed_items else []),
+    "",
+    "## Running Items",
+    "",
+    *(f"- {item}" for item in running_items),
+    *(["- None."] if not running_items else []),
+    "",
+    "## Latest Evidence",
+    "",
+    *(f"- {item}" for item in evidence),
+    *(["- None."] if not evidence else []),
+])
+
+Path("agent/RUN_STATE.json").write_text(json.dumps({
+    "schema_version": 1,
+    "updated_utc": updated,
+    "role": os.environ.get("WATCHDOG_ROLE", "runner"),
+    "status": data.get("overall_status", "uncertain"),
+    "primary_skill": data.get("primary_skill"),
+    "report_type": data.get("report_type"),
+    "progress_changed": bool(data.get("progress_changed")),
+    "active_task_id": route.get("task_id"),
+    "blocker_type": blocker,
+    "requires_human_review": requires_review,
+    "next_action": next_action,
+    "evidence": evidence,
+}, indent=2) + "\\n")
+
+write_lines("agent/NEXT_ACTION.md", [
+    "# Next Action",
+    "",
+    f"Updated: {updated}",
+    "",
+    "## One Next Safe Action",
+    "",
+    f"- Kind: {next_action.get('kind', 'none')}",
+    f"- Description: {next_action.get('description', '') or 'None.'}",
+    f"- Automatic: {next_action.get('can_execute_automatically', False)}",
+    f"- Reason: {next_action.get('reason', '') or 'No reason provided.'}",
+    "",
+    "## Stop Condition",
+    "",
+    f"- {data.get('skill_stop_condition', 'Stop after one bounded action.')}",
+])
+
+write_lines("agent/BLOCKERS.md", [
+    "# Blockers",
+    "",
+    f"Updated: {updated}",
+    f"Blocker type: {blocker}",
+    "",
+    "## Active Blockers",
+    "",
+    *(f"- {item}" for item in blocked_items),
+    *(["- none: no active blocker reported."] if not blocked_items else []),
+    "",
+    "## Human Review",
+    "",
+    f"- Required: {requires_review}",
+    f"- Reason: {human_reason or 'None.'}",
+])
+
+proposal = data.get("proposal_markdown", "").strip()
+review_state = "pending_send" if proposal else "none"
+if requires_review and not proposal:
+    review_state = "review_required_no_bundle"
+write_lines("agent/REVIEW_PENDING.md", [
+    "# Review Pending",
+    "",
+    f"Updated: {updated}",
+    "",
+    "## Reviewer Bundle State",
+    "",
+    f"- state: {review_state}",
+    f"- requires_human_review: {requires_review}",
+    f"- human_review_reason: {human_reason or 'None.'}",
+    "",
+    "## Notes",
+    "",
+    "- If external reviewer sending is blocked by policy, write the exact bundle path and policy reason here instead of repeating it in every report.",
+])
 
 ledger_update = data.get("ledger_update_markdown", "").strip()
 if ledger_update:

@@ -278,14 +278,32 @@ class BotHelperTests(unittest.TestCase):
                     "active_count": 1,
                     "latest_terminal": {"task_id": "task_123", "status": "done"},
                 },
+                "supervisor": {
+                    "blocked_count": 1,
+                    "review_required_count": 1,
+                    "signals": [
+                        {
+                            "workspace": "main_codex",
+                            "status": "blocked",
+                            "blocker_type": "env",
+                            "requires_human_review": True,
+                            "next_action": {
+                                "description": "Inspect /home/chenma/private with Authorization: " + "Bearer secret-token",
+                            },
+                        }
+                    ],
+                },
             },
             command_prefix="server_agent",
         )
 
         self.assertIn("Agent Host 健康摘要", response)
         self.assertIn("main_codex, grokking", response)
+        self.assertIn("Supervisor signals", response)
+        self.assertIn("blocker=env", response)
         self.assertIn("/server_agent_task_page", response)
         self.assertNotIn("/home/chenma", response)
+        self.assertNotIn("secret-token", response)
 
     def test_format_task_page_response(self):
         response = bot.format_task_page_response(

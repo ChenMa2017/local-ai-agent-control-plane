@@ -141,6 +141,38 @@ For security-sensitive fallback settings, the extension reads only user/global V
 
 Saving the schedule from the control panel writes `codexWatchdog.intervalMinutes` and `codexWatchdog.compactEveryRuns` into `<selected project>/.vscode/settings.json`.
 
+## Runner And Supervisor Roles
+
+The watcher can run in two cooperation roles:
+
+```json
+{
+  "codexWatchdog.role": "runner",
+  "codexWatchdog.phaseOffsetMinutes": 10
+}
+```
+
+`runner` is the default. It executes one bounded project-local work cycle and updates canonical handoff files.
+
+`supervisor` is for lower-frequency audit and blocker triage. It reads runner handoff files, classifies stale/blocking states, prepares reviewer-pending work, and reduces repeated context. A supervisor must not become another project runner: it should not launch training, change model code, delete files, interrupt active runner work, or bypass external-service approval.
+
+Use `codexWatchdog.phaseOffsetMinutes` to stagger systemd timer starts across multiple runner/supervisor watchdogs. The generated timer uses this value for its first active delay, while `codexWatchdog.intervalMinutes` controls the repeat cadence.
+
+Bootstrap/refresh now also creates the runner-supervisor cooperation files:
+
+```text
+agent/WATCHDOG_PROTOCOL.md
+agent/CURRENT_STATE.md
+agent/RUN_STATE.json
+agent/NEXT_ACTION.md
+agent/BLOCKERS.md
+agent/REVIEW_PENDING.md
+agent/ANTI_SNOWBALL.md
+agent/EXPERIMENT_LEDGER.md
+```
+
+These files are the preferred coordination surface for supervisor watchdogs. They are intentionally compact so a supervisor can repair blockers and stale state without rereading long reports or raw logs.
+
 Reports appear under `agent/reports/`, with `agent/reports/latest.md` pointing at the newest report. Each later wakeup reads the daily handoff, compact runtime state, bounded previews of proposed state / morning brief / latest report, and recent log metadata so the watcher has continuity without letting prompt context snowball.
 
 Bootstrap also creates `README.codex-watchdog.md` in the selected project root if it is missing. This file explains the watchdog protocol, initial setup checklist, wakeup flow, safety boundary, daily-mode handoff, and project-local startup commands. It intentionally does not overwrite a project-owned `README.md`.

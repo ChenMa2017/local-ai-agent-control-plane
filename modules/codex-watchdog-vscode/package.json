@@ -136,6 +136,21 @@
           "minimum": 0,
           "description": "Run a report-curation/compaction cycle every N watchdog runs. Set to 0 to disable scheduled compaction."
         },
+        "codexWatchdog.role": {
+          "type": "string",
+          "default": "runner",
+          "enum": [
+            "runner",
+            "supervisor"
+          ],
+          "description": "Watchdog role. runner executes the project-local work loop; supervisor performs low-frequency audit, anti-snowball, blocker triage, and reviewer-pending coordination."
+        },
+        "codexWatchdog.phaseOffsetMinutes": {
+          "type": "number",
+          "default": 10,
+          "minimum": 0,
+          "description": "Initial systemd timer offset after boot/start. Use this to stagger runner and supervisor wakeups."
+        },
         "codexWatchdog.codexBin": {
           "type": "string",
           "default": "codex",
