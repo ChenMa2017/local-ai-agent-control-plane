@@ -154,7 +154,25 @@ The watcher can run in two cooperation roles:
 
 `runner` is the default. It executes one bounded project-local work cycle and updates canonical handoff files.
 
-`supervisor` is for lower-frequency audit and blocker triage. It reads runner handoff files, classifies stale/blocking states, prepares reviewer-pending work, and reduces repeated context. A supervisor must not become another project runner: it should not launch training, change model code, delete files, interrupt active runner work, or bypass external-service approval.
+`supervisor` is for audit and blocker triage. It reads runner handoff files, classifies stale/blocking states, prepares reviewer-pending work, and reduces repeated context. A supervisor must not become another project runner: it should not launch training, change model code, delete files, interrupt active runner work, or bypass external-service approval.
+
+The supervisor now has deterministic runtime modes instead of a single long-standby behavior:
+
+- `light`: runs after a newly completed runner report or a changed reviewer/blocker marker. It is only for small handoff repairs such as `pending_send`, stale marker cleanup, permission/allowlist notes, and blocker bookkeeping.
+- `audit`: runs after `codexWatchdog.supervisorAuditEveryRunnerRuns` completed runner reports, default `4`, or when runner started/completed drift indicates repeated failed runner wakeups. It performs the heavier read-only health pass for leakage, anti-snowballing, stale state, environment drift, queue hygiene, and repeated blockers.
+- `standby`: writes a short heartbeat when there is no new runner cycle and the audit cadence is not due.
+
+The generated runner increments `agent/status/runner_run_count` when it wakes and writes `agent/status/runner_completed_count` only after rendering its report. The generated supervisor keys `light` and `audit` primarily from completed runner cycles. It writes a `selected` decision to `agent/status/supervisor_state.json` and `agent/status/SUPERVISOR_MODE.json` before Codex reasoning, then marks that decision `completed` or `failed` after `render_report.py` finishes. Failed supervisor runs do not advance `last_seen_runner_completed_count`, `last_light_runner_completed_count`, `last_audit_runner_completed_count`, or the actioned marker fingerprint.
+
+Mode transitions are appended to `agent/status/SUPERVISOR_MODE.events.jsonl`. `agent/RUN_STATE.json` and the status snapshot include `runner_started_count`, `runner_completed_count`, and `runner_failure_drift`. Reviewer/blocker markers are fingerprinted, so the same unresolved marker does not retrigger `light` forever; it retriggers only when the marker changes, when a new runner completion lands, or when the heavy audit cadence is due. `agent/bin/route_skill.py` then routes `light` to the handoff writer skill, `audit` to the cleanup auditor skill, and `standby` to a short heartbeat. Configure the behavior with:
+
+```json
+{
+  "codexWatchdog.role": "supervisor",
+  "codexWatchdog.supervisorLightFollowup": true,
+  "codexWatchdog.supervisorAuditEveryRunnerRuns": 4
+}
+```
 
 Use `codexWatchdog.phaseOffsetMinutes` to stagger systemd timer starts across multiple runner/supervisor watchdogs. The generated timer uses this value for its first active delay, while `codexWatchdog.intervalMinutes` controls the repeat cadence.
 

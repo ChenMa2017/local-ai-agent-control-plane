@@ -885,6 +885,15 @@ def safe_blocker_type(value: Any) -> str:
     return blocker
 
 
+def safe_count_text(config: BridgeConfig, value: Any) -> str:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return "unknown"
+    if not re.fullmatch(r"[0-9]{1,12}", text):
+        return "unknown"
+    return compact_control_text(config, text, max_chars=16)
+
+
 def workspace_supervisor_signal(config: BridgeConfig, project: Project) -> dict[str, Any]:
     agent_dir = project.root / "agent"
     run_state_path = agent_dir / "RUN_STATE.json"
@@ -903,6 +912,10 @@ def workspace_supervisor_signal(config: BridgeConfig, project: Project) -> dict[
     return {
         "workspace": project.name,
         "role": role,
+        "supervisor_mode": compact_control_text(config, str(run_state.get("supervisor_mode") or "unknown"), max_chars=80),
+        "runner_started_count": safe_count_text(config, run_state.get("runner_started_count")),
+        "runner_completed_count": safe_count_text(config, run_state.get("runner_completed_count") or run_state.get("runner_run_count")),
+        "runner_failure_drift": safe_count_text(config, run_state.get("runner_failure_drift")),
         "status": compact_control_text(config, str(run_state.get("status") or "unknown"), max_chars=80),
         "blocker_type": safe_blocker_type(run_state.get("blocker_type")),
         "requires_human_review": bool(run_state.get("requires_human_review", False)),
@@ -939,6 +952,12 @@ def handle_health_summary(config: BridgeConfig, principal: AuthPrincipal) -> dic
     supervisor_signals = workspace_supervisor_signals(config)
     blocked = [item for item in supervisor_signals if item.get("blocker_type") not in {"none", "unknown"}]
     review_required = [item for item in supervisor_signals if item.get("requires_human_review")]
+    runner_drift = [
+        item
+        for item in supervisor_signals
+        if str(item.get("runner_failure_drift") or "0").isdigit()
+        and int(str(item.get("runner_failure_drift") or "0")) > 0
+    ]
     return {
         "ok": True,
         "agent_host": {
@@ -967,6 +986,7 @@ def handle_health_summary(config: BridgeConfig, principal: AuthPrincipal) -> dic
             "workspace_count": len(supervisor_signals),
             "blocked_count": len(blocked),
             "review_required_count": len(review_required),
+            "runner_drift_count": len(runner_drift),
             "signals": supervisor_signals,
         },
         "safety": {

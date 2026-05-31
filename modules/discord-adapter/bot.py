@@ -265,6 +265,7 @@ def format_health_summary(data: dict[str, Any], command_prefix: str = "agent") -
                 "Supervisor signals:",
                 f"- Blocked workspaces: {supervisor.get('blocked_count', 0)}",
                 f"- Review required: {supervisor.get('review_required_count', 0)}",
+                f"- Runner drift warnings: {supervisor.get('runner_drift_count', 0)}",
             ]
         )
         for signal in signals[:3]:
@@ -277,6 +278,8 @@ def format_health_summary(data: dict[str, Any], command_prefix: str = "agent") -
             lines.append(
                 f"- {signal.get('workspace', 'unknown')}: "
                 f"status={signal.get('status', 'unknown')}, "
+                f"mode={signal.get('supervisor_mode', 'unknown')}, "
+                f"drift={signal.get('runner_failure_drift', 'unknown')}, "
                 f"blocker={signal.get('blocker_type', 'unknown')}, "
                 f"next={next_text or 'none'}"
             )

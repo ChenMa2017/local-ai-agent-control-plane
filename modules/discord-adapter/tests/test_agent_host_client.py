@@ -281,9 +281,12 @@ class BotHelperTests(unittest.TestCase):
                 "supervisor": {
                     "blocked_count": 1,
                     "review_required_count": 1,
+                    "runner_drift_count": 1,
                     "signals": [
                         {
                             "workspace": "main_codex",
+                            "supervisor_mode": "audit",
+                            "runner_failure_drift": "3",
                             "status": "blocked",
                             "blocker_type": "env",
                             "requires_human_review": True,
@@ -300,6 +303,8 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("Agent Host 健康摘要", response)
         self.assertIn("main_codex, grokking", response)
         self.assertIn("Supervisor signals", response)
+        self.assertIn("mode=audit", response)
+        self.assertIn("drift=3", response)
         self.assertIn("blocker=env", response)
         self.assertIn("/server_agent_task_page", response)
         self.assertNotIn("/home/chenma", response)

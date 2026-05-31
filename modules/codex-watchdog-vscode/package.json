@@ -2,7 +2,7 @@
   "name": "codex-watchdog",
   "displayName": "Codex Watchdog",
   "description": "Controls a server-side scheduled Codex watcher from VSCode Remote.",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "publisher": "chenma",
   "engines": {
     "vscode": "^1.92.0"
@@ -150,6 +150,17 @@
           "default": 10,
           "minimum": 0,
           "description": "Initial systemd timer offset after boot/start. Use this to stagger runner and supervisor wakeups."
+        },
+        "codexWatchdog.supervisorLightFollowup": {
+          "type": "boolean",
+          "default": true,
+          "description": "When role=supervisor, run a lightweight follow-up pass after newly completed runner reports or changed reviewer/blocker markers instead of waiting for the heavy audit cadence."
+        },
+        "codexWatchdog.supervisorAuditEveryRunnerRuns": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "description": "When role=supervisor, run a heavy audit after this many completed runner reports since the previous successful supervisor audit."
         },
         "codexWatchdog.codexBin": {
           "type": "string",

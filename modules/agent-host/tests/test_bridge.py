@@ -395,6 +395,10 @@ class BridgeTests(unittest.TestCase):
                 json.dumps(
                     {
                         "role": "runner",
+                        "supervisor_mode": "light",
+                        "runner_started_count": 5,
+                        "runner_completed_count": 3,
+                        "runner_failure_drift": 2,
                         "status": "blocked",
                         "blocker_type": "env",
                         "requires_human_review": True,
@@ -432,9 +436,14 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(response["supervisor"]["workspace_count"], 1)
             self.assertEqual(response["supervisor"]["blocked_count"], 1)
             self.assertEqual(response["supervisor"]["review_required_count"], 1)
+            self.assertEqual(response["supervisor"]["runner_drift_count"], 1)
             signal = response["supervisor"]["signals"][0]
             self.assertEqual(signal["workspace"], "demo")
             self.assertEqual(signal["role"], "runner")
+            self.assertEqual(signal["supervisor_mode"], "light")
+            self.assertEqual(signal["runner_started_count"], "5")
+            self.assertEqual(signal["runner_completed_count"], "3")
+            self.assertEqual(signal["runner_failure_drift"], "2")
             self.assertEqual(signal["status"], "blocked")
             self.assertEqual(signal["blocker_type"], "env")
             self.assertTrue(signal["requires_human_review"])

@@ -21,6 +21,8 @@ const DEFAULT_TIMEOUT_MINUTES = 25;
 const DEFAULT_COMPACT_EVERY_RUNS = 6;
 const DEFAULT_PHASE_OFFSET_MINUTES = 10;
 const DEFAULT_WATCHDOG_ROLE = "runner";
+const DEFAULT_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS = 4;
+const DEFAULT_SUPERVISOR_LIGHT_FOLLOWUP = true;
 const DEFAULT_SERVICE_PREFIX = "codex-watchdog";
 const LOGIN_READY_RE = /(?:logged\s+in|authenticated)/i;
 
@@ -1101,6 +1103,8 @@ async function watchdogCommandEnv(root) {
     WATCHDOG_COMPACT_EVERY_RUNS: String(settings.compactEveryRuns),
     WATCHDOG_ROLE: settings.role,
     WATCHDOG_PHASE_OFFSET_MINUTES: String(settings.phaseOffsetMinutes),
+    WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP: settings.supervisorLightFollowup ? "1" : "0",
+    WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS: String(settings.supervisorAuditEveryRunnerRuns),
     WATCHDOG_SERVICE_PREFIX: settings.servicePrefix,
     CUDA_VISIBLE_DEVICES: ""
   };
@@ -1122,6 +1126,8 @@ async function effectiveWatchdogSettings(root) {
     compactEveryRuns: positiveNumberSetting(root, "codexWatchdog.compactEveryRuns", extensionSetting("compactEveryRuns", DEFAULT_COMPACT_EVERY_RUNS), 0, DEFAULT_COMPACT_EVERY_RUNS),
     role: watchdogRoleSetting(root),
     phaseOffsetMinutes: positiveNumberSetting(root, "codexWatchdog.phaseOffsetMinutes", extensionSetting("phaseOffsetMinutes", DEFAULT_PHASE_OFFSET_MINUTES), 0, DEFAULT_PHASE_OFFSET_MINUTES),
+    supervisorLightFollowup: booleanSetting(root, "codexWatchdog.supervisorLightFollowup", extensionSetting("supervisorLightFollowup", DEFAULT_SUPERVISOR_LIGHT_FOLLOWUP), DEFAULT_SUPERVISOR_LIGHT_FOLLOWUP),
+    supervisorAuditEveryRunnerRuns: positiveNumberSetting(root, "codexWatchdog.supervisorAuditEveryRunnerRuns", extensionSetting("supervisorAuditEveryRunnerRuns", DEFAULT_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS), 1, DEFAULT_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS),
     servicePrefix: servicePrefixSetting(root)
   };
 }
@@ -1139,6 +1145,8 @@ async function renderWatchdogEnv(root) {
     `WATCHDOG_COMPACT_EVERY_RUNS=${shellQuote(String(settings.compactEveryRuns))}`,
     `WATCHDOG_ROLE=${shellQuote(settings.role)}`,
     `WATCHDOG_PHASE_OFFSET_MINUTES=${shellQuote(String(settings.phaseOffsetMinutes))}`,
+    `WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP=${shellQuote(settings.supervisorLightFollowup ? "1" : "0")}`,
+    `WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS=${shellQuote(String(settings.supervisorAuditEveryRunnerRuns))}`,
     `WATCHDOG_SERVICE_PREFIX=${shellQuote(settings.servicePrefix)}`,
     ""
   ].join("\n");
@@ -1172,6 +1180,8 @@ async function runOnceCommand() {
       WATCHDOG_COMPACT_EVERY_RUNS: String(settings.compactEveryRuns),
       WATCHDOG_ROLE: settings.role,
       WATCHDOG_PHASE_OFFSET_MINUTES: String(settings.phaseOffsetMinutes),
+      WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP: settings.supervisorLightFollowup ? "1" : "0",
+      WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS: String(settings.supervisorAuditEveryRunnerRuns),
       WATCHDOG_SERVICE_PREFIX: settings.servicePrefix,
       CUDA_VISIBLE_DEVICES: ""
     }
@@ -1610,6 +1620,8 @@ async function writeSystemdUnits(root, units) {
   const compactEveryRuns = settings.compactEveryRuns;
   const role = settings.role;
   const phaseOffsetMinutes = settings.phaseOffsetMinutes;
+  const supervisorLightFollowup = settings.supervisorLightFollowup ? "1" : "0";
+  const supervisorAuditEveryRunnerRuns = settings.supervisorAuditEveryRunnerRuns;
 
   const service = [
     "[Unit]",
@@ -1626,6 +1638,8 @@ async function writeSystemdUnits(root, units) {
     `Environment=WATCHDOG_COMPACT_EVERY_RUNS=${compactEveryRuns}`,
     `Environment=WATCHDOG_ROLE=${systemdEnvValue(role)}`,
     `Environment=WATCHDOG_PHASE_OFFSET_MINUTES=${phaseOffsetMinutes}`,
+    `Environment=WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP=${supervisorLightFollowup}`,
+    `Environment=WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS=${supervisorAuditEveryRunnerRuns}`,
     "Environment=CUDA_VISIBLE_DEVICES=",
     "NoNewPrivileges=yes",
     "PrivateTmp=yes",
@@ -2197,6 +2211,24 @@ function positiveNumberSetting(root, key, fallback, min, hardFallback) {
   const value = Number(raw);
   if (Number.isInteger(value) && value >= min) {
     return value;
+  }
+  output.appendLine(`[warning] Ignoring invalid ${key}=${JSON.stringify(raw)}; using ${hardFallback}.`);
+  return hardFallback;
+}
+
+function booleanSetting(root, key, fallback, hardFallback) {
+  const raw = projectSetting(root, key, fallback);
+  if (raw === true || raw === false) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const value = raw.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(value)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(value)) {
+      return false;
+    }
   }
   output.appendLine(`[warning] Ignoring invalid ${key}=${JSON.stringify(raw)}; using ${hardFallback}.`);
   return hardFallback;
@@ -3131,6 +3163,14 @@ Each wakeup should leave these files coherent:
 - \`agent/ANTI_SNOWBALL.md\`: stopped routes, stale facts to avoid repeating, and compaction notes.
 - \`agent/EXPERIMENT_LEDGER.md\`: durable experimental hypotheses, model/loss/data protocol, provenance, results, and conclusions.
 
+## Supervisor Modes
+
+- \`light\`: triggered after a new runner wakeup or reviewer/blocker marker. Repair only safe marker/bookkeeping issues such as pending_send, stale handoff files, permission notes, or blocker classification.
+- \`audit\`: triggered every configured runner-cycle cadence. Run one heavier read-only audit for leakage, anti-snowballing, stale state, environment drift, queue hygiene, and repeated blocker repair.
+- \`standby\`: no new runner cycle and no audit due. Write a short heartbeat and stop.
+
+The runtime writes the chosen mode to \`agent/status/SUPERVISOR_MODE.json\` and \`agent/RUN_STATE.json\`. Do not override it inside the prompt; report a runtime blocker if it appears wrong.
+
 ## Supervisor Rules
 
 - Prefer canonical handoff files over old reports.
@@ -3161,6 +3201,10 @@ Updated: never
     schema_version: 1,
     updated_utc: null,
     role: "runner",
+    supervisor_mode: "runner",
+    runner_run_count: null,
+    runner_started_count: null,
+    supervisor_audit_every_runner_runs: null,
     status: "unknown",
     primary_skill: null,
     report_type: null,
@@ -3836,7 +3880,12 @@ Mode boundary:
 Runner / supervisor cooperation:
 
 - Read WATCHDOG_ROLE from the snapshot. If it is \`runner\`, perform one bounded project-local cycle and update the canonical handoff files through your structured output.
-- If it is \`supervisor\`, audit runner states in the project plan/TODO, classify blockers, prepare reviewer-pending work, and compact repeated history. Do not launch training, change model code, delete files, or bypass external-service approval.
+- If it is \`supervisor\`, also read WATCHDOG_SUPERVISOR_MODE from the snapshot:
+  - \`light\`: perform a lightweight follow-up after a runner cycle. Repair only safe reviewer-pending markers, stale handoff markers, permission/allowlist notes, or blocker bookkeeping. Do not deep-audit the project.
+  - \`audit\`: perform a heavier read-only health audit for leakage, anti-snowball, stale state, environment drift, queue hygiene, and repeated blocker repair. Do not become a runner.
+  - \`standby\`: write a short heartbeat and stop.
+- Supervisor mode is chosen deterministically by the runtime from runner cycle counts and marker files; do not silently change it. If the selected mode looks wrong, report it as a runtime blocker.
+- If it is \`supervisor\`, do not launch training, change model code, delete files, interrupt active runner work, or bypass external-service approval.
 - Prefer agent/CURRENT_STATE.md, agent/RUN_STATE.json, agent/NEXT_ACTION.md, agent/BLOCKERS.md, and agent/REVIEW_PENDING.md over old reports when deciding what is currently true.
 - Blockers must be classified as env, queue, permission, reviewer, model, data, stale_state, or none.
 
@@ -3929,6 +3978,10 @@ The final output must follow the JSON schema.
       overall_status: {
         type: "string",
         enum: ["healthy", "running", "completed", "blocked", "uncertain", "error"]
+      },
+      supervisor_mode: {
+        type: "string",
+        enum: ["runner", "light", "audit", "standby"]
       },
       primary_skill: {
         type: "string",
@@ -4169,6 +4222,12 @@ write_queue_status
   echo "- Compaction due this cycle: \${WATCHDOG_COMPACTION_DUE:-0}"
   echo "- Watchdog role: \${WATCHDOG_ROLE:-runner}"
   echo "- Phase offset minutes: \${WATCHDOG_PHASE_OFFSET_MINUTES:-10}"
+  echo "- Supervisor mode: \${WATCHDOG_SUPERVISOR_MODE:-runner}"
+  echo "- Runner completed count: \${WATCHDOG_RUNNER_COMPLETED_COUNT:-\${WATCHDOG_RUNNER_RUN_COUNT:-unknown}}"
+  echo "- Runner started count: \${WATCHDOG_RUNNER_STARTED_COUNT:-unknown}"
+  echo "- Runner failure drift: \${WATCHDOG_RUNNER_FAILURE_DRIFT:-unknown}"
+  echo "- Supervisor audit every runner runs: \${WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS:-4}"
+  echo "- Supervisor light follow-up: \${WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP:-1}"
   echo "- Raw log tails included: \${WATCHDOG_INCLUDE_LOG_TAILS:-0}"
   if [ -f agent/control/PAUSE ]; then
     echo "- Pause: active"
@@ -4290,6 +4349,11 @@ write_queue_status
   preview_file agent/status/QUEUE_STATUS.md "No queue status yet."
   echo
 
+  echo "## Supervisor mode"
+  echo
+  preview_file agent/status/SUPERVISOR_MODE.json "No supervisor mode state yet."
+  echo
+
   echo "## Research ledger"
   echo
   preview_file research/RESEARCH_LEDGER.md "No research ledger yet."
@@ -4388,6 +4452,8 @@ ENV_WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES-}"
 ENV_WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS-}"
 ENV_WATCHDOG_ROLE="\${WATCHDOG_ROLE-}"
 ENV_WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES-}"
+ENV_WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="\${WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP-}"
+ENV_WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="\${WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS-}"
 ENV_WATCHDOG_INITIAL_DELAY_MINUTES="\${WATCHDOG_INITIAL_DELAY_MINUTES-}"
 ENV_WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX-}"
 
@@ -4405,6 +4471,8 @@ fi
 [ -n "$ENV_WATCHDOG_COMPACT_EVERY_RUNS" ] && WATCHDOG_COMPACT_EVERY_RUNS="$ENV_WATCHDOG_COMPACT_EVERY_RUNS"
 [ -n "$ENV_WATCHDOG_ROLE" ] && WATCHDOG_ROLE="$ENV_WATCHDOG_ROLE"
 [ -n "$ENV_WATCHDOG_PHASE_OFFSET_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_PHASE_OFFSET_MINUTES"
+[ -n "$ENV_WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP" ] && WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="$ENV_WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP"
+[ -n "$ENV_WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS" ] && WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="$ENV_WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS"
 [ -z "\${WATCHDOG_PHASE_OFFSET_MINUTES:-}" ] && [ -n "$ENV_WATCHDOG_INITIAL_DELAY_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_INITIAL_DELAY_MINUTES"
 [ -n "$ENV_WATCHDOG_SERVICE_PREFIX" ] && WATCHDOG_SERVICE_PREFIX="$ENV_WATCHDOG_SERVICE_PREFIX"
 
@@ -4416,6 +4484,8 @@ WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES:-25}"
 WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS:-6}"
 WATCHDOG_ROLE="\${WATCHDOG_ROLE:-runner}"
 WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES:-10}"
+WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="\${WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP:-1}"
+WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="\${WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS:-4}"
 WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX:-codex-watchdog}"
 
 export PATH="\${WATCHDOG_LOCAL_BIN:-$HOME/.local/bin}:$PATH"
@@ -4475,8 +4545,10 @@ WATCHDOG_INTERVAL_MINUTES="$(sanitize_minutes WATCHDOG_INTERVAL_MINUTES "$WATCHD
 WATCHDOG_TIMEOUT_MINUTES="$(sanitize_minutes WATCHDOG_TIMEOUT_MINUTES "$WATCHDOG_TIMEOUT_MINUTES" 1 25)"
 WATCHDOG_COMPACT_EVERY_RUNS="$(sanitize_minutes WATCHDOG_COMPACT_EVERY_RUNS "$WATCHDOG_COMPACT_EVERY_RUNS" 0 6)"
 WATCHDOG_PHASE_OFFSET_MINUTES="$(sanitize_minutes WATCHDOG_PHASE_OFFSET_MINUTES "$WATCHDOG_PHASE_OFFSET_MINUTES" 0 10)"
+WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="$(sanitize_minutes WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS "$WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS" 1 24)"
+case "$WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP" in 1|true|yes|on) WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="1" ;; *) WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="0" ;; esac
 case "$WATCHDOG_ROLE" in runner|supervisor) ;; *) WATCHDOG_ROLE="runner" ;; esac
-export CODEX_BIN CODEX_HOME CODEX_SANDBOX_MODE WATCHDOG_INTERVAL_MINUTES WATCHDOG_TIMEOUT_MINUTES WATCHDOG_COMPACT_EVERY_RUNS WATCHDOG_ROLE WATCHDOG_PHASE_OFFSET_MINUTES WATCHDOG_SERVICE_PREFIX
+export CODEX_BIN CODEX_HOME CODEX_SANDBOX_MODE WATCHDOG_INTERVAL_MINUTES WATCHDOG_TIMEOUT_MINUTES WATCHDOG_COMPACT_EVERY_RUNS WATCHDOG_ROLE WATCHDOG_PHASE_OFFSET_MINUTES WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS WATCHDOG_SERVICE_PREFIX
 
 mkdir -p agent/reports agent/logs agent/status agent/pending/review_required "$CODEX_HOME"
 
@@ -4500,7 +4572,191 @@ WATCHDOG_COMPACTION_DUE="0"
 if [ "$WATCHDOG_COMPACT_EVERY_RUNS" -gt 0 ] && [ "$((WATCHDOG_RUN_COUNT % WATCHDOG_COMPACT_EVERY_RUNS))" -eq 0 ]; then
   WATCHDOG_COMPACTION_DUE="1"
 fi
-export WATCHDOG_RUN_COUNT WATCHDOG_COMPACTION_DUE
+
+RUNNER_COUNT_FILE="agent/status/runner_run_count"
+RUNNER_COMPLETED_COUNT_FILE="agent/status/runner_completed_count"
+if [ "$WATCHDOG_ROLE" = "runner" ]; then
+  if [ -f "$RUNNER_COUNT_FILE" ] && grep -Eq '^[0-9]+$' "$RUNNER_COUNT_FILE"; then
+    WATCHDOG_RUNNER_RUN_COUNT="$(cat "$RUNNER_COUNT_FILE")"
+  else
+    WATCHDOG_RUNNER_RUN_COUNT="0"
+  fi
+  WATCHDOG_RUNNER_RUN_COUNT="$((WATCHDOG_RUNNER_RUN_COUNT + 1))"
+  WATCHDOG_RUNNER_STARTED_COUNT="$WATCHDOG_RUNNER_RUN_COUNT"
+  WATCHDOG_RUNNER_COMPLETED_COUNT=""
+  WATCHDOG_RUNNER_FAILURE_DRIFT="0"
+  printf '%s\\n' "$WATCHDOG_RUNNER_RUN_COUNT" > "$RUNNER_COUNT_FILE"
+  WATCHDOG_SUPERVISOR_MODE="runner"
+  SUPERVISOR_MODE_TMP="agent/status/SUPERVISOR_MODE.json.tmp"
+  cat > "$SUPERVISOR_MODE_TMP" <<JSON
+{
+  "schema_version": 1,
+  "updated_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "role": "runner",
+  "mode": "runner",
+  "runner_run_count": $WATCHDOG_RUNNER_RUN_COUNT,
+  "reason": "runner wakeup increments the runner cycle counter"
+}
+JSON
+  mv "$SUPERVISOR_MODE_TMP" agent/status/SUPERVISOR_MODE.json
+else
+  WATCHDOG_RUNNER_RUN_COUNT="0"
+  WATCHDOG_RUNNER_COMPLETED_COUNT="0"
+  WATCHDOG_RUNNER_STARTED_COUNT="0"
+  if [ -f "$RUNNER_COUNT_FILE" ] && grep -Eq '^[0-9]+$' "$RUNNER_COUNT_FILE"; then
+    WATCHDOG_RUNNER_STARTED_COUNT="$(cat "$RUNNER_COUNT_FILE")"
+  fi
+  if [ -f "$RUNNER_COMPLETED_COUNT_FILE" ] && grep -Eq '^[0-9]+$' "$RUNNER_COMPLETED_COUNT_FILE"; then
+    WATCHDOG_RUNNER_COMPLETED_COUNT="$(cat "$RUNNER_COMPLETED_COUNT_FILE")"
+  fi
+  WATCHDOG_RUNNER_RUN_COUNT="$WATCHDOG_RUNNER_COMPLETED_COUNT"
+  if [ "$WATCHDOG_RUNNER_STARTED_COUNT" -ge "$WATCHDOG_RUNNER_COMPLETED_COUNT" ]; then
+    WATCHDOG_RUNNER_FAILURE_DRIFT="$((WATCHDOG_RUNNER_STARTED_COUNT - WATCHDOG_RUNNER_COMPLETED_COUNT))"
+  else
+    WATCHDOG_RUNNER_FAILURE_DRIFT="0"
+  fi
+  export WATCHDOG_RUNNER_RUN_COUNT WATCHDOG_RUNNER_COMPLETED_COUNT WATCHDOG_RUNNER_STARTED_COUNT WATCHDOG_RUNNER_FAILURE_DRIFT
+  WATCHDOG_SUPERVISOR_MODE="$(python3 - <<'PY'
+import json
+import os
+import hashlib
+from datetime import datetime, timezone
+from pathlib import Path
+
+def int_env(name, fallback):
+    try:
+        value = int(os.environ.get(name, str(fallback)))
+    except Exception:
+        return fallback
+    return value if value >= 0 else fallback
+
+def load_json(path):
+    try:
+        return json.loads(Path(path).read_text())
+    except Exception:
+        return {}
+
+def text(path):
+    try:
+        return Path(path).read_text(errors="ignore").lower()
+    except Exception:
+        return ""
+
+def atomic_write_json(path, payload):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\\n")
+    tmp.replace(target)
+
+def append_event(path, payload):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\\n")
+
+runner_completed_count = int_env("WATCHDOG_RUNNER_COMPLETED_COUNT", int_env("WATCHDOG_RUNNER_RUN_COUNT", 0))
+runner_started_count = int_env("WATCHDOG_RUNNER_STARTED_COUNT", runner_completed_count)
+runner_failure_drift = max(0, runner_started_count - runner_completed_count)
+audit_every = max(1, int_env("WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS", 4))
+light_enabled = os.environ.get("WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP", "1") in {"1", "true", "yes", "on"}
+state_path = Path("agent/status/supervisor_state.json")
+state = load_json(state_path)
+last_seen = int(state.get("last_seen_runner_completed_count") or state.get("last_seen_runner_run_count") or 0)
+last_light = int(state.get("last_light_runner_completed_count") or 0)
+last_audit = int(state.get("last_audit_runner_completed_count") or state.get("last_audit_runner_run_count") or 0)
+run_state = load_json("agent/RUN_STATE.json")
+review_text = text("agent/REVIEW_PENDING.md")
+blockers_text = text("agent/BLOCKERS.md")
+blocker = str(run_state.get("blocker_type") or "").lower()
+
+review_marker = any(token in review_text for token in ("pending_send", "review_required_no_bundle", "requires_human_review: true"))
+run_state_marker = blocker in {"permission", "reviewer", "stale_state"}
+blockers_marker = any(token in blockers_text for token in ("permission", "reviewer", "allowlist", "pending_send", "stale_state"))
+marker_pending = review_marker or run_state_marker or blockers_marker
+marker_basis = "\\n".join([blocker, review_text[:2000], blockers_text[:2000]])
+marker_fingerprint = hashlib.sha256(marker_basis.encode("utf-8", errors="ignore")).hexdigest()[:16] if marker_pending else ""
+last_actioned_marker_fingerprint = str(state.get("last_actioned_marker_fingerprint") or state.get("last_marker_fingerprint") or "")
+marker_changed = marker_pending and marker_fingerprint != last_actioned_marker_fingerprint
+new_runner_cycle = runner_completed_count > last_seen
+audit_due = runner_completed_count > 0 and (runner_completed_count - last_audit) >= audit_every
+drift_audit_due = runner_failure_drift >= 3
+
+if drift_audit_due:
+    mode = "audit"
+    reason = f"runtime audit due: runner started/completed drift is {runner_failure_drift}"
+elif audit_due:
+    mode = "audit"
+    reason = f"heavy audit due after {runner_completed_count - last_audit} completed runner cycle(s)"
+elif light_enabled and (new_runner_cycle or marker_changed):
+    mode = "light"
+    if new_runner_cycle:
+        reason = "light follow-up after a newly completed runner cycle"
+    else:
+        reason = "light follow-up for changed reviewer/blocker marker"
+else:
+    mode = "standby"
+    if marker_pending:
+        reason = "reviewer/blocker marker already seen; no new completed runner cycle and heavy audit cadence not due"
+    else:
+        reason = "no new completed runner cycle and heavy audit cadence not due"
+
+updated_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+decision_id = f"sup_{updated_utc.replace('-', '').replace(':', '').replace('T', '_').replace('Z', '')}_{runner_completed_count}_{mode}"
+payload = {
+    "schema_version": 2,
+    "updated_utc": updated_utc,
+    "role": "supervisor",
+    "mode": mode,
+    "runner_run_count": runner_completed_count,
+    "runner_completed_count": runner_completed_count,
+    "runner_started_count": runner_started_count,
+    "runner_failure_drift": runner_failure_drift,
+    "last_seen_runner_run_count": last_seen,
+    "last_seen_runner_completed_count": last_seen,
+    "last_light_runner_completed_count": last_light,
+    "last_audit_runner_run_count": last_audit,
+    "last_audit_runner_completed_count": last_audit,
+    "audit_every_runner_runs": audit_every,
+    "light_followup_enabled": light_enabled,
+    "marker_pending": marker_pending,
+    "marker_sources": {
+        "REVIEW_PENDING.md": review_marker,
+        "BLOCKERS.md": blockers_marker,
+        "RUN_STATE.blocker_type": blocker if run_state_marker else "",
+    },
+    "marker_fingerprint": marker_fingerprint,
+    "last_marker_fingerprint": last_actioned_marker_fingerprint,
+    "last_actioned_marker_fingerprint": last_actioned_marker_fingerprint,
+    "decision": {
+        "decision_id": decision_id,
+        "mode": mode,
+        "status": "selected",
+        "selected_at": updated_utc,
+        "target_runner_completed_count": runner_completed_count,
+        "reason": reason,
+    },
+    "reason": reason,
+}
+atomic_write_json(state_path, payload)
+atomic_write_json("agent/status/SUPERVISOR_MODE.json", payload)
+append_event("agent/status/SUPERVISOR_MODE.events.jsonl", {
+    "event": "selected",
+    "decision_id": decision_id,
+    "timestamp": updated_utc,
+    "mode": mode,
+    "reason": reason,
+    "runner_started_count": runner_started_count,
+    "runner_completed_count": runner_completed_count,
+    "runner_failure_drift": runner_failure_drift,
+    "marker_pending": marker_pending,
+    "marker_fingerprint": marker_fingerprint,
+})
+print(mode)
+PY
+)"
+fi
+export WATCHDOG_RUN_COUNT WATCHDOG_COMPACTION_DUE WATCHDOG_RUNNER_RUN_COUNT WATCHDOG_RUNNER_COMPLETED_COUNT WATCHDOG_RUNNER_STARTED_COUNT WATCHDOG_RUNNER_FAILURE_DRIFT WATCHDOG_SUPERVISOR_MODE
 
 TS="$(date -u +%Y-%m-%dT%H%M%SZ)"
 JSON_OUT="agent/reports/\${TS}.json"
@@ -4666,6 +4922,8 @@ set -e
 
 if [ "$CODEX_STATUS" -ne 0 ]; then
   echo "[$(date -Is)] codex exec failed with status $CODEX_STATUS; building offline fallback report"
+  export WATCHDOG_CODEX_STATUS="$CODEX_STATUS"
+  export WATCHDOG_CODEX_FAILED_FALLBACK="1"
   if python3 agent/bin/build_fallback_report.py "$JSON_OUT" "$STDERR_OUT" \\
     && python3 agent/bin/render_report.py "$JSON_OUT" > "$MD_OUT" 2> "$RENDER_STDERR_OUT"; then
     ln -sfn "$(basename "$MD_OUT")" agent/reports/latest.md
@@ -4695,6 +4953,8 @@ if [ "$CODEX_STATUS" -ne 0 ]; then
   exit "$CODEX_STATUS"
 fi
 
+export WATCHDOG_CODEX_STATUS="$CODEX_STATUS"
+export WATCHDOG_CODEX_FAILED_FALLBACK="0"
 if ! python3 agent/bin/render_report.py "$JSON_OUT" > "$MD_OUT" 2> "$RENDER_STDERR_OUT"; then
   {
     echo "# Codex Watchdog Render Failure"
@@ -4740,6 +5000,8 @@ ENV_WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES-}"
 ENV_WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS-}"
 ENV_WATCHDOG_ROLE="\${WATCHDOG_ROLE-}"
 ENV_WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES-}"
+ENV_WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="\${WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP-}"
+ENV_WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="\${WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS-}"
 ENV_WATCHDOG_INITIAL_DELAY_MINUTES="\${WATCHDOG_INITIAL_DELAY_MINUTES-}"
 ENV_WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX-}"
 
@@ -4757,6 +5019,8 @@ fi
 [ -n "$ENV_WATCHDOG_COMPACT_EVERY_RUNS" ] && WATCHDOG_COMPACT_EVERY_RUNS="$ENV_WATCHDOG_COMPACT_EVERY_RUNS"
 [ -n "$ENV_WATCHDOG_ROLE" ] && WATCHDOG_ROLE="$ENV_WATCHDOG_ROLE"
 [ -n "$ENV_WATCHDOG_PHASE_OFFSET_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_PHASE_OFFSET_MINUTES"
+[ -n "$ENV_WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP" ] && WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="$ENV_WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP"
+[ -n "$ENV_WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS" ] && WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="$ENV_WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS"
 [ -z "\${WATCHDOG_PHASE_OFFSET_MINUTES:-}" ] && [ -n "$ENV_WATCHDOG_INITIAL_DELAY_MINUTES" ] && WATCHDOG_PHASE_OFFSET_MINUTES="$ENV_WATCHDOG_INITIAL_DELAY_MINUTES"
 [ -n "$ENV_WATCHDOG_SERVICE_PREFIX" ] && WATCHDOG_SERVICE_PREFIX="$ENV_WATCHDOG_SERVICE_PREFIX"
 
@@ -4767,6 +5031,8 @@ WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES:-25}"
 WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS:-6}"
 WATCHDOG_ROLE="\${WATCHDOG_ROLE:-runner}"
 WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES:-10}"
+WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="\${WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP:-1}"
+WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="\${WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS:-4}"
 WATCHDOG_SERVICE_PREFIX="\${WATCHDOG_SERVICE_PREFIX:-codex-watchdog}"
 
 export CUDA_VISIBLE_DEVICES=""
@@ -4838,6 +5104,8 @@ WATCHDOG_INTERVAL_MINUTES="$(sanitize_minutes WATCHDOG_INTERVAL_MINUTES "$WATCHD
 WATCHDOG_TIMEOUT_MINUTES="$(sanitize_minutes WATCHDOG_TIMEOUT_MINUTES "$WATCHDOG_TIMEOUT_MINUTES" 1 25)"
 WATCHDOG_COMPACT_EVERY_RUNS="$(sanitize_minutes WATCHDOG_COMPACT_EVERY_RUNS "$WATCHDOG_COMPACT_EVERY_RUNS" 0 6)"
 WATCHDOG_PHASE_OFFSET_MINUTES="$(sanitize_minutes WATCHDOG_PHASE_OFFSET_MINUTES "$WATCHDOG_PHASE_OFFSET_MINUTES" 0 10)"
+WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="$(sanitize_minutes WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS "$WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS" 1 4)"
+case "$WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP" in 1|true|yes|on) WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="1" ;; *) WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="0" ;; esac
 case "$WATCHDOG_ROLE" in runner|supervisor) ;; *) WATCHDOG_ROLE="runner" ;; esac
 if [ "$CODEX_SANDBOX_MODE" = "workspace-write" ] && ! workspace_write_allowed; then
   echo "warning: workspace-write requested but agent/workspace_write_policy.json is missing or invalid; using read-only" >&2
@@ -4847,7 +5115,7 @@ if [ "$CODEX_SANDBOX_MODE" != "read-only" ] && [ "$CODEX_SANDBOX_MODE" != "works
   echo "warning: invalid CODEX_SANDBOX_MODE=$CODEX_SANDBOX_MODE; using read-only" >&2
   CODEX_SANDBOX_MODE="read-only"
 fi
-export CODEX_BIN CODEX_HOME CODEX_SANDBOX_MODE WATCHDOG_INTERVAL_MINUTES WATCHDOG_TIMEOUT_MINUTES WATCHDOG_COMPACT_EVERY_RUNS WATCHDOG_ROLE WATCHDOG_PHASE_OFFSET_MINUTES WATCHDOG_SERVICE_PREFIX
+export CODEX_BIN CODEX_HOME CODEX_SANDBOX_MODE WATCHDOG_INTERVAL_MINUTES WATCHDOG_TIMEOUT_MINUTES WATCHDOG_COMPACT_EVERY_RUNS WATCHDOG_ROLE WATCHDOG_PHASE_OFFSET_MINUTES WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS WATCHDOG_SERVICE_PREFIX
 
 print_header() {
   echo "Codex Watchdog Guard"
@@ -4858,6 +5126,8 @@ print_header() {
   echo "WATCHDOG_COMPACT_EVERY_RUNS=$WATCHDOG_COMPACT_EVERY_RUNS"
   echo "WATCHDOG_ROLE=$WATCHDOG_ROLE"
   echo "WATCHDOG_PHASE_OFFSET_MINUTES=$WATCHDOG_PHASE_OFFSET_MINUTES"
+  echo "WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP=$WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP"
+  echo "WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS=$WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS"
   echo
 }
 
@@ -5218,6 +5488,8 @@ WATCHDOG_TIMEOUT_MINUTES="\${WATCHDOG_TIMEOUT_MINUTES:-25}"
 WATCHDOG_COMPACT_EVERY_RUNS="\${WATCHDOG_COMPACT_EVERY_RUNS:-6}"
 WATCHDOG_ROLE="\${WATCHDOG_ROLE:-runner}"
 WATCHDOG_PHASE_OFFSET_MINUTES="\${WATCHDOG_PHASE_OFFSET_MINUTES:-10}"
+WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="\${WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP:-1}"
+WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="\${WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS:-4}"
 CODEX_BIN="\${CODEX_BIN:-codex}"
 CODEX_HOME="\${CODEX_HOME:-$HOME/.codex-watcher}"
 CODEX_SANDBOX_MODE="\${CODEX_SANDBOX_MODE:-read-only}"
@@ -5319,6 +5591,8 @@ write_units() {
   WATCHDOG_TIMEOUT_MINUTES="$(sanitize_minutes WATCHDOG_TIMEOUT_MINUTES "$WATCHDOG_TIMEOUT_MINUTES" 1 25)"
   WATCHDOG_COMPACT_EVERY_RUNS="$(sanitize_minutes WATCHDOG_COMPACT_EVERY_RUNS "$WATCHDOG_COMPACT_EVERY_RUNS" 0 6)"
   WATCHDOG_PHASE_OFFSET_MINUTES="$(sanitize_minutes WATCHDOG_PHASE_OFFSET_MINUTES "$WATCHDOG_PHASE_OFFSET_MINUTES" 0 10)"
+  WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS="$(sanitize_minutes WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS "$WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS" 1 4)"
+  case "$WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP" in 1|true|yes|on) WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="1" ;; *) WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP="0" ;; esac
   case "$WATCHDOG_ROLE" in runner|supervisor) ;; *) WATCHDOG_ROLE="runner" ;; esac
   if [ "$CODEX_SANDBOX_MODE" = "workspace-write" ] && ! workspace_write_allowed; then
     echo "warning: workspace-write requested but agent/workspace_write_policy.json is missing or invalid; using read-only" >&2
@@ -5346,6 +5620,8 @@ Environment=WATCHDOG_TIMEOUT_MINUTES=$WATCHDOG_TIMEOUT_MINUTES
 Environment=WATCHDOG_COMPACT_EVERY_RUNS=$WATCHDOG_COMPACT_EVERY_RUNS
 Environment=WATCHDOG_ROLE=$(systemd_value "$WATCHDOG_ROLE")
 Environment=WATCHDOG_PHASE_OFFSET_MINUTES=$WATCHDOG_PHASE_OFFSET_MINUTES
+Environment=WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP=$WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP
+Environment=WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS=$WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS
 Environment=CUDA_VISIBLE_DEVICES=
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -5463,12 +5739,42 @@ def route():
     state = load_json(ROOT / "agent" / "STATE.json", {})
     paused = (ROOT / "agent" / "control" / "PAUSE").exists()
     compaction_due = os.environ.get("WATCHDOG_COMPACTION_DUE") == "1"
+    role = os.environ.get("WATCHDOG_ROLE", "runner")
+    supervisor_mode = os.environ.get("WATCHDOG_SUPERVISOR_MODE", "standby")
 
     if paused:
         return {
             "primary_skill": "watchdog-handoff-writer",
             "reason": "agent/control/PAUSE exists; no Codex work should be started.",
             "stop_condition": "Write paused status and stop.",
+            "permission_guardian_required": False,
+            "permission_guardian_result": "not_required",
+            "route_locked": True
+        }
+
+    if role == "supervisor":
+        if supervisor_mode == "audit":
+            return {
+                "primary_skill": "watchdog-cleanup-auditor",
+                "reason": "Supervisor heavy audit is due by runner-cycle cadence.",
+                "stop_condition": "Run one read-only audit for anti-snowball, leakage, environment, stale state, and blocker hygiene; write compact handoff outputs and stop.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True
+            }
+        if supervisor_mode == "light":
+            return {
+                "primary_skill": "watchdog-handoff-writer",
+                "reason": "Supervisor lightweight follow-up is due after a runner cycle or reviewer/blocker marker.",
+                "stop_condition": "Repair only reviewer-pending/stale-marker/blocker bookkeeping that is safe; write compact handoff outputs and stop.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True
+            }
+        return {
+            "primary_skill": "watchdog-handoff-writer",
+            "reason": "Supervisor standby: no new runner cycle and heavy audit cadence is not due.",
+            "stop_condition": "Write a short heartbeat and stop without operational changes.",
             "permission_guardian_required": False,
             "permission_guardian_result": "not_required",
             "route_locked": True
@@ -5801,19 +6107,42 @@ if route_path.exists():
 else:
     route = {}
 
+def atomic_write_text(path, text):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(target)
+
+def atomic_write_json(path, payload):
+    atomic_write_text(path, json.dumps(payload, indent=2) + "\\n")
+
+def append_jsonl(path, payload):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\\n")
+
+def int_env(name, fallback=0):
+    try:
+        value = int(os.environ.get(name, str(fallback)))
+    except Exception:
+        return fallback
+    return value if value >= 0 else fallback
+
 print(data["report_markdown"])
 
 state_update = data.get("state_update_markdown", "").strip()
 if state_update:
-    Path("agent/STATE.proposed.md").write_text(state_update + "\\n")
+    atomic_write_text("agent/STATE.proposed.md", state_update + "\\n")
 
 runtime_update = data.get("runtime_state_markdown", "").strip()
 if runtime_update:
-    Path("agent/RUNTIME_STATE.md").write_text(runtime_update + "\\n")
+    atomic_write_text("agent/RUNTIME_STATE.md", runtime_update + "\\n")
 
 morning_brief = data.get("morning_brief_markdown", "").strip()
 if morning_brief:
-    Path("agent/MORNING_BRIEF.md").write_text(morning_brief + "\\n")
+    atomic_write_text("agent/MORNING_BRIEF.md", morning_brief + "\\n")
 
 progress_state = {
     "updated_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -5829,7 +6158,7 @@ progress_state = {
     "current_blocker": data.get("human_review_reason") or "; ".join(data.get("blocked_items") or [])[:1000],
     "next_safe_action": data.get("next_safe_action", {})
 }
-Path("agent/PROGRESS_STATE.json").write_text(json.dumps(progress_state, indent=2) + "\\n")
+atomic_write_json("agent/PROGRESS_STATE.json", progress_state)
 
 def blocker_type(blocked_items, requires_review, human_reason):
     text = " ".join(str(x) for x in (blocked_items or [])) + " " + str(human_reason or "")
@@ -5855,7 +6184,7 @@ def blocker_type(blocked_items, requires_review, human_reason):
     return "stale_state"
 
 def write_lines(path, lines):
-    Path(path).write_text("\\n".join(lines).rstrip() + "\\n")
+    atomic_write_text(path, "\\n".join(lines).rstrip() + "\\n")
 
 updated = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 next_action = data.get("next_safe_action") or {}
@@ -5873,6 +6202,7 @@ write_lines("agent/CURRENT_STATE.md", [
     "",
     f"Updated: {updated}",
     f"Role: {os.environ.get('WATCHDOG_ROLE', 'runner')}",
+    f"Supervisor mode: {os.environ.get('WATCHDOG_SUPERVISOR_MODE', 'runner')}",
     f"Status: {data.get('overall_status', 'uncertain')}",
     f"Report type: {data.get('report_type', 'heartbeat')}",
     f"Primary skill: {data.get('primary_skill', '')}",
@@ -5897,10 +6227,20 @@ write_lines("agent/CURRENT_STATE.md", [
     *(["- None."] if not evidence else []),
 ])
 
-Path("agent/RUN_STATE.json").write_text(json.dumps({
+runner_started_count = os.environ.get("WATCHDOG_RUNNER_STARTED_COUNT")
+runner_completed_count = os.environ.get("WATCHDOG_RUNNER_COMPLETED_COUNT") or os.environ.get("WATCHDOG_RUNNER_RUN_COUNT")
+runner_failure_drift = os.environ.get("WATCHDOG_RUNNER_FAILURE_DRIFT")
+
+atomic_write_json("agent/RUN_STATE.json", {
     "schema_version": 1,
     "updated_utc": updated,
     "role": os.environ.get("WATCHDOG_ROLE", "runner"),
+    "supervisor_mode": os.environ.get("WATCHDOG_SUPERVISOR_MODE", "runner"),
+    "runner_run_count": os.environ.get("WATCHDOG_RUNNER_RUN_COUNT"),
+    "runner_completed_count": runner_completed_count,
+    "runner_started_count": runner_started_count,
+    "runner_failure_drift": runner_failure_drift,
+    "supervisor_audit_every_runner_runs": os.environ.get("WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS"),
     "status": data.get("overall_status", "uncertain"),
     "primary_skill": data.get("primary_skill"),
     "report_type": data.get("report_type"),
@@ -5910,7 +6250,22 @@ Path("agent/RUN_STATE.json").write_text(json.dumps({
     "requires_human_review": requires_review,
     "next_action": next_action,
     "evidence": evidence,
-}, indent=2) + "\\n")
+})
+
+if os.environ.get("WATCHDOG_ROLE", "runner") == "runner":
+    runner_count = os.environ.get("WATCHDOG_RUNNER_RUN_COUNT")
+    if runner_count:
+        status_dir = Path("agent/status")
+        status_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(status_dir / "runner_completed_count", str(runner_count) + "\\n")
+        atomic_write_json(status_dir / "RUNNER_COMPLETION.json", {
+            "schema_version": 1,
+            "updated_utc": updated,
+            "runner_run_count": runner_count,
+            "runner_completed_count": runner_count,
+            "status": data.get("overall_status", "uncertain"),
+            "report_type": data.get("report_type"),
+        })
 
 write_lines("agent/NEXT_ACTION.md", [
     "# Next Action",
@@ -5988,6 +6343,76 @@ if data.get("requires_human_review"):
     pending_dir.mkdir(parents=True, exist_ok=True)
     safe_ts = safe_name(data.get("timestamp_utc", "unknown"))
     Path(pending_dir / f"{safe_ts}.json").write_text(json.dumps(data, indent=2))
+
+def finalize_supervisor_decision():
+    if os.environ.get("WATCHDOG_ROLE", "runner") != "supervisor":
+        return
+
+    state_path = Path("agent/status/supervisor_state.json")
+    try:
+        state = json.loads(state_path.read_text())
+    except Exception:
+        state = {
+            "schema_version": 2,
+            "role": "supervisor",
+            "mode": os.environ.get("WATCHDOG_SUPERVISOR_MODE", "standby"),
+        }
+
+    decision = dict(state.get("decision") or {})
+    mode = decision.get("mode") or state.get("mode") or os.environ.get("WATCHDOG_SUPERVISOR_MODE", "standby")
+    target_count = int_env("WATCHDOG_RUNNER_COMPLETED_COUNT", int_env("WATCHDOG_RUNNER_RUN_COUNT", 0))
+    try:
+        target_count = int(decision.get("target_runner_completed_count", target_count))
+    except Exception:
+        pass
+
+    codex_status = os.environ.get("WATCHDOG_CODEX_STATUS", "0")
+    success = codex_status == "0"
+    decision["mode"] = mode
+    decision["target_runner_completed_count"] = target_count
+
+    event = {
+        "decision_id": decision.get("decision_id", ""),
+        "timestamp": updated,
+        "mode": mode,
+        "runner_completed_count": target_count,
+    }
+
+    if success:
+        decision["status"] = "completed"
+        decision["completed_at"] = updated
+        state["last_seen_runner_completed_count"] = max(int(state.get("last_seen_runner_completed_count") or state.get("last_seen_runner_run_count") or 0), target_count)
+        state["last_seen_runner_run_count"] = state["last_seen_runner_completed_count"]
+        if mode == "light":
+            state["last_light_runner_completed_count"] = max(int(state.get("last_light_runner_completed_count") or 0), target_count)
+        if mode == "audit":
+            state["last_audit_runner_completed_count"] = max(int(state.get("last_audit_runner_completed_count") or state.get("last_audit_runner_run_count") or 0), target_count)
+            state["last_audit_runner_run_count"] = state["last_audit_runner_completed_count"]
+        if mode in {"light", "audit"} and state.get("marker_pending") and state.get("marker_fingerprint"):
+            state["last_actioned_marker_fingerprint"] = state.get("marker_fingerprint", "")
+            state["last_marker_fingerprint"] = state.get("marker_fingerprint", "")
+        event["event"] = "completed"
+    else:
+        decision["status"] = "failed"
+        decision["failed_at"] = updated
+        decision["failure_reason"] = f"codex_status_{codex_status}"
+        event["event"] = "failed"
+        event["failure_reason"] = decision["failure_reason"]
+
+    state["schema_version"] = 2
+    state["updated_utc"] = updated
+    state["role"] = "supervisor"
+    state["mode"] = mode
+    state["runner_completed_count"] = int_env("WATCHDOG_RUNNER_COMPLETED_COUNT", int_env("WATCHDOG_RUNNER_RUN_COUNT", 0))
+    state["runner_started_count"] = int_env("WATCHDOG_RUNNER_STARTED_COUNT", state["runner_completed_count"])
+    state["runner_failure_drift"] = int_env("WATCHDOG_RUNNER_FAILURE_DRIFT", max(0, state["runner_started_count"] - state["runner_completed_count"]))
+    state["decision"] = decision
+
+    atomic_write_json(state_path, state)
+    atomic_write_json("agent/status/SUPERVISOR_MODE.json", state)
+    append_jsonl("agent/status/SUPERVISOR_MODE.events.jsonl", event)
+
+finalize_supervisor_decision()
 `
 };
 
