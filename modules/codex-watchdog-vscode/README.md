@@ -2,7 +2,7 @@
 
 This extension does not automate the Codex sidebar UI. It controls a Linux-side watcher that wakes `codex exec` on a timer, reads explicit project state, and writes structured reports.
 
-Current local version: `0.1.39`.
+Current local version: `0.1.41`.
 
 Before a project root is selected, the control panel intentionally shows only the project selector. Folder status, login, schedule, actions, and reports appear only after the user explicitly selects or creates a project.
 
@@ -236,6 +236,7 @@ agent/PROGRESS_STATE.json            last progress/no-progress/recommend-pause r
 agent/status/SKILL_ROUTE.json        deterministic primary-skill route
 agent/status/RUNTIME_VALIDATION.json runtime validation result
 agent/status/QUEUE_STATUS.md         compact queue dashboard, no raw log tails
+agent/status/generated_manifest.json generated file template hashes for drift checks
 agent/schemas/state.schema.json
 agent/schemas/job.schema.json
 agent/schemas/gate.schema.json
@@ -244,9 +245,9 @@ research/LEDGER_NOTES.md
 research/proposals/
 ```
 
-Before Codex starts, `agent/bin/route_skill.py` first writes or refreshes `agent/status/SKILL_ROUTE.json`; then `agent/bin/validate_runtime.py` validates compact runtime files, queue files, gate files, and the freshly routed skill file. The prompt tells Codex to follow that deterministic route, and `render_report.py` rejects output whose `primary_skill` does not match the routed skill. The generated JSON schema also requires each wakeup to classify `report_type`, indicate whether progress changed, track `no_progress_cycles`, and set `recommend_pause` when repeated no-progress or repeated blockers need a human decision. `render_report.py` refreshes `agent/PROGRESS_STATE.json`, can update a complete `research/RESEARCH_LEDGER.md`, and writes review proposals under `research/proposals/`.
+Before Codex starts, `agent/bin/route_skill.py` first writes or refreshes `agent/status/SKILL_ROUTE.json`; then `agent/bin/validate_runtime.py` validates compact runtime files, queue files, gate files, and the freshly routed skill file. The project-local `./agent/bin/watchdog validate` command also checks `agent/status/generated_manifest.json`, which records SHA-256 hashes for generated scripts, schemas, prompts, and skills. If a generated file drifts from the recorded template, validation fails and asks you to refresh generated watcher files. The manifest is public-repo safe: it records relative paths and template hashes, not local machine paths; public docs should use `$PROJECT_ROOT`, `$CONTROL_PLANE_ROOT`, and `$COLLAB_ROOT` placeholders instead of real private paths. The prompt tells Codex to follow that deterministic route, and `render_report.py` rejects output whose `primary_skill` does not match the routed skill. The generated JSON schema also requires each wakeup to classify `report_type`, indicate whether progress changed, track `no_progress_cycles`, and set `recommend_pause` when repeated no-progress or repeated blockers need a human decision. `render_report.py` refreshes `agent/PROGRESS_STATE.json`, can update a complete `research/RESEARCH_LEDGER.md`, and writes review proposals under `research/proposals/`.
 
-If you already bootstrapped a project with an older extension version, run `Codex Watchdog: Refresh Generated Watcher Files`. It overwrites generated protocol files (`README.codex-watchdog.md`, `agent/watchdog.env`, `agent/CODEX_TAKEOVER.md`, `agent/SKILL_ROUTER.md`, `agent/skills/`, `agent/bin/`, `agent/prompts/wakeup.md`, and generated schemas under `agent/schemas/`); it leaves `TASK_REQUEST.md`, `PLAN.md`, `STATE.md`, `TODO.md`, `SAFETY.md`, `DAILY_HANDOFF.md`, and `AGENTS.md` untouched. It creates missing runtime scaffolding such as `agent/STATE.json`, `agent/PROGRESS_STATE.json`, `agent/status/QUEUE_STATUS.md`, and `research/` files without overwriting user-owned daily-mode Markdown.
+If you already bootstrapped a project with an older extension version, run `Codex Watchdog: Refresh Generated Watcher Files`. It overwrites generated protocol files (`README.codex-watchdog.md`, `agent/watchdog.env`, `agent/CODEX_TAKEOVER.md`, `agent/SKILL_ROUTER.md`, `agent/skills/`, `agent/bin/`, `agent/prompts/wakeup.md`, and generated schemas under `agent/schemas/`) and refreshes `agent/status/generated_manifest.json`; it leaves `TASK_REQUEST.md`, `PLAN.md`, `STATE.md`, `TODO.md`, `SAFETY.md`, `DAILY_HANDOFF.md`, and `AGENTS.md` untouched. It creates missing runtime scaffolding such as `agent/STATE.json`, `agent/PROGRESS_STATE.json`, `agent/status/QUEUE_STATUS.md`, and `research/` files without overwriting user-owned daily-mode Markdown.
 
 The same refresh action is now visible in the main control-panel action row as `Refresh Generated Files`; it is no longer only inside the advanced section.
 

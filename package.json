@@ -12,6 +12,6 @@
     "test:agent-host": "cd modules/agent-host && python3 -m unittest tests/test_bridge.py",
     "test:discord-adapter": "cd modules/discord-adapter && .venv/bin/python -m unittest discover -s tests",
     "test:host-ops": "cd modules/host-ops && python3 -m unittest discover -s tests",
-    "check:watchdog-vscode": "cd modules/codex-watchdog-vscode && node --check extension.js"
+    "check:watchdog-vscode": "cd modules/codex-watchdog-vscode && node --check extension.js && node tests/generated-template.test.js"
   }
 }

@@ -29,7 +29,7 @@ echo "== host-ops =="
 
 echo
 echo "== codex-watchdog-vscode =="
-(cd "$ROOT/modules/codex-watchdog-vscode" && node --check extension.js)
+(cd "$ROOT/modules/codex-watchdog-vscode" && node --check extension.js && node tests/generated-template.test.js)
 
 echo
 echo "All checks passed."

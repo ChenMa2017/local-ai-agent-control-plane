@@ -7,6 +7,7 @@ const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
 const cp = require("child_process");
+const packageMetadata = require("./package.json");
 
 let output;
 let extensionContext;
@@ -1371,6 +1372,8 @@ async function bootstrapProject(root) {
     }
   }
 
+  await writeGeneratedManifest(root, await generatedWatcherFileEntries(root));
+
   return { created, skipped };
 }
 
@@ -1491,38 +1494,77 @@ function generatedSkillFiles() {
   ];
 }
 
-async function refreshGeneratedWatcherFiles(root) {
+async function generatedWatcherFileEntries(root) {
   const watchdogEnv = await renderWatchdogEnv(root);
   const files = [
-    [path.join(root, "agent", "watchdog.env"), watchdogEnv, 0o644],
-    [path.join(root, "README.codex-watchdog.md"), templates.watchdogReadme(), 0o644],
-    [path.join(root, "agent", "CODEX_TAKEOVER.md"), templates.codexTakeover(), 0o644],
-    [path.join(root, "agent", "WATCHDOG_PROTOCOL.md"), templates.watchdogProtocol(), 0o644],
-    [path.join(root, "agent", "prompts", "wakeup.md"), templates.wakeup(), 0o644],
-    [path.join(root, "agent", "schemas", "watch_decision.schema.json"), templates.schema(), 0o644],
-    [path.join(root, "agent", "schemas", "state.schema.json"), templates.stateSchema(), 0o644],
-    [path.join(root, "agent", "schemas", "job.schema.json"), templates.jobSchema(), 0o644],
-    [path.join(root, "agent", "schemas", "gate.schema.json"), templates.gateSchema(), 0o644],
-    [path.join(root, "agent", "bin", "collect_status.sh"), templates.collectStatus(root), 0o755],
-    [path.join(root, "agent", "bin", "make_prompt.sh"), templates.makePrompt(root), 0o755],
-    [path.join(root, "agent", "bin", "run_watchdog.sh"), templates.runWatchdog(root), 0o755],
-    [path.join(root, "agent", "bin", "watchdog"), templates.watchdogCli(root), 0o755],
-    [path.join(root, "agent", "bin", "watchdog_timer.sh"), templates.watchdogTimer(root), 0o755],
-    [path.join(root, "agent", "bin", "watchdog_guard.sh"), templates.watchdogGuard(root), 0o755],
-    [path.join(root, "agent", "bin", "render_report.py"), templates.renderReport(), 0o755],
-    [path.join(root, "agent", "bin", "route_skill.py"), templates.routeSkill(), 0o755],
-    [path.join(root, "agent", "bin", "validate_runtime.py"), templates.validateRuntime(), 0o755]
+    ["agent/watchdog.env", watchdogEnv, 0o644],
+    ["README.codex-watchdog.md", templates.watchdogReadme(), 0o644],
+    ["agent/CODEX_TAKEOVER.md", templates.codexTakeover(), 0o644],
+    ["agent/WATCHDOG_PROTOCOL.md", templates.watchdogProtocol(), 0o644],
+    ["agent/prompts/wakeup.md", templates.wakeup(), 0o644],
+    ["agent/schemas/watch_decision.schema.json", templates.schema(), 0o644],
+    ["agent/schemas/state.schema.json", templates.stateSchema(), 0o644],
+    ["agent/schemas/job.schema.json", templates.jobSchema(), 0o644],
+    ["agent/schemas/gate.schema.json", templates.gateSchema(), 0o644],
+    ["agent/bin/collect_status.sh", templates.collectStatus(root), 0o755],
+    ["agent/bin/make_prompt.sh", templates.makePrompt(root), 0o755],
+    ["agent/bin/run_watchdog.sh", templates.runWatchdog(root), 0o755],
+    ["agent/bin/watchdog", templates.watchdogCli(root), 0o755],
+    ["agent/bin/watchdog_timer.sh", templates.watchdogTimer(root), 0o755],
+    ["agent/bin/watchdog_guard.sh", templates.watchdogGuard(root), 0o755],
+    ["agent/bin/render_report.py", templates.renderReport(), 0o755],
+    ["agent/bin/route_skill.py", templates.routeSkill(), 0o755],
+    ["agent/bin/validate_runtime.py", templates.validateRuntime(), 0o755]
   ];
   for (const [rel, content] of generatedSkillFiles()) {
-    files.push([path.join(root, rel), content, 0o644]);
+    files.push([rel, content, 0o644]);
   }
+  return files.map(([rel, content, mode]) => ({
+    rel,
+    file: path.join(root, rel),
+    content,
+    mode
+  }));
+}
 
-  for (const [file, content, mode] of files) {
+function sha256Text(text) {
+  return crypto.createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function generatedManifestContent(entries) {
+  const templateHashes = {};
+  for (const entry of entries.slice().sort((a, b) => a.rel.localeCompare(b.rel))) {
+    templateHashes[entry.rel] = `sha256:${sha256Text(entry.content)}`;
+  }
+  return `${JSON.stringify({
+    schema_version: 1,
+    control_plane_module: "codex-watchdog-vscode",
+    control_plane_version: packageMetadata.version,
+    generated_at: new Date().toISOString(),
+    placeholder_policy: {
+      public_paths: ["$PROJECT_ROOT", "$CONTROL_PLANE_ROOT", "$COLLAB_ROOT"]
+    },
+    template_hashes: templateHashes
+  }, null, 2)}\n`;
+}
+
+async function writeGeneratedManifest(root, entries) {
+  const manifest = path.join(root, "agent", "status", "generated_manifest.json");
+  await ensureDir(path.dirname(manifest));
+  await fsp.writeFile(manifest, generatedManifestContent(entries));
+  return manifest;
+}
+
+async function refreshGeneratedWatcherFiles(root) {
+  const files = await generatedWatcherFileEntries(root);
+  for (const { file, content, mode } of files) {
     await ensureDir(path.dirname(file));
     await fsp.writeFile(file, content);
     await fsp.chmod(file, mode);
     output.appendLine(`Refreshed ${path.relative(root, file)}`);
   }
+  await writeGeneratedManifest(root, files);
+  output.appendLine("Refreshed agent/status/generated_manifest.json");
 
 	  const runtimeState = path.join(root, "agent", "RUNTIME_STATE.md");
 	  if (!fs.existsSync(runtimeState)) {
@@ -5218,8 +5260,62 @@ route_skill() {
   python3 agent/bin/route_skill.py
 }
 
+validate_generated_manifest() {
+  python3 - <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+manifest_path = Path("agent/status/generated_manifest.json")
+if not manifest_path.exists():
+    print("generated manifest missing: agent/status/generated_manifest.json", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"generated manifest invalid: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+template_hashes = manifest.get("template_hashes")
+if not isinstance(template_hashes, dict) or not template_hashes:
+    print("generated manifest invalid: template_hashes must be a nonempty object", file=sys.stderr)
+    sys.exit(1)
+
+errors = []
+for rel, expected in sorted(template_hashes.items()):
+    if not isinstance(rel, str) or not isinstance(expected, str):
+        errors.append(f"invalid manifest entry: {rel!r}")
+        continue
+    if not expected.startswith("sha256:"):
+        errors.append(f"invalid hash format for {rel}")
+        continue
+    file_path = Path(rel)
+    if file_path.is_absolute() or ".." in file_path.parts:
+        errors.append(f"unsafe generated path in manifest: {rel}")
+        continue
+    if not file_path.exists():
+        errors.append(f"generated file missing: {rel}")
+        continue
+    actual = "sha256:" + hashlib.sha256(file_path.read_bytes()).hexdigest()
+    if actual != expected:
+        errors.append(f"generated file drift: {rel}")
+
+if errors:
+    for error in errors:
+        print(error, file=sys.stderr)
+    print("Run: Codex Watchdog: Refresh Generated Watcher Files", file=sys.stderr)
+    sys.exit(1)
+
+version = manifest.get("control_plane_version", "unknown")
+print(f"generated manifest ok: {len(template_hashes)} files, version={version}")
+PY
+}
+
 validate_runtime() {
   python3 agent/bin/validate_runtime.py
+  validate_generated_manifest
 }
 
 run_once() {
