@@ -90,9 +90,10 @@ function writeJson(projectRoot, relativePath, value) {
   writeFile(projectRoot, relativePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function runRoute(projectRoot) {
+function runRoute(projectRoot, env = {}) {
   const output = run("python3", [path.join(projectRoot, "agent", "bin", "route_skill.py")], {
-    cwd: projectRoot
+    cwd: projectRoot,
+    env: { ...process.env, ...env }
   });
   return JSON.parse(output);
 }
@@ -194,6 +195,21 @@ async function main() {
     "- resolver: human",
     ""
   ].join("\n"));
+  writeFile(projectRoot, "agent/TODO.md", [
+    "# TODO",
+    "",
+    "- [ ] Pending report-only bookkeeping while external review is waiting.",
+    ""
+  ].join("\n"));
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.match(route.reason, /continue with one report-only step/);
+
+  writeFile(projectRoot, "agent/TODO.md", "# TODO\n\n- none\n");
+  route = runRoute(projectRoot, { WATCHDOG_COMPACTION_DUE: "1" });
+  assert.strictEqual(route.primary_skill, "watchdog-report-curator");
+  assert.match(route.reason, /compaction cycle is due/i);
+
   route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
   assert.match(route.reason, /REVIEW_PENDING\.md state=pending_send/);

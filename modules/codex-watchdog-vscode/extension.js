@@ -3660,8 +3660,10 @@ watchdog-permission-guardian is a mandatory gate before any action that writes, 
 5. If one structured report-only pending task exists: primary_skill = watchdog-orchestrator; choose exactly one report-only next action, even if old handoff text mentions review_required. Do not execute code or mutate datasets.
 6. If active structured review markers exist and the pending task would write, queue, execute, or approve external review: primary_skill = watchdog-handoff-writer; write one review item; stop.
 7. If one legal pending task exists: primary_skill = watchdog-orchestrator; choose exactly one next action. If it writes, queues, or executes, apply watchdog-permission-guardian first.
-8. If agent/status/current.md says Compaction due this cycle and no higher-priority active work exists: primary_skill = watchdog-report-curator; compact active outputs; stop.
-9. If no runnable task exists: primary_skill = watchdog-handoff-writer; write idle/blocked status; stop.
+8. If TODO has pending/unchecked work but no runnable structured task exists: primary_skill = watchdog-orchestrator; choose one report-only next step or ask daily mode to structure STATE.json; stop.
+9. If agent/status/current.md says Compaction due this cycle and no higher-priority active work exists: primary_skill = watchdog-report-curator; compact active outputs; stop.
+10. If only active review markers remain: primary_skill = watchdog-handoff-writer; write review-required handoff; stop.
+11. If no runnable task exists: primary_skill = watchdog-handoff-writer; write idle/blocked status; stop.
 
 The generated agent/bin/route_skill.py applies this route before Codex starts and writes agent/status/SKILL_ROUTE.json. Codex output must match that route.
 
@@ -6044,21 +6046,10 @@ def route():
             "task_id": pending[0].get("task_id")
         }
 
-    review_blocked, review_reason = active_review_marker(state)
-    if review_blocked:
-        return {
-            "primary_skill": "watchdog-handoff-writer",
-            "reason": review_reason,
-            "stop_condition": "Write one review-required handoff and stop.",
-            "permission_guardian_required": False,
-            "permission_guardian_result": "not_required",
-            "route_locked": True
-        }
-
     if todo_has_pending():
         return {
             "primary_skill": "watchdog-orchestrator",
-            "reason": "agent/TODO.md contains a pending or unchecked task but STATE.json has no runnable structured task.",
+            "reason": "agent/TODO.md contains a pending or unchecked task but STATE.json has no runnable structured task; continue with one report-only step while approvals remain pending.",
             "stop_condition": "Choose one report-only next step or write a blocker asking daily mode to structure STATE.json tasks, then stop.",
             "permission_guardian_required": False,
             "permission_guardian_result": "not_required",
@@ -6070,6 +6061,17 @@ def route():
             "primary_skill": "watchdog-report-curator",
             "reason": "Scheduled compaction cycle is due and no higher-priority active work was found.",
             "stop_condition": "Refresh compact state/report outputs and stop.",
+            "permission_guardian_required": False,
+            "permission_guardian_result": "not_required",
+            "route_locked": True
+        }
+
+    review_blocked, review_reason = active_review_marker(state)
+    if review_blocked:
+        return {
+            "primary_skill": "watchdog-handoff-writer",
+            "reason": review_reason,
+            "stop_condition": "Write one review-required handoff and stop.",
             "permission_guardian_required": False,
             "permission_guardian_result": "not_required",
             "route_locked": True
