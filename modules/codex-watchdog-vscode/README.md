@@ -2,7 +2,7 @@
 
 This extension does not automate the Codex sidebar UI. It controls a Linux-side watcher that wakes `codex exec` on a timer, reads explicit project state, and writes structured reports.
 
-Current local version: `0.1.41`.
+Current local version: `0.1.42`.
 
 Before a project root is selected, the control panel intentionally shows only the project selector. Folder status, login, schedule, actions, and reports appear only after the user explicitly selects or creates a project.
 
@@ -158,7 +158,7 @@ The watcher can run in two cooperation roles:
 
 The supervisor now has deterministic runtime modes instead of a single long-standby behavior:
 
-- `light`: runs after a newly completed runner report or a changed reviewer/blocker marker. It is only for small handoff repairs such as `pending_send`, stale marker cleanup, permission/allowlist notes, and blocker bookkeeping.
+- `light`: runs after a newly completed runner report or a changed reviewer/blocker marker. It is only for small report-only/bookkeeping repairs such as stale `pending_send`, stale marker cleanup, permission notes, blocker classification, and next-action clarification. It must not approve CPU/GPU jobs, training, data/checkpoint mutation, external reviewer sending, or allowlist expansion.
 - `audit`: runs after `codexWatchdog.supervisorAuditEveryRunnerRuns` completed runner reports, default `4`, or when runner started/completed drift indicates repeated failed runner wakeups. It performs the heavier read-only health pass for leakage, anti-snowballing, stale state, environment drift, queue hygiene, and repeated blockers.
 - `standby`: writes a short heartbeat when there is no new runner cycle and the audit cadence is not due.
 

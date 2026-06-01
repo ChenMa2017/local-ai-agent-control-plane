@@ -3207,8 +3207,8 @@ Each wakeup should leave these files coherent:
 
 ## Supervisor Modes
 
-- \`light\`: triggered after a new runner wakeup or reviewer/blocker marker. Repair only safe marker/bookkeeping issues such as pending_send, stale handoff files, permission notes, or blocker classification.
-- \`audit\`: triggered every configured runner-cycle cadence. Run one heavier read-only audit for leakage, anti-snowballing, stale state, environment drift, queue hygiene, and repeated blocker repair.
+- \`light\`: triggered after a new completed runner cycle or a changed reviewer/blocker marker. Repair only safe report-only/bookkeeping issues such as stale pending_send markers, stale handoff files, permission notes, blocker classification, and next-action clarification.
+- \`audit\`: triggered every configured runner-cycle cadence. Run light marker hygiene first, then one heavier audit for leakage, anti-snowballing, stale state, environment drift, queue hygiene, and repeated blocker repair.
 - \`standby\`: no new runner cycle and no audit due. Write a short heartbeat and stop.
 
 The runtime writes the chosen mode to \`agent/status/SUPERVISOR_MODE.json\` and \`agent/RUN_STATE.json\`. Do not override it inside the prompt; report a runtime blocker if it appears wrong.
@@ -3218,6 +3218,8 @@ The runtime writes the chosen mode to \`agent/status/SUPERVISOR_MODE.json\` and 
 - Prefer canonical handoff files over old reports.
 - If a runner is active, do not wait on or interrupt it.
 - Fix only stale state, stale pause markers, stale queue metadata, reviewer-pending bookkeeping, and anti-snowball summaries.
+- You may resolve runner report-only/bookkeeping blockers when the evidence is explicit and no execution, training, dataset mutation, package install, code change, allowlist expansion, or external reviewer send is being approved.
+- You must not auto-approve CPU/GPU jobs, training/rerun/compile/gate operations, data/checkpoint mutation, external reviewer sending, or new allowlist permissions. Write a review-required handoff instead.
 - For environment or external reviewer blockers, write the exact needed action and evidence path.
 - For model/data/loss decisions, prepare a concise reviewer or Deep Research evidence bundle; do not invent a new model line.
 `,
@@ -3654,11 +3656,12 @@ watchdog-permission-guardian is a mandatory gate before any action that writes, 
 1. If agent/control/PAUSE exists: primary_skill = watchdog-handoff-writer; write paused status; stop.
 2. If gpu_running/, cpu_running/, or agent/queue/running/ contains a job: primary_skill = watchdog-job-queue; monitor exactly one running job; stop.
 3. If gpu_done/, cpu_done/, or agent/queue/done/ contains unprocessed output: primary_skill = watchdog-gate-evaluator; evaluate exactly one result; stop.
-4. If STATE or TODO says requires_review=true/review_required: primary_skill = watchdog-handoff-writer; write one review item; stop.
-5. If a queued job exists: primary_skill = watchdog-job-queue; inspect queue state; stop.
-6. If one legal pending task exists: primary_skill = watchdog-orchestrator; choose exactly one next action. If it writes, queues, or executes, apply watchdog-permission-guardian first.
-7. If agent/status/current.md says Compaction due this cycle and no higher-priority work exists: primary_skill = watchdog-report-curator; compact active outputs; stop.
-8. If no runnable task exists: primary_skill = watchdog-handoff-writer; write idle/blocked status; stop.
+4. If a queued job exists: primary_skill = watchdog-job-queue; inspect queue state; stop.
+5. If one structured report-only pending task exists: primary_skill = watchdog-orchestrator; choose exactly one report-only next action, even if old handoff text mentions review_required. Do not execute code or mutate datasets.
+6. If active structured review markers exist and the pending task would write, queue, execute, or approve external review: primary_skill = watchdog-handoff-writer; write one review item; stop.
+7. If one legal pending task exists: primary_skill = watchdog-orchestrator; choose exactly one next action. If it writes, queues, or executes, apply watchdog-permission-guardian first.
+8. If agent/status/current.md says Compaction due this cycle and no higher-priority active work exists: primary_skill = watchdog-report-curator; compact active outputs; stop.
+9. If no runnable task exists: primary_skill = watchdog-handoff-writer; write idle/blocked status; stop.
 
 The generated agent/bin/route_skill.py applies this route before Codex starts and writes agent/status/SKILL_ROUTE.json. Codex output must match that route.
 
@@ -3835,11 +3838,13 @@ Allowed:
 - Write a morning brief.
 - Write a review-required recommendation through structured output.
 - Explain why no action was taken.
+- In supervisor light mode, reconcile stale report-only/bookkeeping review markers when the evidence shows no execution, GPU/CPU job, dataset mutation, package install, code change, or external send is being approved.
 
 Forbidden:
 - Make operational decisions.
 - Execute commands.
 - Rewrite plan/state/safety directly.
+- Approve training, CPU/GPU execution, allowlist expansion, external reviewer sending, dataset mutation, package installation, or code changes.
 
 Stop after:
 - One handoff or review request.
@@ -4070,6 +4075,14 @@ The final output must follow the JSON schema.
         additionalProperties: false
       },
       requires_human_review: { type: "boolean" },
+      review_scope: {
+        type: "string",
+        enum: ["none", "report_only", "bookkeeping", "external_review", "unsafe_operation"]
+      },
+      review_resolver: {
+        type: "string",
+        enum: ["none", "supervisor", "human", "external"]
+      },
       human_review_reason: { type: "string" },
       forbidden_actions_not_taken: { type: "array", items: { type: "string" } },
       evidence: { type: "array", items: { type: "string" } },
@@ -4680,9 +4693,40 @@ def load_json(path):
 
 def text(path):
     try:
-        return Path(path).read_text(errors="ignore").lower()
+        return Path(path).read_text(errors="ignore")
     except Exception:
         return ""
+
+TRUE_VALUES = {"1", "true", "yes", "on", "required"}
+REVIEW_STATES = {"pending_send", "review_required_no_bundle"}
+BLOCKER_TYPES = {"permission", "reviewer", "allowlist", "stale_state"}
+
+def field_value(raw_text, key):
+    key = key.lower()
+    for line in raw_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("-"):
+            stripped = stripped[1:].strip()
+        if ":" not in stripped:
+            continue
+        left, right = stripped.split(":", 1)
+        if left.strip().lower() == key:
+            return right.strip().lower()
+    return ""
+
+def is_true(value):
+    return str(value or "").strip().lower() in TRUE_VALUES
+
+def normalize_marker_text(raw_text):
+    lines = []
+    for line in raw_text.splitlines():
+        lowered = line.lower()
+        if "updated:" in lowered or "timestamp" in lowered or "run id" in lowered or "run_id" in lowered:
+            continue
+        if lowered.strip().startswith("#"):
+            continue
+        lines.append(" ".join(lowered.split()))
+    return "\\n".join(lines)
 
 def atomic_write_json(path, payload):
     target = Path(path)
@@ -4712,11 +4756,16 @@ review_text = text("agent/REVIEW_PENDING.md")
 blockers_text = text("agent/BLOCKERS.md")
 blocker = str(run_state.get("blocker_type") or "").lower()
 
-review_marker = any(token in review_text for token in ("pending_send", "review_required_no_bundle", "requires_human_review: true"))
+review_state = field_value(review_text, "state")
+review_requires = is_true(field_value(review_text, "requires_human_review"))
+review_pending_send = is_true(field_value(review_text, "pending_send"))
+review_marker = review_state in REVIEW_STATES or review_requires or review_pending_send
 run_state_marker = blocker in {"permission", "reviewer", "stale_state"}
-blockers_marker = any(token in blockers_text for token in ("permission", "reviewer", "allowlist", "pending_send", "stale_state"))
+blocker_type = field_value(blockers_text, "blocker type")
+blockers_required = is_true(field_value(blockers_text, "required"))
+blockers_marker = blocker_type in BLOCKER_TYPES or blockers_required
 marker_pending = review_marker or run_state_marker or blockers_marker
-marker_basis = "\\n".join([blocker, review_text[:2000], blockers_text[:2000]])
+marker_basis = "\\n".join([blocker, normalize_marker_text(review_text)[:2000], normalize_marker_text(blockers_text)[:2000]])
 marker_fingerprint = hashlib.sha256(marker_basis.encode("utf-8", errors="ignore")).hexdigest()[:16] if marker_pending else ""
 last_actioned_marker_fingerprint = str(state.get("last_actioned_marker_fingerprint") or state.get("last_marker_fingerprint") or "")
 marker_changed = marker_pending and marker_fingerprint != last_actioned_marker_fingerprint
@@ -5809,14 +5858,61 @@ def has_files(*dirs):
                     return True
     return False
 
-def todo_has_review():
-    text = ""
-    for rel in ("agent/TODO.md", "agent/STATE.md", "agent/DAILY_HANDOFF.md"):
-        p = ROOT / rel
-        if p.exists():
-            text += "\\n" + p.read_text(errors="ignore")
-    lowered = text.lower()
-    return "review_required" in lowered or "requires_review=true" in lowered
+TRUE_VALUES = {"1", "true", "yes", "on", "required"}
+REVIEW_STATES = {"pending_send", "review_required_no_bundle"}
+BLOCKER_TYPES = {"permission", "reviewer", "allowlist", "stale_state"}
+
+def read_text(rel):
+    p = ROOT / rel
+    if not p.exists():
+        return ""
+    try:
+        return p.read_text(errors="ignore")
+    except Exception:
+        return ""
+
+def field_value(raw_text, key):
+    key = key.lower()
+    for line in raw_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("-"):
+            stripped = stripped[1:].strip()
+        if ":" not in stripped:
+            continue
+        left, right = stripped.split(":", 1)
+        if left.strip().lower() == key:
+            return right.strip().lower()
+    return ""
+
+def is_true(value):
+    return str(value or "").strip().lower() in TRUE_VALUES
+
+def active_review_marker(state):
+    if isinstance(state, dict) and state.get("requires_review") is True:
+        return True, "STATE.json requires_review=true."
+
+    review_text = read_text("agent/REVIEW_PENDING.md")
+    review_state = field_value(review_text, "state")
+    if review_state in REVIEW_STATES:
+        return True, f"REVIEW_PENDING.md state={review_state}."
+    if is_true(field_value(review_text, "requires_human_review")):
+        return True, "REVIEW_PENDING.md requires_human_review=true."
+    if is_true(field_value(review_text, "pending_send")):
+        return True, "REVIEW_PENDING.md pending_send=true."
+
+    blockers_text = read_text("agent/BLOCKERS.md")
+    blocker_type = field_value(blockers_text, "blocker type")
+    if blocker_type in BLOCKER_TYPES:
+        return True, f"BLOCKERS.md blocker type={blocker_type}."
+    if is_true(field_value(blockers_text, "required")):
+        return True, "BLOCKERS.md review required."
+
+    run_state = load_json(ROOT / "agent" / "RUN_STATE.json", {})
+    blocker = str(run_state.get("blocker_type") or "").strip().lower() if isinstance(run_state, dict) else ""
+    if blocker in {"permission", "reviewer", "stale_state"}:
+        return True, f"RUN_STATE.json blocker_type={blocker}."
+
+    return False, ""
 
 def todo_has_pending():
     p = ROOT / "agent" / "TODO.md"
@@ -5830,6 +5926,13 @@ def pending_tasks(state):
     if not isinstance(tasks, list):
         return []
     return [t for t in tasks if isinstance(t, dict) and t.get("status") == "pending"]
+
+def task_is_report_only(task):
+    runner = str(task.get("allowed_runner") or "").strip().lower()
+    kind = str(task.get("kind") or "").strip().lower()
+    task_id = str(task.get("task_id") or "").strip().lower()
+    text = " ".join(str(task.get(key) or "") for key in ("description", "title", "summary")).lower()
+    return runner == "report_only" or kind == "report_only" or "report-only" in text or "report_only" in text or "report" in task_id
 
 def route():
     state = load_json(ROOT / "agent" / "STATE.json", {})
@@ -5896,26 +5999,6 @@ def route():
             "route_locked": True
         }
 
-    if isinstance(state, dict) and state.get("requires_review") is True:
-        return {
-            "primary_skill": "watchdog-handoff-writer",
-            "reason": "STATE.json requires_review=true.",
-            "stop_condition": "Write review-required handoff and stop.",
-            "permission_guardian_required": False,
-            "permission_guardian_result": "not_required",
-            "route_locked": True
-        }
-
-    if todo_has_review():
-        return {
-            "primary_skill": "watchdog-handoff-writer",
-            "reason": "TODO/STATE/handoff text contains review-required markers.",
-            "stop_condition": "Write one review-required handoff and stop.",
-            "permission_guardian_required": False,
-            "permission_guardian_result": "not_required",
-            "route_locked": True
-        }
-
     if has_files("agent/queue/queued", "gpu_queue", "cpu_queue"):
         return {
             "primary_skill": "watchdog-job-queue",
@@ -5928,6 +6011,28 @@ def route():
 
     pending = pending_tasks(state)
     if pending:
+        report_only_pending = [t for t in pending if task_is_report_only(t)]
+        if report_only_pending:
+            task = report_only_pending[0]
+            return {
+                "primary_skill": "watchdog-orchestrator",
+                "reason": f"{len(pending)} pending task(s) exist in STATE.json; selected report-only task can proceed without human-review handoff.",
+                "stop_condition": "Choose one report-only next safe action or write a blocker, then stop.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True,
+                "task_id": task.get("task_id")
+            }
+        review_blocked, review_reason = active_review_marker(state)
+        if review_blocked:
+            return {
+                "primary_skill": "watchdog-handoff-writer",
+                "reason": review_reason,
+                "stop_condition": "Write one review-required handoff and stop; do not auto-approve executable or mutation work.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True
+            }
         writes_or_executes = any(t.get("allowed_runner") in ("cpu", "gpu") for t in pending)
         return {
             "primary_skill": "watchdog-orchestrator",
@@ -5937,6 +6042,17 @@ def route():
             "permission_guardian_result": "not_required" if not writes_or_executes else "pending",
             "route_locked": True,
             "task_id": pending[0].get("task_id")
+        }
+
+    review_blocked, review_reason = active_review_marker(state)
+    if review_blocked:
+        return {
+            "primary_skill": "watchdog-handoff-writer",
+            "reason": review_reason,
+            "stop_condition": "Write one review-required handoff and stop.",
+            "permission_guardian_required": False,
+            "permission_guardian_result": "not_required",
+            "route_locked": True
         }
 
     if todo_has_pending():
@@ -6401,6 +6517,27 @@ proposal = data.get("proposal_markdown", "").strip()
 review_state = "pending_send" if proposal else "none"
 if requires_review and not proposal:
     review_state = "review_required_no_bundle"
+next_kind = str(next_action.get("kind", "none") or "none").strip()
+review_scope = str(data.get("review_scope", "") or "").strip()
+if review_scope not in {"none", "report_only", "bookkeeping", "external_review", "unsafe_operation"}:
+    if proposal:
+        review_scope = "external_review"
+    elif requires_review and next_kind in {"report_only", "none"}:
+        review_scope = "report_only"
+    elif requires_review:
+        review_scope = "unsafe_operation"
+    else:
+        review_scope = "none"
+review_resolver = str(data.get("review_resolver", "") or "").strip()
+if review_resolver not in {"none", "supervisor", "human", "external"}:
+    if review_scope in {"report_only", "bookkeeping"}:
+        review_resolver = "supervisor"
+    elif review_scope == "external_review":
+        review_resolver = "external"
+    elif requires_review or proposal:
+        review_resolver = "human"
+    else:
+        review_resolver = "none"
 write_lines("agent/REVIEW_PENDING.md", [
     "# Review Pending",
     "",
@@ -6410,6 +6547,8 @@ write_lines("agent/REVIEW_PENDING.md", [
     "",
     f"- state: {review_state}",
     f"- requires_human_review: {requires_review}",
+    f"- scope: {review_scope}",
+    f"- resolver: {review_resolver}",
     f"- human_review_reason: {human_reason or 'None.'}",
     "",
     "## Notes",

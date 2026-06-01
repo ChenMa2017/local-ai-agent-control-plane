@@ -80,6 +80,23 @@ function run(command, args, options) {
   });
 }
 
+function writeFile(projectRoot, relativePath, content) {
+  const target = path.join(projectRoot, relativePath);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content);
+}
+
+function writeJson(projectRoot, relativePath, value) {
+  writeFile(projectRoot, relativePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function runRoute(projectRoot) {
+  const output = run("python3", [path.join(projectRoot, "agent", "bin", "route_skill.py")], {
+    cwd: projectRoot
+  });
+  return JSON.parse(output);
+}
+
 async function main() {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-generated-"));
   const api = loadExtensionTestApi(projectRoot);
@@ -112,6 +129,75 @@ async function main() {
   });
   assert.match(validateOutput, /generated manifest ok:/);
 
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "observer",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "report_only_inventory",
+        status: "pending",
+        allowed_runner: "report_only",
+        description: "Prepare a report-only inventory; do not execute jobs."
+      }
+    ]
+  });
+  writeFile(projectRoot, "agent/DAILY_HANDOFF.md", [
+    "# Daily Handoff",
+    "",
+    "Historical note: a previous cycle mentioned review_required=true.",
+    "This line is context, not an active review marker.",
+    ""
+  ].join("\n"));
+  let route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "report_only_inventory");
+  assert.match(route.reason, /report-only task can proceed/);
+
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "observer",
+    requires_review: false,
+    tasks: []
+  });
+  writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
+    "# Review Pending",
+    "",
+    "- state: none",
+    "- pending_send: no",
+    "- requires_human_review: false",
+    "- scope: none",
+    "- resolver: none",
+    ""
+  ].join("\n"));
+  writeFile(projectRoot, "agent/BLOCKERS.md", [
+    "# Blockers",
+    "",
+    "Blocker type: none",
+    "- Required: false",
+    "",
+    "Use blocker types: env, queue, permission, reviewer, allowlist, pending_send, stale_state.",
+    ""
+  ].join("\n"));
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.match(route.reason, /No paused state/);
+  assert.doesNotMatch(route.reason, /pending_send|permission|requires_review|REVIEW_PENDING/i);
+
+  writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
+    "# Review Pending",
+    "",
+    "- state: pending_send",
+    "- requires_human_review: true",
+    "- scope: external_review",
+    "- resolver: human",
+    ""
+  ].join("\n"));
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.match(route.reason, /REVIEW_PENDING\.md state=pending_send/);
+
   fs.appendFileSync(path.join(projectRoot, "agent", "bin", "run_watchdog.sh"), "\n# intentional drift for generated-template test\n");
   let failed = false;
   try {
@@ -120,8 +206,8 @@ async function main() {
     });
   } catch (error) {
     failed = true;
-    const stderr = String(error.stderr || "");
-    assert.match(stderr, /generated file drift: agent\/bin\/run_watchdog\.sh/);
+    const output = `${String(error.stdout || "")}\n${String(error.stderr || "")}`;
+    assert.match(output, /generated file drift: agent\/bin\/run_watchdog\.sh/);
   }
   assert.ok(failed, "watchdog validate should fail after a generated file drifts");
 
