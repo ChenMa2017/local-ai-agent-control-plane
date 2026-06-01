@@ -47,15 +47,25 @@ modules/codex-watchdog-vscode
 
 Runtime workspaces are configured in `modules/agent-host/config.json`, copied from `modules/agent-host/config.example.json`.
 
+Public docs use placeholders instead of private machine paths:
+
+```text
+$CONTROL_PLANE_ROOT  local clone of this monorepo
+$PROJECT_ROOT        main AI-Agent workspace
+$COLLAB_ROOT         optional shared docs / collaboration workspace
+```
+
+Set those locally however your machine is laid out; do not commit real private paths.
+
 Typical local setup:
 
 ```text
 main_codex
-  $HOME/Documents/My_AI_Agent
+  $PROJECT_ROOT
   workspace-write
 
 grokking
-  $HOME/Documents/My_AI_Agent/watchdog_demo_Grokking
+  $PROJECT_ROOT/watchdog_demo_Grokking
   readonly
 ```
 
@@ -101,6 +111,22 @@ pip install -r requirements.txt
 ```
 
 The Agent Host and Host Ops currently use the Python standard library only.
+
+## Generated Watchdog Files
+
+`modules/codex-watchdog-vscode` generates project-local watchdog scripts, schemas, prompts, skills, and helper docs. The generated project records a public-safe manifest:
+
+```text
+agent/status/generated_manifest.json
+```
+
+The manifest stores relative paths and SHA-256 template hashes only. It does not store local private paths. In a watchdog project, run:
+
+```bash
+./agent/bin/watchdog validate
+```
+
+That command validates compact runtime JSON and checks generated file drift against `generated_manifest.json`. If generated scripts or templates were hand-edited, validation fails and asks you to refresh generated watcher files.
 
 ## Local Config
 
@@ -208,7 +234,8 @@ Create an empty GitHub repository, then from this monorepo:
 
 ```bash
 git remote add origin git@github.com:<your-user>/<your-repo>.git
-git push -u origin master
+git branch -M main
+git push -u origin main
 ```
 
 Before pushing, run:
@@ -218,4 +245,4 @@ git status --short
 scripts/check_all.sh
 ```
 
-Confirm no `config.json`, `.env`, `secrets.env`, `state/`, `.codex-bridge/`, or logs are tracked.
+Confirm no `config.json`, `.env`, `secrets.env`, `state/`, `.codex-bridge/`, logs, real Discord IDs, real tokens, or private local paths are tracked. Public examples should use `$PROJECT_ROOT`, `$CONTROL_PLANE_ROOT`, and `$COLLAB_ROOT`.

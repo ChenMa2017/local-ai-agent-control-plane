@@ -15,7 +15,7 @@ Local Web UI and unified Agent Host API on 127.0.0.1:8787.
 Create config:
 
 ```bash
-cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host
+cd "$CONTROL_PLANE_ROOT/modules/agent-host"
 cp config.example.json config.json
 ```
 
@@ -27,12 +27,12 @@ Recommended workspaces:
 {
   "projects": {
     "main_codex": {
-      "path": "$HOME/Documents/My_AI_Agent",
+      "path": "$PROJECT_ROOT",
       "default_mode": "workspace-write",
       "allowed_modes": ["workspace-write"]
     },
     "grokking": {
-      "path": "$HOME/Documents/My_AI_Agent/watchdog_demo_Grokking",
+      "path": "$PROJECT_ROOT/watchdog_demo_Grokking",
       "default_mode": "readonly",
       "allowed_modes": ["readonly"]
     }
@@ -43,7 +43,7 @@ Recommended workspaces:
 Set `codex_bridge_root`:
 
 ```json
-"codex_bridge_root": "$HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-bridge"
+"codex_bridge_root": "$CONTROL_PLANE_ROOT/modules/codex-bridge"
 ```
 
 Add auth tokens in `config.json`:

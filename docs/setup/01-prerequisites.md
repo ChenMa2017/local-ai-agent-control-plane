@@ -24,15 +24,16 @@ Codex CLI installed and authenticated locally
 Recommended directory layout:
 
 ```text
-$HOME/Documents/My_App_Dev/local-ai-agent-control-plane
-$HOME/Documents/My_AI_Agent
-$HOME/Documents/My_AI_Agent/watchdog_demo_Grokking
+$CONTROL_PLANE_ROOT
+$PROJECT_ROOT
+$PROJECT_ROOT/watchdog_demo_Grokking
+$COLLAB_ROOT
 ```
 
 Create the main AI workspace if needed:
 
 ```bash
-mkdir -p $HOME/Documents/My_AI_Agent
+mkdir -p "$PROJECT_ROOT"
 ```
 
 Secrets are stored outside the repo:

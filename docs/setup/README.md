@@ -22,12 +22,22 @@ The normal test workspaces are intentionally small:
 
 ```text
 main_codex
-  $HOME/Documents/My_AI_Agent
+  $PROJECT_ROOT
   workspace-write
 
 grokking
-  $HOME/Documents/My_AI_Agent/watchdog_demo_Grokking
+  $PROJECT_ROOT/watchdog_demo_Grokking
   readonly
 ```
 
 The module source directories are implementation code. Do not expose them as Agent Host workspaces unless you explicitly want Codex to inspect or maintain the tooling itself.
+
+Path placeholders used by these setup docs:
+
+```text
+$CONTROL_PLANE_ROOT  local clone of this monorepo
+$PROJECT_ROOT        main AI-Agent workspace
+$COLLAB_ROOT         optional shared docs / collaboration workspace
+```
+
+Use real paths only in your private local config files.

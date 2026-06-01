@@ -5,9 +5,10 @@ Use this when cloning the project onto another computer.
 ## 1. Clone
 
 ```bash
-cd $HOME/Documents/My_App_Dev
-git clone git@github.com:ChenMa2017/local-ai-agent-control-plane.git
-cd local-ai-agent-control-plane
+mkdir -p "$(dirname "$CONTROL_PLANE_ROOT")"
+cd "$(dirname "$CONTROL_PLANE_ROOT")"
+git clone git@github.com:<your-user>/<your-repo>.git "$(basename "$CONTROL_PLANE_ROOT")"
+cd "$CONTROL_PLANE_ROOT"
 ```
 
 ## 2. Install prerequisites
@@ -38,19 +39,19 @@ pip install -r requirements.txt
 ## 4. Create local workspaces
 
 ```bash
-mkdir -p $HOME/Documents/My_AI_Agent
+mkdir -p "$PROJECT_ROOT"
 ```
 
 Create or copy your project:
 
 ```text
-$HOME/Documents/My_AI_Agent/watchdog_demo_Grokking
+$PROJECT_ROOT/watchdog_demo_Grokking
 ```
 
 ## 5. Configure Agent Host
 
 ```bash
-cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/agent-host
+cd "$CONTROL_PLANE_ROOT/modules/agent-host"
 cp config.example.json config.json
 nano config.json
 ```
@@ -60,7 +61,7 @@ Change paths and tokens for this machine.
 ## 6. Configure Discord Adapter
 
 ```bash
-cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/discord-adapter
+cd "$CONTROL_PLANE_ROOT/modules/discord-adapter"
 cp config.example.json config.json
 nano config.json
 ```
@@ -85,7 +86,7 @@ chmod 600 ~/.config/agent-host/secrets.env
 ## 8. Check
 
 ```bash
-cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane
+cd "$CONTROL_PLANE_ROOT"
 scripts/check_all.sh
 ```
 

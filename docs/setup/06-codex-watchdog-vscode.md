@@ -15,7 +15,7 @@ VSCode/project watchdog prototype.
 Install/check:
 
 ```bash
-cd $HOME/Documents/My_App_Dev/local-ai-agent-control-plane/modules/codex-watchdog-vscode
+cd "$CONTROL_PLANE_ROOT/modules/codex-watchdog-vscode"
 npm install
 node --check extension.js
 ```
@@ -31,7 +31,7 @@ This module is implementation tooling. It does not need to be exposed as an Agen
 Project watchdogs should live under project workspaces, for example:
 
 ```text
-$HOME/Documents/My_AI_Agent/watchdog_demo_Grokking/agent/
+$PROJECT_ROOT/watchdog_demo_Grokking/agent/
 ```
 
 Recommended project report protocol:
@@ -45,3 +45,17 @@ agent/SAFETY.md
 ```
 
 The main Codex workspace should read these reports rather than blindly scanning large logs.
+
+Generated watchdog scripts also write:
+
+```text
+agent/status/generated_manifest.json
+```
+
+Run this inside a watchdog project after bootstrap or refresh:
+
+```bash
+./agent/bin/watchdog validate
+```
+
+It validates runtime JSON and checks generated file hashes. If generated scripts drift from the recorded template hashes, refresh generated watcher files before relying on the watchdog.

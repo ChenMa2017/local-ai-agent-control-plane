@@ -59,6 +59,6 @@ Hi <username>! You've successfully authenticated, but GitHub does not provide sh
 Push:
 
 ```bash
-git remote add origin git@github.com:ChenMa2017/local-ai-agent-control-plane.git
+git remote add origin git@github.com:<your-user>/<your-repo>.git
 git push -u origin main
 ```
