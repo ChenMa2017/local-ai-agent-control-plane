@@ -238,6 +238,95 @@ async function main() {
   assert.strictEqual(route.task_id, "bounded_cpu_after_supervisor_approval");
   assert.match(route.reason, /explicit supervisor approval/);
 
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "local_workspace_copy_after_supervisor_approval",
+        status: "pending",
+        allowed_runner: "cpu",
+        workspace_mode: "project_local_copy",
+        title: "Implement one local workspace copy adapter without touching shared source.",
+        supervisor_approved: true,
+        supervisor_approval: {
+          approved_by: "supervisor",
+          approval_class: "local_workspace_copy",
+          scope: "copy source into workspace/<task_id>/ and modify only the local workspace copy"
+        }
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "local_workspace_copy_after_supervisor_approval");
+  assert.match(route.reason, /explicit supervisor approval/);
+
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "bounded_gpu_after_supervisor_approval",
+        status: "pending",
+        allowed_runner: "gpu",
+        title: "Run one bounded GPU probe after supervisor approval.",
+        supervisor_approved: true,
+        supervisor_approval: {
+          approved_by: "supervisor",
+          approval_class: "bounded_gpu_probe",
+          scope: "bounded GPU probe with fixed timeout and no promotion"
+        }
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.doesNotMatch(route.reason, /explicit supervisor approval/);
+
+  writeJson(projectRoot, "agent/supervisor_capabilities.json", {
+    schema_version: 1,
+    capabilities: {
+      bounded_gpu_probe: {
+        enabled: true,
+        max_runtime_minutes: 20,
+        max_samples: 32
+      }
+    }
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "bounded_gpu_after_supervisor_approval");
+  assert.match(route.reason, /explicit supervisor approval/);
+  fs.unlinkSync(path.join(projectRoot, "agent", "supervisor_capabilities.json"));
+
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "external_send_after_supervisor_approval",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Send external reviewer packet after supervisor approval.",
+        supervisor_approved: true,
+        supervisor_approval: {
+          approved_by: "supervisor",
+          approval_class: "external_send",
+          scope: "external send reviewer packet"
+        }
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.doesNotMatch(route.reason, /explicit supervisor approval/);
+
   const targetRunner = path.join(projectRoot, "target-runner");
   writeJson(targetRunner, "agent/PROGRESS_STATE.json", {
     requires_human_review: true,
@@ -256,6 +345,38 @@ async function main() {
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "supervisor-delegated-runner-blocker-approval");
   assert.match(route.reason, /Supervisor delegated runner blocker found/);
+
+  const targetGpuRunner = path.join(projectRoot, "target-gpu-runner");
+  writeJson(targetGpuRunner, "agent/PROGRESS_STATE.json", {
+    requires_human_review: true,
+    next_safe_action: {
+      kind: "propose_review",
+      description: "Prepare bounded GPU probe with fixed timeout and no promotion.",
+      reason: "This is a bounded sample eval probe and does not mutate checkpoints."
+    }
+  });
+  route = runRoute(projectRoot, {
+    WATCHDOG_ROLE: "supervisor",
+    WATCHDOG_SUPERVISOR_MODE: "light",
+    WATCHDOG_SUPERVISOR_TARGETS: targetGpuRunner
+  });
+  assert.notStrictEqual(route.task_id, "supervisor-delegated-runner-blocker-approval");
+
+  writeJson(targetGpuRunner, "agent/supervisor_capabilities.json", {
+    schema_version: 1,
+    capabilities: {
+      bounded_gpu_probe: true
+    }
+  });
+  route = runRoute(projectRoot, {
+    WATCHDOG_ROLE: "supervisor",
+    WATCHDOG_SUPERVISOR_MODE: "light",
+    WATCHDOG_SUPERVISOR_TARGETS: targetGpuRunner
+  });
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "supervisor-delegated-runner-blocker-approval");
+  assert.match(route.reason, /capability=bounded_gpu_probe/);
 
   writeFile(projectRoot, "agent/bin/supervisor_reconcile_stale_state.py", [
     "#!/usr/bin/env python3",

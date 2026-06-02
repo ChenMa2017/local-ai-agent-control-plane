@@ -2,7 +2,7 @@
 
 This extension does not automate the Codex sidebar UI. It controls a Linux-side watcher that wakes `codex exec` on a timer, reads explicit project state, and writes structured reports.
 
-Current local version: `0.1.43`.
+Current local version: `0.1.44`.
 
 Before a project root is selected, the control panel intentionally shows only the project selector. Folder status, login, schedule, actions, and reports appear only after the user explicitly selects or creates a project.
 
@@ -164,7 +164,47 @@ The supervisor now has deterministic runtime modes instead of a single long-stan
 
 Supervisor projects may provide `agent/bin/supervisor_reconcile_stale_state.py`. When present, `run_watchdog.sh` runs it before route/Codex reasoning. If it writes `agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.json` with `changed: true`, the guard writes a compact reconciliation report, marks the supervisor decision completed, and exits without launching Codex reasoning.
 
-Runner projects may mark one bounded task with `supervisor_approved: true` and a `supervisor_approval` object. The route accepts only narrow bounded CPU/GPU tasks whose approval is explicitly from a supervisor and whose scope does not contain unsafe terms such as training, external send, dataset/checkpoint mutation, deletion, promotion, or GPU0/GPU1.
+Runner projects may mark one bounded task with `supervisor_approved: true` and a `supervisor_approval` object. The route now evaluates that approval through a supervisor capability policy. The public default is deliberately useful but bounded:
+
+```text
+enabled by default:
+  report_only
+  state_reconcile
+  stale_marker_cleanup
+  local_workspace_copy
+  bounded_cpu_eval
+
+disabled by default:
+  bounded_gpu_probe
+  bounded_training_canary
+  queue_enqueue
+  promotion_prepare
+  promotion_apply
+  external_send
+```
+
+This follows the operating rule: watchdogs should continue everything that is not truly dangerous, while truly dangerous work waits for human approval. A server can explicitly grant more supervisor power by adding `agent/supervisor_capabilities.json` to the target runner project:
+
+```json
+{
+  "schema_version": 1,
+  "capabilities": {
+    "bounded_gpu_probe": {
+      "enabled": true,
+      "max_runtime_minutes": 20,
+      "max_samples": 32,
+      "allowed_output_paths": [
+        "workspace/<task_id>/",
+        "runs/<task_id>/",
+        "agent/status/",
+        "agent/reports/"
+      ]
+    }
+  }
+}
+```
+
+The policy is a capability allowlist, not a general approval grant. Supervisor delegated approvals still reject secrets, package install, network fetch, dataset/checkpoint mutation, deletion, service mutation, direct shared-source edits, promotion, and external send unless the exact capability is explicitly enabled and the route classifies the task into that capability. GPU, training, promotion, and external send should stay server-specific opt-ins.
 
 The generated runner increments `agent/status/runner_run_count` when it wakes and writes `agent/status/runner_completed_count` only after rendering its report. The generated supervisor keys `light` and `audit` primarily from completed runner cycles. It writes a `selected` decision to `agent/status/supervisor_state.json` and `agent/status/SUPERVISOR_MODE.json` before Codex reasoning, then marks that decision `completed` or `failed` after `render_report.py` finishes. Failed supervisor runs do not advance `last_seen_runner_completed_count`, `last_light_runner_completed_count`, `last_audit_runner_completed_count`, or the actioned marker fingerprint.
 

@@ -3218,8 +3218,9 @@ The runtime writes the chosen mode to \`agent/status/SUPERVISOR_MODE.json\` and 
 - Prefer canonical handoff files over old reports.
 - If a runner is active, do not wait on or interrupt it.
 - Fix only stale state, stale pause markers, stale queue metadata, reviewer-pending bookkeeping, and anti-snowball summaries.
-- You may resolve runner report-only/bookkeeping blockers when the evidence is explicit and no execution, training, dataset mutation, package install, code change, allowlist expansion, or external reviewer send is being approved.
-- You must not auto-approve CPU/GPU jobs, training/rerun/compile/gate operations, data/checkpoint mutation, external reviewer sending, or new allowlist permissions. Write a review-required handoff instead.
+- You may resolve runner report-only/bookkeeping blockers when the evidence is explicit and no shared-state side effect is being approved.
+- You may approve only the capability classes explicitly allowed by \`agent/supervisor_capabilities.json\`; public defaults allow report-only, state reconciliation, stale marker cleanup, local workspace copy work, and bounded CPU eval.
+- You must not approve disabled capability classes such as GPU probes, training canaries, queue enqueue, promotion, external reviewer sending, data/checkpoint mutation, package installation, service mutation, or new high-risk allowlist permissions. Write a review-required handoff instead.
 - If a deterministic project-local reconciliation helper has already repaired stale state, trust its compact report and do not launch a second broad reasoning pass for the same wakeup.
 - Passive waiting is a supervisor failure when a blocker is stale/repeated, the evidence is local, and the repair is bookkeeping/report-only or an explicitly supervisor-approved bounded non-mutating task.
 - For environment or external reviewer blockers, write the exact needed action and evidence path.
@@ -3661,7 +3662,7 @@ watchdog-permission-guardian is a mandatory gate before any action that writes, 
 4. If gpu_done/, cpu_done/, or agent/queue/done/ contains unprocessed output: primary_skill = watchdog-gate-evaluator; evaluate exactly one result; stop.
 5. If a queued job exists: primary_skill = watchdog-job-queue; inspect queue state; stop.
 6. If one structured report-only pending task exists: primary_skill = watchdog-orchestrator; choose exactly one report-only next action, even if old handoff text mentions review_required. Do not execute code or mutate datasets.
-7. If one bounded CPU/GPU task has explicit supervisor approval: primary_skill = watchdog-orchestrator; execute or prepare exactly one task within that approval scope; stop.
+7. If one pending task has explicit supervisor approval and passes \`agent/supervisor_capabilities.json\`: primary_skill = watchdog-orchestrator; execute or prepare exactly one task within that approval scope; stop.
 8. If active structured review markers exist and the pending task would write, queue, execute, or approve external review: primary_skill = watchdog-handoff-writer; write one review item; stop.
 9. If one legal pending task exists: primary_skill = watchdog-orchestrator; choose exactly one next action. If it writes, queues, or executes, apply watchdog-permission-guardian first.
 10. If TODO has pending/unchecked work but no runnable structured task exists: primary_skill = watchdog-orchestrator; choose one report-only next step or ask daily mode to structure STATE.json; stop.
@@ -3844,13 +3845,13 @@ Allowed:
 - Write a morning brief.
 - Write a review-required recommendation through structured output.
 - Explain why no action was taken.
-- In supervisor light mode, reconcile stale report-only/bookkeeping review markers when the evidence shows no execution, GPU/CPU job, dataset mutation, package install, code change, or external send is being approved.
+- In supervisor light mode, reconcile stale report-only/bookkeeping review markers and capability-policy-approved bounded tasks when the evidence shows no shared-state mutation beyond the configured policy.
 
 Forbidden:
 - Make operational decisions.
 - Execute commands.
 - Rewrite plan/state/safety directly.
-- Approve training, CPU/GPU execution, allowlist expansion, external reviewer sending, dataset mutation, package installation, or code changes.
+- Approve training, GPU execution, queue enqueue, promotion, allowlist expansion, external reviewer sending, dataset mutation, package installation, or shared code changes unless the exact capability is explicitly enabled and bounded by policy.
 
 Stop after:
 - One handoff or review request.
@@ -6118,30 +6119,233 @@ def task_is_report_only(task):
     text = " ".join(str(task.get(key) or "") for key in ("description", "title", "summary")).lower()
     return runner == "report_only" or kind == "report_only" or "report-only" in text or "report_only" in text or "report" in task_id
 
-def task_is_supervisor_approved(task):
+DEFAULT_SUPERVISOR_CAPABILITIES = {
+    "report_only": True,
+    "state_reconcile": True,
+    "stale_marker_cleanup": True,
+    "local_workspace_copy": True,
+    "bounded_cpu_eval": True,
+    "bounded_gpu_probe": False,
+    "bounded_training_canary": False,
+    "queue_enqueue": False,
+    "promotion_prepare": False,
+    "promotion_apply": False,
+    "external_send": False,
+}
+
+CAPABILITY_ALIASES = {
+    "report": "report_only",
+    "report-only": "report_only",
+    "report_only": "report_only",
+    "state-reconcile": "state_reconcile",
+    "state_reconcile": "state_reconcile",
+    "stale-marker-cleanup": "stale_marker_cleanup",
+    "stale_marker_cleanup": "stale_marker_cleanup",
+    "local-workspace-copy": "local_workspace_copy",
+    "local_workspace_copy": "local_workspace_copy",
+    "project-local-copy": "local_workspace_copy",
+    "project_local_copy": "local_workspace_copy",
+    "bounded-cpu": "bounded_cpu_eval",
+    "bounded_cpu": "bounded_cpu_eval",
+    "bounded-cpu-eval": "bounded_cpu_eval",
+    "bounded_cpu_eval": "bounded_cpu_eval",
+    "cpu32": "bounded_cpu_eval",
+    "bounded-gpu": "bounded_gpu_probe",
+    "bounded_gpu": "bounded_gpu_probe",
+    "bounded-gpu-probe": "bounded_gpu_probe",
+    "bounded_gpu_probe": "bounded_gpu_probe",
+    "bounded-training-canary": "bounded_training_canary",
+    "bounded_training_canary": "bounded_training_canary",
+    "queue": "queue_enqueue",
+    "queue_enqueue": "queue_enqueue",
+    "promotion-prepare": "promotion_prepare",
+    "promotion_prepare": "promotion_prepare",
+    "promotion-apply": "promotion_apply",
+    "promotion_apply": "promotion_apply",
+    "external-send": "external_send",
+    "external_send": "external_send",
+}
+
+def normalize_capability(value):
+    key = str(value or "").strip().lower().replace(" ", "_")
+    return CAPABILITY_ALIASES.get(key, key if key in DEFAULT_SUPERVISOR_CAPABILITIES else "")
+
+def load_supervisor_capability_policy(root=ROOT):
+    policy = {"capabilities": dict(DEFAULT_SUPERVISOR_CAPABILITIES)}
+    config = load_json(root / "agent" / "supervisor_capabilities.json", {})
+    caps = config.get("capabilities") if isinstance(config, dict) else None
+    if isinstance(caps, dict):
+        for raw_name, raw_value in caps.items():
+            name = normalize_capability(raw_name)
+            if not name:
+                continue
+            if isinstance(raw_value, dict):
+                policy["capabilities"][name] = raw_value.get("enabled") is True
+            else:
+                policy["capabilities"][name] = raw_value is True
+    return policy
+
+def capability_enabled(policy, capability):
+    return policy.get("capabilities", {}).get(capability) is True
+
+def task_policy_text(task, approval=None):
+    parts = []
+    for key in (
+        "task_id",
+        "kind",
+        "title",
+        "summary",
+        "description",
+        "allowed_runner",
+        "workspace_mode",
+        "workspace_path",
+    ):
+        parts.append(str(task.get(key) or ""))
+    if isinstance(approval, dict):
+        for key in (
+            "approval_class",
+            "capability",
+            "scope",
+            "allowed_runner",
+            "workspace_mode",
+            "workspace_path",
+            "reason",
+        ):
+            parts.append(str(approval.get(key) or ""))
+        for key in ("allowed_write_paths",):
+            value = approval.get(key)
+            if isinstance(value, list):
+                parts.extend(str(item) for item in value)
+    return "\\n".join(parts).lower()
+
+def classify_supervisor_capability(task, approval=None):
+    if isinstance(approval, dict):
+        for key in ("approval_class", "capability", "class"):
+            explicit = normalize_capability(approval.get(key))
+            if explicit:
+                return explicit
+    explicit = normalize_capability(task.get("supervisor_approval_class") or task.get("capability"))
+    if explicit:
+        return explicit
+
     runner = str(task.get("allowed_runner") or "").strip().lower()
-    if runner not in {"cpu", "gpu"}:
-        return False
+    kind = str(task.get("kind") or "").strip().lower()
+    text = task_policy_text(task, approval)
+
+    if task_is_report_only(task):
+        return "report_only"
+    if kind in {"state_reconcile", "state-reconcile"} or "state reconcile" in text:
+        return "state_reconcile"
+    if "stale marker" in text or "marker cleanup" in text or "stale_marker_cleanup" in text:
+        return "stale_marker_cleanup"
+    if (
+        "project_local_copy" in text
+        or "project-local-copy" in text
+        or "local workspace" in text
+        or "workspace/<task_id>" in text
+        or "workspace/" in text
+    ):
+        return "local_workspace_copy"
+    if "external send" in text or "deep research send" in text or "reviewer send" in text:
+        return "external_send"
+    if "promotion" in text or "shared_model" in text or "deployment" in text:
+        if "proposal" in text or "prepare" in text or "review packet" in text:
+            return "promotion_prepare"
+        return "promotion_apply"
+    if "training" in text or "train " in text or "queue training" in text:
+        return "bounded_training_canary" if ("bounded" in text or "canary" in text or "smoke" in text) else "training"
+    if runner == "gpu" or "gpu" in text:
+        return "bounded_gpu_probe" if ("bounded" in text or "probe" in text or "smoke" in text or "eval" in text or "sample" in text) else "gpu"
+    if runner == "cpu" or "cpu32" in text or "cpu-only" in text or "cpu smoke" in text or "cpu eval" in text:
+        return "bounded_cpu_eval"
+    return ""
+
+def text_has_any(text, terms):
+    return any(term in text for term in terms)
+
+def supervisor_policy_rejection(policy, capability, text):
+    normalized_text = text
+    for phrase in (
+        "no promotion",
+        "without promotion",
+        "promotion blocked",
+        "promotion_blocked",
+        "no external send",
+        "without external send",
+        "does not externally send",
+        "no dataset mutation",
+        "without dataset mutation",
+        "does not mutate dataset",
+        "does not mutate datasets",
+        "no checkpoint mutation",
+        "without checkpoint mutation",
+        "does not mutate checkpoint",
+        "does not mutate checkpoints",
+    ):
+        normalized_text = normalized_text.replace(phrase, "")
+    always_forbidden = (
+        ".env",
+        "secret",
+        "token",
+        "private key",
+        "delete original",
+        "delete shared",
+        "dataset mutation",
+        "checkpoint mutation",
+        "package install",
+        "install package",
+        "network fetch",
+        "systemd restart",
+        "systemctl restart",
+        "kill service",
+        "restart service",
+        "chmod",
+        "chown",
+        "sudo",
+    )
+    if text_has_any(normalized_text, always_forbidden):
+        return "contains always-forbidden supervisor delegated approval term"
+
+    dangerous_by_capability = {
+        "bounded_gpu_probe": ("gpu", "gpu0", "gpu1", "queue gpu", "run gpu", "execute gpu"),
+        "bounded_training_canary": ("training", "train ", "queue training", "launch training", "start training"),
+        "queue_enqueue": ("queue", "enqueue"),
+        "promotion_apply": ("promotion", "promote", "shared_model", "deployment", "public docs"),
+        "external_send": ("external send", "deep research send", "reviewer send"),
+    }
+
+    for cap_name, terms in dangerous_by_capability.items():
+        if text_has_any(normalized_text, terms):
+            if capability != cap_name:
+                return f"mentions {cap_name} terms but classified as {capability or 'unknown'}"
+            if not capability_enabled(policy, cap_name):
+                return f"capability {cap_name} is disabled by supervisor_capabilities policy"
+
+    if ("implementation" in normalized_text or "code edit" in normalized_text or "modify source" in normalized_text) and capability != "local_workspace_copy":
+        return "code/source edits require local_workspace_copy capability"
+
+    if capability == "bounded_training_canary" and not ("bounded" in normalized_text or "canary" in normalized_text or "smoke" in normalized_text):
+        return "training capability requires bounded/canary/smoke scope"
+
+    return ""
+
+def task_is_supervisor_approved(task):
     if task.get("supervisor_approved") is not True:
         return False
     approval = task.get("supervisor_approval")
     if not isinstance(approval, dict):
         return False
     approved_by = str(approval.get("approved_by") or "").lower()
-    scope = str(approval.get("scope") or "").lower()
     if "supervisor" not in approved_by:
         return False
-    unsafe_terms = (
-        "training",
-        "external",
-        "delete",
-        "checkpoint mutation",
-        "dataset mutation",
-        "promotion",
-        "gpu0",
-        "gpu1",
-    )
-    return "bounded" in scope and not any(term in scope for term in unsafe_terms)
+    policy = load_supervisor_capability_policy()
+    capability = classify_supervisor_capability(task, approval)
+    if not capability_enabled(policy, capability):
+        return False
+    text = task_policy_text(task, approval)
+    if supervisor_policy_rejection(policy, capability, text):
+        return False
+    return capability in DEFAULT_SUPERVISOR_CAPABILITIES
 
 def supervisor_targets():
     targets = []
@@ -6158,46 +6362,35 @@ def supervisor_targets():
                 targets.append(ROOT / item.strip())
     return targets
 
+def classify_delegable_next_action(next_action):
+    kind = str(next_action.get("kind") or "").lower()
+    desc = str(next_action.get("description") or "").lower()
+    reason = str(next_action.get("reason") or "").lower()
+    text = f"{kind}\\n{desc}\\n{reason}"
+    if kind != "propose_review":
+        return "", text
+    if "report-only" in text or "report_only" in text or "static audit" in text or "proposal" in text or "inventory" in text:
+        return "report_only", text
+    if (
+        "project_local_copy" in text
+        or "project-local-copy" in text
+        or "local workspace" in text
+        or "workspace/<task_id>" in text
+        or "copy into workspace" in text
+    ):
+        return "local_workspace_copy", text
+    if ("cpu-only" in text or "cpu32" in text or "bounded cpu" in text or "32-sample" in text or "sample_count=32" in text) and (
+        "eval" in text or "smoke" in text or "helper" in text or "probe" in text
+    ):
+        return "bounded_cpu_eval", text
+    if "gpu" in text and ("bounded" in text or "probe" in text or "smoke" in text or "eval" in text or "sample" in text):
+        return "bounded_gpu_probe", text
+    if ("training" in text or "train " in text) and ("bounded" in text or "canary" in text or "smoke" in text):
+        return "bounded_training_canary", text
+    return "", text
+
 def supervisor_delegable_blocker():
     safe_terms = ("report-only", "report_only", "static audit", "proposal", "inventory")
-    bounded_terms = ("bounded", "cpu-only", "cpu32", "32-sample", "sample_count=32", "exact taskbox")
-    bounded_action_terms = ("eval helper", "helper", "eval", "smoke")
-    hard_unsafe_terms = (
-        "start training",
-        "launch training",
-        "training",
-        "queue training",
-        "queue gpu",
-        "run gpu",
-        "gpu",
-        "package install",
-        "install packages",
-        "external send",
-        "delete",
-        "checkpoint mutation",
-        "dataset mutation",
-        "route b",
-        "corrected-a1",
-        "corrected-a2",
-        "promotion",
-    )
-    unsafe_terms = hard_unsafe_terms + (
-        "queue",
-        "cpu",
-        "execute gpu",
-        "execution",
-        "eval",
-        "smoke",
-        "implementation",
-        "code",
-        "helper",
-        "package",
-        "checkpoint",
-        "phase 1",
-        "phase 2",
-        "a1",
-        "a2",
-    )
     for target in supervisor_targets():
         progress = load_json(target / "agent" / "PROGRESS_STATE.json", {})
         if not isinstance(progress, dict) or progress.get("requires_human_review") is not True:
@@ -6205,19 +6398,15 @@ def supervisor_delegable_blocker():
         next_action = progress.get("next_safe_action")
         if not isinstance(next_action, dict):
             continue
-        kind = str(next_action.get("kind") or "").lower()
-        desc = str(next_action.get("description") or "").lower()
-        reason = str(next_action.get("reason") or "").lower()
-        text = f"{kind}\\n{desc}\\n{reason}"
-        bounded_text = f"{kind}\\n{desc}"
-        if kind != "propose_review":
+        capability, text = classify_delegable_next_action(next_action)
+        if not capability:
             continue
-        if ("report-only" in text or "report_only" in text) and any(term in text for term in safe_terms):
-            if not any(term in text for term in unsafe_terms):
-                return str(target)
-        if any(term in bounded_text for term in bounded_terms) and any(term in bounded_text for term in bounded_action_terms):
-            if not any(term in bounded_text for term in hard_unsafe_terms):
-                return str(target)
+        target_policy = load_supervisor_capability_policy(target)
+        if not capability_enabled(target_policy, capability):
+            continue
+        if supervisor_policy_rejection(target_policy, capability, text):
+            continue
+        return {"target": str(target), "capability": capability}
     return ""
 
 def route():
@@ -6242,7 +6431,7 @@ def route():
         if supervisor_mode in ("audit", "light") and delegable:
             return {
                 "primary_skill": "watchdog-orchestrator",
-                "reason": f"Supervisor delegated runner blocker found in {delegable}.",
+                "reason": f"Supervisor delegated runner blocker found in {delegable.get('target')} with capability={delegable.get('capability')}.",
                 "stop_condition": "Resolve one safe report-only or bounded runner blocker by writing compact approval/status notes, or explain why the blocker is not safe to delegate.",
                 "permission_guardian_required": False,
                 "permission_guardian_result": "not_required",
