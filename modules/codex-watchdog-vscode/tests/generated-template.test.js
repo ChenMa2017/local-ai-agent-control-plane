@@ -214,6 +214,86 @@ async function main() {
   assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
   assert.match(route.reason, /REVIEW_PENDING\.md state=pending_send/);
 
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "bounded_cpu_after_supervisor_approval",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Run one bounded CPU smoke after supervisor approval.",
+        supervisor_approved: true,
+        supervisor_approval: {
+          approved_by: "supervisor",
+          scope: "bounded CPU smoke"
+        }
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "bounded_cpu_after_supervisor_approval");
+  assert.match(route.reason, /explicit supervisor approval/);
+
+  const targetRunner = path.join(projectRoot, "target-runner");
+  writeJson(targetRunner, "agent/PROGRESS_STATE.json", {
+    requires_human_review: true,
+    next_safe_action: {
+      kind: "propose_review",
+      description: "Prepare report-only inventory proposal for stale blocker repair.",
+      reason: "This is report-only static audit bookkeeping and does not execute jobs."
+    }
+  });
+  route = runRoute(projectRoot, {
+    WATCHDOG_ROLE: "supervisor",
+    WATCHDOG_SUPERVISOR_MODE: "light",
+    WATCHDOG_SUPERVISOR_TARGETS: targetRunner
+  });
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "supervisor-delegated-runner-blocker-approval");
+  assert.match(route.reason, /Supervisor delegated runner blocker found/);
+
+  writeFile(projectRoot, "agent/bin/supervisor_reconcile_stale_state.py", [
+    "#!/usr/bin/env python3",
+    "import json",
+    "from pathlib import Path",
+    "Path('agent/status').mkdir(parents=True, exist_ok=True)",
+    "Path('agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.json').write_text(json.dumps({",
+    "  'schema_version': 1,",
+    "  'kind': 'supervisor_stale_state_reconciliation',",
+    "  'updated_utc': '2026-06-02T00:00:00Z',",
+    "  'changed': True,",
+    "  'results': [{'stage': 'target-runner', 'changed': True, 'status_note': 'agent/status/note.md'}],",
+    "  'safety_boundary': ['No code edits approved', 'No CPU/GPU execution approved']",
+    "}, indent=2) + '\\n')",
+    ""
+  ].join("\n"));
+  fs.chmodSync(path.join(projectRoot, "agent", "bin", "supervisor_reconcile_stale_state.py"), 0o755);
+  writeFile(projectRoot, "agent/status/runner_run_count", "1\n");
+  writeFile(projectRoot, "agent/status/runner_completed_count", "1\n");
+  run("bash", [path.join(projectRoot, "agent", "bin", "run_watchdog.sh")], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      WATCHDOG_ROLE: "supervisor",
+      CODEX_BIN: "/bin/false",
+      CODEX_SANDBOX_MODE: "read-only"
+    }
+  });
+  const reports = fs.readdirSync(path.join(projectRoot, "agent", "reports"));
+  assert.ok(reports.some((name) => name.endsWith(".json")));
+  assert.ok(!reports.some((name) => name.endsWith(".prompt.md")), "early-exit reconciliation should not build a Codex prompt");
+  const latestReport = fs.readFileSync(path.join(projectRoot, "agent", "reports", "latest.md"), "utf8");
+  assert.match(latestReport, /Supervisor Stale-State Reconciliation/);
+  assert.match(latestReport, /Codex reasoning was not launched/);
+  const supervisorMode = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "SUPERVISOR_MODE.json"), "utf8"));
+  assert.strictEqual(supervisorMode.decision.status, "completed");
+  assert.strictEqual(supervisorMode.decision.completion_reason, "supervisor_stale_state_reconciliation");
+
   fs.appendFileSync(path.join(projectRoot, "agent", "bin", "run_watchdog.sh"), "\n# intentional drift for generated-template test\n");
   let failed = false;
   try {

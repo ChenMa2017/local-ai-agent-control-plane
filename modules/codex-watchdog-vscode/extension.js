@@ -3220,6 +3220,8 @@ The runtime writes the chosen mode to \`agent/status/SUPERVISOR_MODE.json\` and 
 - Fix only stale state, stale pause markers, stale queue metadata, reviewer-pending bookkeeping, and anti-snowball summaries.
 - You may resolve runner report-only/bookkeeping blockers when the evidence is explicit and no execution, training, dataset mutation, package install, code change, allowlist expansion, or external reviewer send is being approved.
 - You must not auto-approve CPU/GPU jobs, training/rerun/compile/gate operations, data/checkpoint mutation, external reviewer sending, or new allowlist permissions. Write a review-required handoff instead.
+- If a deterministic project-local reconciliation helper has already repaired stale state, trust its compact report and do not launch a second broad reasoning pass for the same wakeup.
+- Passive waiting is a supervisor failure when a blocker is stale/repeated, the evidence is local, and the repair is bookkeeping/report-only or an explicitly supervisor-approved bounded non-mutating task.
 - For environment or external reviewer blockers, write the exact needed action and evidence path.
 - For model/data/loss decisions, prepare a concise reviewer or Deep Research evidence bundle; do not invent a new model line.
 `,
@@ -3654,16 +3656,18 @@ watchdog-permission-guardian is a mandatory gate before any action that writes, 
 ## Routing Order
 
 1. If agent/control/PAUSE exists: primary_skill = watchdog-handoff-writer; write paused status; stop.
-2. If gpu_running/, cpu_running/, or agent/queue/running/ contains a job: primary_skill = watchdog-job-queue; monitor exactly one running job; stop.
-3. If gpu_done/, cpu_done/, or agent/queue/done/ contains unprocessed output: primary_skill = watchdog-gate-evaluator; evaluate exactly one result; stop.
-4. If a queued job exists: primary_skill = watchdog-job-queue; inspect queue state; stop.
-5. If one structured report-only pending task exists: primary_skill = watchdog-orchestrator; choose exactly one report-only next action, even if old handoff text mentions review_required. Do not execute code or mutate datasets.
-6. If active structured review markers exist and the pending task would write, queue, execute, or approve external review: primary_skill = watchdog-handoff-writer; write one review item; stop.
-7. If one legal pending task exists: primary_skill = watchdog-orchestrator; choose exactly one next action. If it writes, queues, or executes, apply watchdog-permission-guardian first.
-8. If TODO has pending/unchecked work but no runnable structured task exists: primary_skill = watchdog-orchestrator; choose one report-only next step or ask daily mode to structure STATE.json; stop.
-9. If agent/status/current.md says Compaction due this cycle and no higher-priority active work exists: primary_skill = watchdog-report-curator; compact active outputs; stop.
-10. If only active review markers remain: primary_skill = watchdog-handoff-writer; write review-required handoff; stop.
-11. If no runnable task exists: primary_skill = watchdog-handoff-writer; write idle/blocked status; stop.
+2. If supervisor light/audit finds a target runner with a delegable report-only/bookkeeping or bounded non-mutating blocker: primary_skill = watchdog-orchestrator; write exactly one approval/reconciliation or explain why it is not safe; stop.
+3. If gpu_running/, cpu_running/, or agent/queue/running/ contains a job: primary_skill = watchdog-job-queue; monitor exactly one running job; stop.
+4. If gpu_done/, cpu_done/, or agent/queue/done/ contains unprocessed output: primary_skill = watchdog-gate-evaluator; evaluate exactly one result; stop.
+5. If a queued job exists: primary_skill = watchdog-job-queue; inspect queue state; stop.
+6. If one structured report-only pending task exists: primary_skill = watchdog-orchestrator; choose exactly one report-only next action, even if old handoff text mentions review_required. Do not execute code or mutate datasets.
+7. If one bounded CPU/GPU task has explicit supervisor approval: primary_skill = watchdog-orchestrator; execute or prepare exactly one task within that approval scope; stop.
+8. If active structured review markers exist and the pending task would write, queue, execute, or approve external review: primary_skill = watchdog-handoff-writer; write one review item; stop.
+9. If one legal pending task exists: primary_skill = watchdog-orchestrator; choose exactly one next action. If it writes, queues, or executes, apply watchdog-permission-guardian first.
+10. If TODO has pending/unchecked work but no runnable structured task exists: primary_skill = watchdog-orchestrator; choose one report-only next step or ask daily mode to structure STATE.json; stop.
+11. If agent/status/current.md says Compaction due this cycle and no higher-priority active work exists: primary_skill = watchdog-report-curator; compact active outputs; stop.
+12. If only active review markers remain: primary_skill = watchdog-handoff-writer; write review-required handoff; stop.
+13. If no runnable task exists: primary_skill = watchdog-handoff-writer; write idle/blocked status; stop.
 
 The generated agent/bin/route_skill.py applies this route before Codex starts and writes agent/status/SKILL_ROUTE.json. Codex output must match that route.
 
@@ -4866,6 +4870,163 @@ VALIDATE_STDERR_OUT="agent/reports/\${TS}.validate.stderr.log"
 ROUTE_STDOUT_OUT="agent/reports/\${TS}.route.stdout.log"
 ROUTE_STDERR_OUT="agent/reports/\${TS}.route.stderr.log"
 
+supervisor_reconciliation_changed() {
+  python3 - <<'SUPRECONCILEPY'
+import json
+from pathlib import Path
+
+path = Path("agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.json")
+try:
+    payload = json.loads(path.read_text())
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if payload.get("changed") is True else 1)
+SUPRECONCILEPY
+}
+
+write_supervisor_reconciliation_report() {
+  TS="$TS" JSON_OUT="$JSON_OUT" MD_OUT="$MD_OUT" JSONL_OUT="$JSONL_OUT" python3 - <<'SUPRECONCILEREPORT'
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+def read_json(path, fallback=None):
+    try:
+        return json.loads(Path(path).read_text())
+    except Exception:
+        return fallback
+
+def int_env(name, fallback):
+    try:
+        value = int(os.environ.get(name, str(fallback)))
+    except Exception:
+        return fallback
+    return value if value >= 0 else fallback
+
+def atomic_write_json(path, payload):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\\n")
+    tmp.replace(target)
+
+def append_jsonl(path, payload):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\\n")
+
+def utc_from_ts(ts):
+    try:
+        return datetime.strptime(ts, "%Y-%m-%dT%H%M%SZ").replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+ts = os.environ.get("TS", "")
+updated = utc_from_ts(ts)
+payload = read_json("agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.json", {}) or {}
+results = payload.get("results") if isinstance(payload.get("results"), list) else []
+safety = payload.get("safety_boundary") if isinstance(payload.get("safety_boundary"), list) else []
+json_out = Path(os.environ["JSON_OUT"])
+md_out = Path(os.environ["MD_OUT"])
+jsonl_out = Path(os.environ["JSONL_OUT"])
+
+report = {
+    "timestamp_utc": updated,
+    "kind": "supervisor_stale_state_reconciliation",
+    "overall_status": "completed" if payload.get("changed") is True else "uncertain",
+    "primary_skill": "watchdog-handoff-writer",
+    "work_cycle_summary": "Deterministic supervisor stale-state reconciliation completed before Codex reasoning.",
+    "reconciliation": payload,
+}
+json_out.write_text(json.dumps(report, indent=2) + "\\n")
+
+lines = [
+    "# Supervisor Stale-State Reconciliation",
+    "",
+    f"Timestamp: {updated}",
+    "",
+    "Deterministic reconciliation helper reported changed=true; Codex reasoning was not launched for this wakeup.",
+    "",
+    "## Results",
+    "",
+]
+if results:
+    for item in results:
+        if isinstance(item, dict):
+            stage = item.get("stage") or item.get("target") or "unknown"
+            changed = item.get("changed")
+            note = item.get("status_note") or item.get("note") or ""
+            lines.append(f"- {stage}: changed={changed}; note={note}")
+else:
+    lines.append("- changed=true")
+lines.extend(["", "## Safety Boundary", ""])
+if safety:
+    lines.extend(f"- {item}" for item in safety)
+else:
+    lines.extend([
+        "- No code edits approved.",
+        "- No CPU/GPU execution approved.",
+        "- No queue/training approved.",
+        "- No dataset/checkpoint mutation approved.",
+        "- No external send approved.",
+        "- No model promotion claim approved.",
+    ])
+lines.extend(["", "## Source", "", "- agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.json", ""])
+md_out.write_text("\\n".join(lines))
+
+append_jsonl(jsonl_out, {
+    "event": "supervisor_stale_state_reconciliation",
+    "timestamp": updated,
+    "changed": payload.get("changed") is True,
+})
+
+state_path = Path("agent/status/supervisor_state.json")
+state = read_json(state_path, {}) or {}
+decision = dict(state.get("decision") or {})
+mode = decision.get("mode") or state.get("mode") or os.environ.get("WATCHDOG_SUPERVISOR_MODE", "standby")
+target_count = int_env("WATCHDOG_RUNNER_COMPLETED_COUNT", int_env("WATCHDOG_RUNNER_RUN_COUNT", 0))
+try:
+    target_count = int(decision.get("target_runner_completed_count", target_count))
+except Exception:
+    pass
+decision["mode"] = mode
+decision["target_runner_completed_count"] = target_count
+decision["status"] = "completed"
+decision["completed_at"] = updated
+decision["completion_reason"] = "supervisor_stale_state_reconciliation"
+state["schema_version"] = 2
+state["updated_utc"] = updated
+state["role"] = "supervisor"
+state["mode"] = mode
+state["runner_completed_count"] = int_env("WATCHDOG_RUNNER_COMPLETED_COUNT", int_env("WATCHDOG_RUNNER_RUN_COUNT", 0))
+state["runner_started_count"] = int_env("WATCHDOG_RUNNER_STARTED_COUNT", state["runner_completed_count"])
+state["runner_failure_drift"] = int_env("WATCHDOG_RUNNER_FAILURE_DRIFT", max(0, state["runner_started_count"] - state["runner_completed_count"]))
+state["last_seen_runner_completed_count"] = max(int(state.get("last_seen_runner_completed_count") or state.get("last_seen_runner_run_count") or 0), target_count)
+state["last_seen_runner_run_count"] = state["last_seen_runner_completed_count"]
+if mode == "light":
+    state["last_light_runner_completed_count"] = max(int(state.get("last_light_runner_completed_count") or 0), target_count)
+if mode == "audit":
+    state["last_audit_runner_completed_count"] = max(int(state.get("last_audit_runner_completed_count") or state.get("last_audit_runner_run_count") or 0), target_count)
+    state["last_audit_runner_run_count"] = state["last_audit_runner_completed_count"]
+if mode in {"light", "audit"} and state.get("marker_pending") and state.get("marker_fingerprint"):
+    state["last_actioned_marker_fingerprint"] = state.get("marker_fingerprint", "")
+    state["last_marker_fingerprint"] = state.get("marker_fingerprint", "")
+state["decision"] = decision
+atomic_write_json(state_path, state)
+atomic_write_json("agent/status/SUPERVISOR_MODE.json", state)
+append_jsonl("agent/status/SUPERVISOR_MODE.events.jsonl", {
+    "event": "completed",
+    "decision_id": decision.get("decision_id", ""),
+    "timestamp": updated,
+    "mode": mode,
+    "runner_completed_count": target_count,
+    "completion_reason": "supervisor_stale_state_reconciliation",
+})
+SUPRECONCILEREPORT
+}
+
 if [ -f agent/control/PAUSE ]; then
   {
     echo "# Codex Watchdog Paused"
@@ -4888,6 +5049,27 @@ if [ -f agent/control/PAUSE ]; then
   ln -sfn "$(basename "$MD_OUT")" agent/reports/latest.md
   echo "[$(date -Is)] watchdog is paused; report written to $MD_OUT"
   exit 0
+fi
+
+if [ "$WATCHDOG_ROLE" = "supervisor" ] && [ -f agent/bin/supervisor_reconcile_stale_state.py ]; then
+  mkdir -p agent/status
+  echo "[$(date -Is)] running supervisor stale-state reconciliation helper"
+  cat > agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.json <<'JSON'
+{
+  "schema_version": 1,
+  "kind": "supervisor_stale_state_reconciliation",
+  "changed": false,
+  "reset_before_helper": true
+}
+JSON
+  if ! python3 agent/bin/supervisor_reconcile_stale_state.py > agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.stdout.log 2> agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.stderr.log; then
+    echo "warning: supervisor stale-state reconciliation helper failed; continuing to normal watchdog route" >&2
+  elif supervisor_reconciliation_changed; then
+    write_supervisor_reconciliation_report
+    ln -sfn "$(basename "$MD_OUT")" agent/reports/latest.md
+    echo "[$(date -Is)] supervisor reconciliation changed state; report written to $MD_OUT"
+    exit 0
+  fi
 fi
 
 echo "[$(date -Is)] routing watchdog skill"
@@ -5936,6 +6118,108 @@ def task_is_report_only(task):
     text = " ".join(str(task.get(key) or "") for key in ("description", "title", "summary")).lower()
     return runner == "report_only" or kind == "report_only" or "report-only" in text or "report_only" in text or "report" in task_id
 
+def task_is_supervisor_approved(task):
+    runner = str(task.get("allowed_runner") or "").strip().lower()
+    if runner not in {"cpu", "gpu"}:
+        return False
+    if task.get("supervisor_approved") is not True:
+        return False
+    approval = task.get("supervisor_approval")
+    if not isinstance(approval, dict):
+        return False
+    approved_by = str(approval.get("approved_by") or "").lower()
+    scope = str(approval.get("scope") or "").lower()
+    if "supervisor" not in approved_by:
+        return False
+    unsafe_terms = (
+        "training",
+        "external",
+        "delete",
+        "checkpoint mutation",
+        "dataset mutation",
+        "promotion",
+        "gpu0",
+        "gpu1",
+    )
+    return "bounded" in scope and not any(term in scope for term in unsafe_terms)
+
+def supervisor_targets():
+    targets = []
+    raw_targets = os.environ.get("WATCHDOG_SUPERVISOR_TARGETS", "")
+    for item in raw_targets.split(":"):
+        item = item.strip()
+        if item:
+            targets.append(Path(item))
+    config = load_json(ROOT / "agent" / "supervisor_targets.json", {})
+    config_targets = config.get("targets") if isinstance(config, dict) else None
+    if isinstance(config_targets, list):
+        for item in config_targets:
+            if isinstance(item, str) and item.strip():
+                targets.append(ROOT / item.strip())
+    return targets
+
+def supervisor_delegable_blocker():
+    safe_terms = ("report-only", "report_only", "static audit", "proposal", "inventory")
+    bounded_terms = ("bounded", "cpu-only", "cpu32", "32-sample", "sample_count=32", "exact taskbox")
+    bounded_action_terms = ("eval helper", "helper", "eval", "smoke")
+    hard_unsafe_terms = (
+        "start training",
+        "launch training",
+        "training",
+        "queue training",
+        "queue gpu",
+        "run gpu",
+        "gpu",
+        "package install",
+        "install packages",
+        "external send",
+        "delete",
+        "checkpoint mutation",
+        "dataset mutation",
+        "route b",
+        "corrected-a1",
+        "corrected-a2",
+        "promotion",
+    )
+    unsafe_terms = hard_unsafe_terms + (
+        "queue",
+        "cpu",
+        "execute gpu",
+        "execution",
+        "eval",
+        "smoke",
+        "implementation",
+        "code",
+        "helper",
+        "package",
+        "checkpoint",
+        "phase 1",
+        "phase 2",
+        "a1",
+        "a2",
+    )
+    for target in supervisor_targets():
+        progress = load_json(target / "agent" / "PROGRESS_STATE.json", {})
+        if not isinstance(progress, dict) or progress.get("requires_human_review") is not True:
+            continue
+        next_action = progress.get("next_safe_action")
+        if not isinstance(next_action, dict):
+            continue
+        kind = str(next_action.get("kind") or "").lower()
+        desc = str(next_action.get("description") or "").lower()
+        reason = str(next_action.get("reason") or "").lower()
+        text = f"{kind}\\n{desc}\\n{reason}"
+        bounded_text = f"{kind}\\n{desc}"
+        if kind != "propose_review":
+            continue
+        if ("report-only" in text or "report_only" in text) and any(term in text for term in safe_terms):
+            if not any(term in text for term in unsafe_terms):
+                return str(target)
+        if any(term in bounded_text for term in bounded_terms) and any(term in bounded_text for term in bounded_action_terms):
+            if not any(term in bounded_text for term in hard_unsafe_terms):
+                return str(target)
+    return ""
+
 def route():
     state = load_json(ROOT / "agent" / "STATE.json", {})
     paused = (ROOT / "agent" / "control" / "PAUSE").exists()
@@ -5954,6 +6238,17 @@ def route():
         }
 
     if role == "supervisor":
+        delegable = supervisor_delegable_blocker()
+        if supervisor_mode in ("audit", "light") and delegable:
+            return {
+                "primary_skill": "watchdog-orchestrator",
+                "reason": f"Supervisor delegated runner blocker found in {delegable}.",
+                "stop_condition": "Resolve one safe report-only or bounded runner blocker by writing compact approval/status notes, or explain why the blocker is not safe to delegate.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True,
+                "task_id": "supervisor-delegated-runner-blocker-approval"
+            }
         if supervisor_mode == "audit":
             return {
                 "primary_skill": "watchdog-cleanup-auditor",
@@ -6020,6 +6315,18 @@ def route():
                 "primary_skill": "watchdog-orchestrator",
                 "reason": f"{len(pending)} pending task(s) exist in STATE.json; selected report-only task can proceed without human-review handoff.",
                 "stop_condition": "Choose one report-only next safe action or write a blocker, then stop.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True,
+                "task_id": task.get("task_id")
+            }
+        supervisor_approved_pending = [t for t in pending if task_is_supervisor_approved(t)]
+        if supervisor_approved_pending:
+            task = supervisor_approved_pending[0]
+            return {
+                "primary_skill": "watchdog-orchestrator",
+                "reason": f"{len(pending)} pending task(s) exist in STATE.json; selected bounded task has explicit supervisor approval.",
+                "stop_condition": "Execute or prepare exactly one supervisor-approved bounded task within its approval scope; write outputs/provenance or a blocker, then stop.",
                 "permission_guardian_required": False,
                 "permission_guardian_result": "not_required",
                 "route_locked": True,

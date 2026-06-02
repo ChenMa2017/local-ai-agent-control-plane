@@ -2,7 +2,7 @@
 
 This extension does not automate the Codex sidebar UI. It controls a Linux-side watcher that wakes `codex exec` on a timer, reads explicit project state, and writes structured reports.
 
-Current local version: `0.1.42`.
+Current local version: `0.1.43`.
 
 Before a project root is selected, the control panel intentionally shows only the project selector. Folder status, login, schedule, actions, and reports appear only after the user explicitly selects or creates a project.
 
@@ -161,6 +161,10 @@ The supervisor now has deterministic runtime modes instead of a single long-stan
 - `light`: runs after a newly completed runner report or a changed reviewer/blocker marker. It is only for small report-only/bookkeeping repairs such as stale `pending_send`, stale marker cleanup, permission notes, blocker classification, and next-action clarification. It must not approve CPU/GPU jobs, training, data/checkpoint mutation, external reviewer sending, or allowlist expansion.
 - `audit`: runs after `codexWatchdog.supervisorAuditEveryRunnerRuns` completed runner reports, default `4`, or when runner started/completed drift indicates repeated failed runner wakeups. It performs the heavier read-only health pass for leakage, anti-snowballing, stale state, environment drift, queue hygiene, and repeated blockers.
 - `standby`: writes a short heartbeat when there is no new runner cycle and the audit cadence is not due.
+
+Supervisor projects may provide `agent/bin/supervisor_reconcile_stale_state.py`. When present, `run_watchdog.sh` runs it before route/Codex reasoning. If it writes `agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.json` with `changed: true`, the guard writes a compact reconciliation report, marks the supervisor decision completed, and exits without launching Codex reasoning.
+
+Runner projects may mark one bounded task with `supervisor_approved: true` and a `supervisor_approval` object. The route accepts only narrow bounded CPU/GPU tasks whose approval is explicitly from a supervisor and whose scope does not contain unsafe terms such as training, external send, dataset/checkpoint mutation, deletion, promotion, or GPU0/GPU1.
 
 The generated runner increments `agent/status/runner_run_count` when it wakes and writes `agent/status/runner_completed_count` only after rendering its report. The generated supervisor keys `light` and `audit` primarily from completed runner cycles. It writes a `selected` decision to `agent/status/supervisor_state.json` and `agent/status/SUPERVISOR_MODE.json` before Codex reasoning, then marks that decision `completed` or `failed` after `render_report.py` finishes. Failed supervisor runs do not advance `last_seen_runner_completed_count`, `last_light_runner_completed_count`, `last_audit_runner_completed_count`, or the actioned marker fingerprint.
 
