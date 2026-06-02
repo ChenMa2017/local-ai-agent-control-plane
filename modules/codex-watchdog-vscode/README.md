@@ -2,7 +2,7 @@
 
 This extension does not automate the Codex sidebar UI. It controls a Linux-side watcher that wakes `codex exec` on a timer, reads explicit project state, and writes structured reports.
 
-Current local version: `0.1.44`.
+Current local version: `0.1.45`.
 
 Before a project root is selected, the control panel intentionally shows only the project selector. Folder status, login, schedule, actions, and reports appear only after the user explicitly selects or creates a project.
 
@@ -158,7 +158,7 @@ The watcher can run in two cooperation roles:
 
 The supervisor now has deterministic runtime modes instead of a single long-standby behavior:
 
-- `light`: runs after a newly completed runner report or a changed reviewer/blocker marker. It is only for small report-only/bookkeeping repairs such as stale `pending_send`, stale marker cleanup, permission notes, blocker classification, and next-action clarification. It must not approve CPU/GPU jobs, training, data/checkpoint mutation, external reviewer sending, or allowlist expansion.
+- `light`: runs after a newly completed runner report or a changed reviewer/blocker marker. It is only for small report-only/bookkeeping repairs and capability-policy-approved bounded actions such as stale `pending_send`, stale marker cleanup, permission notes, blocker classification, next-action clarification, local workspace copy work, and bounded CPU eval. It must not approve disabled capability classes, direct GPU execution, training, data/checkpoint mutation, external reviewer sending, or allowlist expansion.
 - `audit`: runs after `codexWatchdog.supervisorAuditEveryRunnerRuns` completed runner reports, default `4`, or when runner started/completed drift indicates repeated failed runner wakeups. It performs the heavier read-only health pass for leakage, anti-snowballing, stale state, environment drift, queue hygiene, and repeated blockers.
 - `standby`: writes a short heartbeat when there is no new runner cycle and the audit cadence is not due.
 
@@ -189,22 +189,28 @@ This follows the operating rule: watchdogs should continue everything that is no
 {
   "schema_version": 1,
   "capabilities": {
-    "bounded_gpu_probe": {
+    "queue_enqueue": {
       "enabled": true,
-      "max_runtime_minutes": 20,
-      "max_samples": 32,
+      "allowed_queues": ["gpu_queue"],
+      "requires_taskbox": true,
       "allowed_output_paths": [
-        "workspace/<task_id>/",
-        "runs/<task_id>/",
+        "agent/queue/queued/",
         "agent/status/",
         "agent/reports/"
+      ],
+      "forbidden": [
+        "direct_gpu_execution",
+        "dataset_mutation",
+        "checkpoint_mutation",
+        "promotion",
+        "external_send"
       ]
     }
   }
 }
 ```
 
-The policy is a capability allowlist, not a general approval grant. Supervisor delegated approvals still reject secrets, package install, network fetch, dataset/checkpoint mutation, deletion, service mutation, direct shared-source edits, promotion, and external send unless the exact capability is explicitly enabled and the route classifies the task into that capability. GPU, training, promotion, and external send should stay server-specific opt-ins.
+The policy is a capability allowlist, not a general approval grant. Supervisor delegated approvals still reject secrets, package install, network fetch, dataset/checkpoint mutation, deletion, service mutation, direct shared-source edits, promotion, and external send unless the exact capability is explicitly enabled and the route classifies the task into that capability. Direct GPU execution and controlled queue submission are intentionally separate: `queue_enqueue` may allow writing a taskbox into a monitored queue, but it does not allow the runner to execute GPU commands directly. GPU probes, training canaries, queue enqueue, promotion, and external send should stay server-specific opt-ins.
 
 The generated runner increments `agent/status/runner_run_count` when it wakes and writes `agent/status/runner_completed_count` only after rendering its report. The generated supervisor keys `light` and `audit` primarily from completed runner cycles. It writes a `selected` decision to `agent/status/supervisor_state.json` and `agent/status/SUPERVISOR_MODE.json` before Codex reasoning, then marks that decision `completed` or `failed` after `render_report.py` finishes. Failed supervisor runs do not advance `last_seen_runner_completed_count`, `last_light_runner_completed_count`, `last_audit_runner_completed_count`, or the actioned marker fingerprint.
 

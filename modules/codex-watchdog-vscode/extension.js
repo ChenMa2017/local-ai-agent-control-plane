@@ -3221,6 +3221,7 @@ The runtime writes the chosen mode to \`agent/status/SUPERVISOR_MODE.json\` and 
 - You may resolve runner report-only/bookkeeping blockers when the evidence is explicit and no shared-state side effect is being approved.
 - You may approve only the capability classes explicitly allowed by \`agent/supervisor_capabilities.json\`; public defaults allow report-only, state reconciliation, stale marker cleanup, local workspace copy work, and bounded CPU eval.
 - You must not approve disabled capability classes such as GPU probes, training canaries, queue enqueue, promotion, external reviewer sending, data/checkpoint mutation, package installation, service mutation, or new high-risk allowlist permissions. Write a review-required handoff instead.
+- If \`queue_enqueue\` is enabled, it only permits writing a bounded taskbox/request into the monitored queue; it never permits the runner to execute GPU commands directly or bypass the queue runner.
 - If a deterministic project-local reconciliation helper has already repaired stale state, trust its compact report and do not launch a second broad reasoning pass for the same wakeup.
 - Passive waiting is a supervisor failure when a blocker is stale/repeated, the evidence is local, and the repair is bookkeeping/report-only or an explicitly supervisor-approved bounded non-mutating task.
 - For environment or external reviewer blockers, write the exact needed action and evidence path.
@@ -6246,6 +6247,16 @@ def classify_supervisor_capability(task, approval=None):
         or "workspace/" in text
     ):
         return "local_workspace_copy"
+    if (
+        "queue_enqueue" in text
+        or "queue enqueue" in text
+        or "enqueue" in text
+        or "agent/queue" in text
+        or "gpu_queue" in text
+        or "queue request" in text
+        or "queue taskbox" in text
+    ):
+        return "queue_enqueue"
     if "external send" in text or "deep research send" in text or "reviewer send" in text:
         return "external_send"
     if "promotion" in text or "shared_model" in text or "deployment" in text:
@@ -6281,6 +6292,15 @@ def supervisor_policy_rejection(policy, capability, text):
         "without checkpoint mutation",
         "does not mutate checkpoint",
         "does not mutate checkpoints",
+        "no direct gpu execution",
+        "without direct gpu execution",
+        "does not execute gpu directly",
+        "will not execute gpu directly",
+        "not execute gpu directly",
+        "runner will not execute gpu directly",
+        "does not run gpu directly",
+        "will not run gpu directly",
+        "not run gpu directly",
     ):
         normalized_text = normalized_text.replace(phrase, "")
     always_forbidden = (
@@ -6306,9 +6326,26 @@ def supervisor_policy_rejection(policy, capability, text):
     if text_has_any(normalized_text, always_forbidden):
         return "contains always-forbidden supervisor delegated approval term"
 
+    if capability == "queue_enqueue":
+        if not text_has_any(normalized_text, ("queue", "enqueue", "agent/queue", "gpu_queue", "queue request", "queue taskbox")):
+            return "queue_enqueue approval requires an explicit controlled queue target"
+        direct_execution_terms = (
+            "direct gpu",
+            "direct_gpu",
+            "execute gpu directly",
+            "run gpu directly",
+            "launch gpu directly",
+            "manual gpu execution",
+            "bypass queue",
+            "without queue",
+        )
+        if text_has_any(normalized_text, direct_execution_terms):
+            return "queue_enqueue cannot approve direct GPU execution or queue bypass"
+        return ""
+
     dangerous_by_capability = {
-        "bounded_gpu_probe": ("gpu", "gpu0", "gpu1", "queue gpu", "run gpu", "execute gpu"),
-        "bounded_training_canary": ("training", "train ", "queue training", "launch training", "start training"),
+        "bounded_gpu_probe": ("gpu", "gpu0", "gpu1", "run gpu", "execute gpu"),
+        "bounded_training_canary": ("training", "train ", "launch training", "start training"),
         "queue_enqueue": ("queue", "enqueue"),
         "promotion_apply": ("promotion", "promote", "shared_model", "deployment", "public docs"),
         "external_send": ("external send", "deep research send", "reviewer send"),
@@ -6383,6 +6420,8 @@ def classify_delegable_next_action(next_action):
         "eval" in text or "smoke" in text or "helper" in text or "probe" in text
     ):
         return "bounded_cpu_eval", text
+    if "queue" in text or "enqueue" in text or "agent/queue" in text or "gpu_queue" in text:
+        return "queue_enqueue", text
     if "gpu" in text and ("bounded" in text or "probe" in text or "smoke" in text or "eval" in text or "sample" in text):
         return "bounded_gpu_probe", text
     if ("training" in text or "train " in text) and ("bounded" in text or "canary" in text or "smoke" in text):

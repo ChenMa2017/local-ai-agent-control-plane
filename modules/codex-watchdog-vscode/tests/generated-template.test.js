@@ -327,6 +327,69 @@ async function main() {
   assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
   assert.doesNotMatch(route.reason, /explicit supervisor approval/);
 
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "gpu_queue_enqueue_after_supervisor_approval",
+        status: "pending",
+        allowed_runner: "gpu",
+        title: "Submit one GPU training taskbox to the controlled agent/queue/queued path.",
+        supervisor_approved: true,
+        supervisor_approval: {
+          approved_by: "supervisor",
+          approval_class: "queue_enqueue",
+          scope: "enqueue bounded GPU training taskbox into controlled agent/queue/queued; queue runner executes later"
+        }
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.doesNotMatch(route.reason, /explicit supervisor approval/);
+
+  writeJson(projectRoot, "agent/supervisor_capabilities.json", {
+    schema_version: 1,
+    capabilities: {
+      queue_enqueue: {
+        enabled: true,
+        allowed_queues: ["gpu_queue"],
+        requires_taskbox: true
+      }
+    }
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "gpu_queue_enqueue_after_supervisor_approval");
+  assert.match(route.reason, /explicit supervisor approval/);
+
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "direct_gpu_execution_after_supervisor_approval",
+        status: "pending",
+        allowed_runner: "gpu",
+        title: "Bypass queue and run GPU directly after supervisor approval.",
+        supervisor_approved: true,
+        supervisor_approval: {
+          approved_by: "supervisor",
+          approval_class: "queue_enqueue",
+          scope: "bypass queue and execute GPU directly"
+        }
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.doesNotMatch(route.reason, /explicit supervisor approval/);
+  fs.unlinkSync(path.join(projectRoot, "agent", "supervisor_capabilities.json"));
+
   const targetRunner = path.join(projectRoot, "target-runner");
   writeJson(targetRunner, "agent/PROGRESS_STATE.json", {
     requires_human_review: true,
@@ -377,6 +440,38 @@ async function main() {
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "supervisor-delegated-runner-blocker-approval");
   assert.match(route.reason, /capability=bounded_gpu_probe/);
+
+  const targetQueueRunner = path.join(projectRoot, "target-queue-runner");
+  writeJson(targetQueueRunner, "agent/PROGRESS_STATE.json", {
+    requires_human_review: true,
+    next_safe_action: {
+      kind: "propose_review",
+      description: "Enqueue bounded GPU training taskbox into controlled agent/queue/queued.",
+      reason: "Runner will not execute GPU directly; queue runner handles allowlist, timeout, and logs."
+    }
+  });
+  route = runRoute(projectRoot, {
+    WATCHDOG_ROLE: "supervisor",
+    WATCHDOG_SUPERVISOR_MODE: "light",
+    WATCHDOG_SUPERVISOR_TARGETS: targetQueueRunner
+  });
+  assert.notStrictEqual(route.task_id, "supervisor-delegated-runner-blocker-approval");
+
+  writeJson(targetQueueRunner, "agent/supervisor_capabilities.json", {
+    schema_version: 1,
+    capabilities: {
+      queue_enqueue: true
+    }
+  });
+  route = runRoute(projectRoot, {
+    WATCHDOG_ROLE: "supervisor",
+    WATCHDOG_SUPERVISOR_MODE: "light",
+    WATCHDOG_SUPERVISOR_TARGETS: targetQueueRunner
+  });
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "supervisor-delegated-runner-blocker-approval");
+  assert.match(route.reason, /capability=queue_enqueue/);
 
   writeFile(projectRoot, "agent/bin/supervisor_reconcile_stale_state.py", [
     "#!/usr/bin/env python3",
