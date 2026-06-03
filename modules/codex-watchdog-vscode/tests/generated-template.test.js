@@ -130,6 +130,62 @@ async function main() {
   });
   assert.match(validateOutput, /generated manifest ok:/);
 
+  const watchSchema = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "schemas", "watch_decision.schema.json"), "utf8"));
+  assert.deepStrictEqual(
+    new Set(watchSchema.required),
+    new Set(Object.keys(watchSchema.properties)),
+    "watch_decision schema root required must include every root property for strict response_format validation"
+  );
+  assert.ok(watchSchema.required.includes("supervisor_mode"));
+  assert.ok(watchSchema.required.includes("review_scope"));
+  assert.ok(watchSchema.required.includes("review_resolver"));
+
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "observer",
+    requires_review: false,
+    tasks: []
+  });
+  writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
+    "# Review Pending",
+    "",
+    "- state: none",
+    "- pending_send: no",
+    "- requires_human_review: false",
+    "- scope: none",
+    "- resolver: none",
+    ""
+  ].join("\n"));
+  writeFile(projectRoot, "agent/BLOCKERS.md", [
+    "# Blockers",
+    "",
+    "Blocker type: none",
+    "- Required: false",
+    ""
+  ].join("\n"));
+  writeFile(projectRoot, "agent/TODO.md", "# TODO\n\n- none\n");
+  writeJson(projectRoot, "agent/queue/done/old-result.json", {
+    job_id: "old",
+    task_id: "old_task",
+    created_utc: "2026-06-03T00:00:00Z",
+    runner: "cpu",
+    command_profile: "test",
+    expected_outputs: ["agent/reports/old.md"],
+    max_runtime_minutes: 1,
+    status: "done"
+  });
+  const oldDonePath = path.join(projectRoot, "agent", "queue", "done", "old-result.json");
+  const oldDate = new Date(Date.now() - 8 * 60 * 60 * 1000);
+  fs.utimesSync(oldDonePath, oldDate, oldDate);
+  let route = runRoute(projectRoot, { WATCHDOG_QUEUE_RESULT_FRESH_MINUTES: "240" });
+  assert.notStrictEqual(route.primary_skill, "watchdog-gate-evaluator", "stale done result must not retrigger gate evaluator");
+
+  const freshDate = new Date();
+  fs.utimesSync(oldDonePath, freshDate, freshDate);
+  route = runRoute(projectRoot, { WATCHDOG_QUEUE_RESULT_FRESH_MINUTES: "240" });
+  assert.strictEqual(route.primary_skill, "watchdog-gate-evaluator", "fresh done result should trigger gate evaluator");
+  fs.utimesSync(oldDonePath, oldDate, oldDate);
+
   writeJson(projectRoot, "agent/STATE.json", {
     schema_version: 1,
     mode: "observer",
@@ -150,7 +206,7 @@ async function main() {
     "This line is context, not an active review marker.",
     ""
   ].join("\n"));
-  let route = runRoute(projectRoot);
+  route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "report_only_inventory");

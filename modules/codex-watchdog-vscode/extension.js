@@ -3660,7 +3660,7 @@ watchdog-permission-guardian is a mandatory gate before any action that writes, 
 1. If agent/control/PAUSE exists: primary_skill = watchdog-handoff-writer; write paused status; stop.
 2. If supervisor light/audit finds a target runner with a delegable report-only/bookkeeping or bounded non-mutating blocker: primary_skill = watchdog-orchestrator; write exactly one approval/reconciliation or explain why it is not safe; stop.
 3. If gpu_running/, cpu_running/, or agent/queue/running/ contains a job: primary_skill = watchdog-job-queue; monitor exactly one running job; stop.
-4. If gpu_done/, cpu_done/, or agent/queue/done/ contains unprocessed output: primary_skill = watchdog-gate-evaluator; evaluate exactly one result; stop.
+4. If gpu_done/, cpu_done/, or agent/queue/done/ contains fresh unprocessed output within WATCHDOG_QUEUE_RESULT_FRESH_MINUTES: primary_skill = watchdog-gate-evaluator; evaluate exactly one result; stop.
 5. If a queued job exists: primary_skill = watchdog-job-queue; inspect queue state; stop.
 6. If one structured report-only pending task exists: primary_skill = watchdog-orchestrator; choose exactly one report-only next action, even if old handoff text mentions review_required. Do not execute code or mutate datasets.
 7. If one pending task has explicit supervisor approval and passes \`agent/supervisor_capabilities.json\`: primary_skill = watchdog-orchestrator; execute or prepare exactly one task within that approval scope; stop.
@@ -4003,6 +4003,7 @@ The final output must follow the JSON schema.
     required: [
       "timestamp_utc",
       "overall_status",
+      "supervisor_mode",
       "primary_skill",
       "skill_route_reason",
       "skill_stop_condition",
@@ -4018,6 +4019,8 @@ The final output must follow the JSON schema.
       "blocked_items",
       "next_safe_action",
       "requires_human_review",
+      "review_scope",
+      "review_resolver",
       "human_review_reason",
       "forbidden_actions_not_taken",
       "evidence",
@@ -6026,6 +6029,14 @@ from pathlib import Path
 ROOT = Path(".")
 OUT = ROOT / "agent" / "status" / "SKILL_ROUTE.json"
 
+def int_env(name, default):
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+RESULT_FRESH_MINUTES = int_env("WATCHDOG_QUEUE_RESULT_FRESH_MINUTES", 240)
+
 def now_utc():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -6035,12 +6046,21 @@ def load_json(path, default=None):
     except Exception:
         return default
 
-def has_files(*dirs):
+def has_files(*dirs, freshness_minutes=None):
+    cutoff = None
+    if freshness_minutes is not None:
+        cutoff = datetime.now(timezone.utc).timestamp() - (max(0, int(freshness_minutes)) * 60)
     for dirname in dirs:
         d = ROOT / dirname
         if d.is_dir():
             for item in d.iterdir():
                 if item.is_file() and not item.name.startswith("."):
+                    if cutoff is not None:
+                        try:
+                            if item.stat().st_mtime < cutoff:
+                                continue
+                        except OSError:
+                            continue
                     return True
     return False
 
@@ -6514,7 +6534,7 @@ def route():
             "route_locked": True
         }
 
-    if has_files("agent/queue/done", "gpu_done", "cpu_done"):
+    if has_files("agent/queue/done", "gpu_done", "cpu_done", freshness_minutes=RESULT_FRESH_MINUTES):
         return {
             "primary_skill": "watchdog-gate-evaluator",
             "reason": "A completed job/result is present and may need gate evaluation.",

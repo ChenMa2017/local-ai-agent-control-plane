@@ -2,7 +2,7 @@
   "name": "codex-watchdog",
   "displayName": "Codex Watchdog",
   "description": "Controls a server-side scheduled Codex watcher from VSCode Remote.",
-  "version": "0.1.45",
+  "version": "0.1.47",
   "publisher": "chenma",
   "engines": {
     "vscode": "^1.92.0"
