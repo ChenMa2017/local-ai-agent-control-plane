@@ -169,8 +169,6 @@ Runner projects may mark one bounded task with `supervisor_approved: true` and a
 ```text
 enabled by default:
   report_only
-  state_reconcile
-  stale_marker_cleanup
   local_workspace_copy
   bounded_cpu_eval
 

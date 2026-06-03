@@ -3219,7 +3219,7 @@ The runtime writes the chosen mode to \`agent/status/SUPERVISOR_MODE.json\` and 
 - If a runner is active, do not wait on or interrupt it.
 - Fix only stale state, stale pause markers, stale queue metadata, reviewer-pending bookkeeping, and anti-snowball summaries.
 - You may resolve runner report-only/bookkeeping blockers when the evidence is explicit and no shared-state side effect is being approved.
-- You may approve only the capability classes explicitly allowed by \`agent/supervisor_capabilities.json\`; public defaults allow report-only, state reconciliation, stale marker cleanup, local workspace copy work, and bounded CPU eval.
+- You may approve only the capability classes explicitly allowed by \`agent/supervisor_capabilities.json\`; public defaults allow report-only, local workspace copy work, and bounded CPU eval.
 - You must not approve disabled capability classes such as GPU probes, training canaries, queue enqueue, promotion, external reviewer sending, data/checkpoint mutation, package installation, service mutation, or new high-risk allowlist permissions. Write a review-required handoff instead.
 - If \`queue_enqueue\` is enabled, it only permits writing a bounded taskbox/request into the monitored queue; it never permits the runner to execute GPU commands directly or bypass the queue runner.
 - If a deterministic project-local reconciliation helper has already repaired stale state, trust its compact report and do not launch a second broad reasoning pass for the same wakeup.
@@ -6142,8 +6142,8 @@ def task_is_report_only(task):
 
 DEFAULT_SUPERVISOR_CAPABILITIES = {
     "report_only": True,
-    "state_reconcile": True,
-    "stale_marker_cleanup": True,
+    "state_reconcile": False,
+    "stale_marker_cleanup": False,
     "local_workspace_copy": True,
     "bounded_cpu_eval": True,
     "bounded_gpu_probe": False,
