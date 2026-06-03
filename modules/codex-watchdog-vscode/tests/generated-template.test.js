@@ -343,6 +343,45 @@ async function main() {
   assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
   assert.doesNotMatch(route.reason, /explicit supervisor approval/);
 
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "state_reconcile_after_supervisor_approval",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Run state reconcile action after supervisor approval.",
+        kind: "state_reconcile",
+        supervisor_approved: true,
+        supervisor_approval: {
+          approved_by: "supervisor",
+          approval_class: "state_reconcile",
+          scope: "compact state reconcile and compact report alignment"
+        }
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.doesNotMatch(route.reason, /explicit supervisor approval/);
+
+  writeJson(projectRoot, "agent/supervisor_capabilities.json", {
+    schema_version: 1,
+    capabilities: {
+      state_reconcile: {
+        enabled: true
+      }
+    }
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "state_reconcile_after_supervisor_approval");
+  assert.match(route.reason, /explicit supervisor approval/);
+  fs.unlinkSync(path.join(projectRoot, "agent", "supervisor_capabilities.json"));
+
   writeJson(projectRoot, "agent/supervisor_capabilities.json", {
     schema_version: 1,
     capabilities: {
@@ -353,10 +392,29 @@ async function main() {
       }
     }
   });
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "bounded_gpu_after_supervisor_approval_v2",
+        status: "pending",
+        allowed_runner: "gpu",
+        title: "Run one bounded GPU probe after supervisor approval.",
+        supervisor_approved: true,
+        supervisor_approval: {
+          approved_by: "supervisor",
+          approval_class: "bounded_gpu_probe",
+          scope: "bounded GPU probe with fixed timeout and no promotion"
+        }
+      }
+    ]
+  });
   route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.permission_guardian_required, false);
-  assert.strictEqual(route.task_id, "bounded_gpu_after_supervisor_approval");
+  assert.strictEqual(route.task_id, "bounded_gpu_after_supervisor_approval_v2");
   assert.match(route.reason, /explicit supervisor approval/);
   fs.unlinkSync(path.join(projectRoot, "agent", "supervisor_capabilities.json"));
 
