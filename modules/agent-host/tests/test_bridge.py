@@ -213,6 +213,101 @@ class BridgeTests(unittest.TestCase):
                 )
             self.assertEqual(ctx.exception.status, 400)
 
+    def test_codex_prepare_generates_intake_artifacts_for_report_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            response = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Please summarize the current project status and blockers.",
+                    "source": "web",
+                },
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["status"], "prepared")
+            self.assertTrue(response["ready_to_run"])
+            self.assertEqual(response["contract"]["objective"], "report_only")
+            intake_dir = Path(response["artifacts_dir"])
+            self.assertTrue((intake_dir / "INTENT_DRAFT.json").exists())
+            self.assertTrue((intake_dir / "TASK_CONTRACT.json").exists())
+            self.assertTrue((intake_dir / "TASKBOX_DRAFT.json").exists())
+            self.assertTrue((intake_dir / "POLICY_PREFLIGHT.json").exists())
+
+    def test_codex_prepare_requests_clarification_for_write_without_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            response = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Please fix this for me.",
+                    "source": "discord",
+                },
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+
+            self.assertEqual(response["status"], "need_user_reply")
+            self.assertFalse(response["ready_to_run"])
+            self.assertIn("write_scope_missing", response["gray_areas"])
+            self.assertGreaterEqual(len(response["questions"]), 1)
+            preflight = json.loads((Path(response["artifacts_dir"]) / "POLICY_PREFLIGHT.json").read_text())
+            self.assertFalse(preflight["ok"])
+            self.assertIn("clarification_required", preflight["blocked_by"])
+
+    def test_codex_prepare_followup_can_reuse_existing_prompt_by_intake_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            first = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Please fix this for me.",
+                    "source": "discord",
+                },
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+
+            second = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "intake_id": first["intake_id"],
+                    "answers": "Only modify README.md and docs/setup/README.md using a local workspace copy.",
+                    "source": "discord",
+                },
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+
+            self.assertEqual(second["status"], "prepared")
+            self.assertEqual(second["contract"]["objective"], "local_workspace_copy")
+            self.assertEqual(second["contract"]["prompt"], "Please fix this for me.")
+            self.assertTrue((Path(second["artifacts_dir"]) / "ANSWERS.jsonl").exists())
+
+    def test_codex_prepare_blocks_high_risk_training_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            response = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Launch GPU training and promote the checkpoint if metrics improve.",
+                    "source": "discord",
+                },
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+
+            self.assertEqual(response["status"], "blocked")
+            self.assertFalse(response["ready_to_run"])
+            self.assertEqual(response["contract"]["risk_class"], "high")
+            self.assertIn("human_review_required", response["preflight"]["blocked_by"])
+
     def test_codex_run_rejects_non_allowlisted_project(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -155,6 +155,43 @@ class AgentHostClient:
             payload,
         )
 
+    def prepare(
+        self,
+        *,
+        workspace: str,
+        prompt: str,
+        source_user_id: str,
+        source_channel_id: str,
+        source_message_id: str,
+        guild_id: str | None = None,
+        intake_id: str | None = None,
+        answers: str | None = None,
+        mode: str | None = None,
+        reference_task_id: str | None = None,
+        command_name: str = "/agent_prepare",
+    ) -> dict[str, Any]:
+        payload = {
+            "workspace": workspace,
+            "prompt": prompt,
+            "source": "discord",
+            "source_user_id": source_user_id,
+            "source_channel_id": source_channel_id,
+            "source_message_id": source_message_id,
+            "metadata": {
+                "guild_id": guild_id or "",
+                "command": command_name,
+            },
+        }
+        if intake_id:
+            payload["intake_id"] = intake_id
+        if answers:
+            payload["answers"] = answers
+        if mode:
+            payload["mode"] = mode
+        if reference_task_id:
+            payload["reference_task_id"] = reference_task_id
+        return self._request("POST", "/codex/prepare", payload)
+
     def status(self, task_id: str) -> dict[str, Any]:
         return self._request("POST", "/codex/status", {"task_id": task_id})
 

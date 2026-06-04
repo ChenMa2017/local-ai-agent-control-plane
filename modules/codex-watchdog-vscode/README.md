@@ -69,18 +69,32 @@ The control panel uses distinct button styling for actions, so clickable control
 1. Run `Codex Watchdog: Open Control Panel`.
 2. Enter the Linux project folder, then click `Use / Create Project`.
 3. Click `Prepare Project`.
-4. Tell daily Codex your real requirement and ask it to instantiate the watchdog task.
-5. Click `Start Guard`.
+4. Use the `Bootstrap Conversation` section inside the panel to describe the real requirement.
+5. Use `Generate Drafts` to let Codex answer inside the panel and continue the setup discussion.
+6. When the goal feels clear enough, use `Preview Changed Files` to synthesize a candidate setup draft from the conversation transcript.
+7. Click `Instantiate Project` when the candidate files look right.
+8. Review the instantiated files, then click `Start Guard`.
 
 If the folder path does not exist, `Use / Create Project` creates it directly from the path field and selects it. It does not also prepare the template; that remains the separate `Prepare Project` step. `Browse Existing` opens a real folder picker for already existing directories, using the typed path or its nearest existing parent as the starting point. If you type a new path into the project field, the panel hides the old project's login, timer, and latest report until you click `Use / Create Project` or choose a folder with `Browse Existing`.
 
-`Prepare Project` creates the watchdog protocol and handoff files, including `agent/TASK_REQUEST.md`. This is the pause point where the user gives a plain-language requirement and daily Codex turns it into concrete watchdog files:
+`Prepare Project` creates the watchdog protocol and handoff files, including `agent/TASK_REQUEST.md`. This is the pause point where the user gives a plain-language requirement and the panel-local bootstrap conversation turns it into concrete watchdog files:
 
 - `agent/PLAN.md`
 - `agent/TODO.md`
 - `agent/STATE.md`
 - `agent/SAFETY.md`
 - `agent/DAILY_HANDOFF.md`
+
+The control panel now keeps that setup discussion inside the UI:
+
+- `Bootstrap Conversation` accepts the user's natural-language requirement;
+- `Generate Drafts` runs a lightweight panel-local discussion turn so the user and AI can refine the watchdog goal in conversation;
+- `Preview Changed Files` synthesizes a candidate version of the five core handoff documents from that conversation transcript;
+- `Instantiate Project` is the explicit commit point that writes the latest candidate draft into `PLAN/TODO/STATE/SAFETY/DAILY_HANDOFF`;
+- the transcript is saved under `agent/status/bootstrap_conversation.json` and `agent/status/bootstrap_conversation.md`;
+- the latest candidate-file summary is saved under `agent/status/bootstrap_change_preview.md`;
+- `Reset Conversation` archives the current transcript and latest draft artifacts under `agent/status/bootstrap_archive/`, then clears the panel for a fresh setup round;
+- follow-up clarifications can continue in the same panel instead of moving to a separate chat.
 
 `Start Guard` then performs the runtime startup path:
 
@@ -107,7 +121,7 @@ After the browser/device login finishes, click `Start Guard` again. Normal start
 
 If the panel says the Codex executable is missing, the problem is not login. The extension first tries `command -v codex`, then searches the OpenAI VSCode extension binary path such as `~/.vscode-server/extensions/openai.chatgpt-*/bin/linux-*/codex`.
 
-After the first `Prepare Project`, task instantiation and later operations can be done by plain language through Codex. For example:
+After the first `Prepare Project`, task instantiation and later operations can still be described in plain language. A typical bootstrap request inside the panel is:
 
 ```text
 请读取 agent/TASK_REQUEST.md 和 agent/CODEX_TAKEOVER.md。
@@ -115,7 +129,7 @@ After the first `Prepare Project`, task instantiation and later operations can b
 填好 PLAN/TODO/STATE/SAFETY/DAILY_HANDOFF，但先不要启动 timer。
 ```
 
-After that, Codex can start the guard when you ask. Codex should read `README.codex-watchdog.md` and `agent/CODEX_TAKEOVER.md`, or run:
+After that, review the drafted files in the project. Codex can start the guard only when you ask. Codex should read `README.codex-watchdog.md` and `agent/CODEX_TAKEOVER.md`, or run:
 
 ```bash
 ./agent/bin/watchdog --help

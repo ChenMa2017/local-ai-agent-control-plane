@@ -128,6 +128,17 @@ The manifest stores relative paths and SHA-256 template hashes only. It does not
 
 That command validates compact runtime JSON and checks generated file drift against `generated_manifest.json`. If generated scripts or templates were hand-edited, validation fails and asks you to refresh generated watcher files.
 
+The VSCode watchdog panel now also contains a `Bootstrap Conversation` setup flow. Instead of asking users to switch to a separate chat, the panel can:
+
+- keep the initialization conversation inside the project UI;
+- use `Generate Drafts` as the lightweight discussion turn so the user and AI can refine the watchdog goal in-panel;
+- use `Preview Changed Files` to synthesize a candidate version of `agent/PLAN.md`, `agent/TODO.md`, `agent/STATE.md`, `agent/SAFETY.md`, and `agent/DAILY_HANDOFF.md` from that conversation;
+- use `Instantiate Project` as the explicit point that applies that latest candidate draft to the project files;
+- save the transcript under `agent/status/bootstrap_conversation.json` and `agent/status/bootstrap_conversation.md`;
+- save a latest change preview under `agent/status/bootstrap_change_preview.md`;
+- archive old setup rounds under `agent/status/bootstrap_archive/` when the user resets the conversation;
+- let later Codex sessions and teammates inspect how the watchdog objective was defined.
+
 ## Local Config
 
 Copy examples:
@@ -179,6 +190,7 @@ Agent Host also provides safe operational read APIs:
 
 ```text
 GET /health/summary
+POST /codex/prepare
 POST /codex/result-page
 ```
 
@@ -186,6 +198,7 @@ Discord Adapter maps them to:
 
 ```text
 /agent_health
+/agent_prepare
 /agent_task_page
 ```
 

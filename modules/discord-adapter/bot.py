@@ -56,7 +56,7 @@ def safe_command_prefix(value: Any) -> str:
     prefix = str(value or "agent").strip().lower().replace(" ", "_")
     if not re.match(r"^[a-z0-9_-]{1,20}$", prefix):
         raise ValueError("discord.command_prefix must be 1-20 lowercase letters, numbers, underscore, or dash")
-    for action in ("status", "health", "workspaces", "run", "task", "task_page", "cancel"):
+    for action in ("status", "health", "workspaces", "prepare", "run", "task", "task_page", "cancel"):
         if len(slash_command_name(prefix, action)) > 32:
             raise ValueError("discord.command_prefix makes slash command names too long")
     return prefix
@@ -113,17 +113,33 @@ def env_value(name: str, required: bool = True) -> str:
     return value
 
 
-def authorize(config: AdapterConfig, guild_id: Any, channel_id: Any, user_id: Any) -> DiscordUser:
+def channel_candidates(channel_id: Any, channel: Any = None) -> tuple[str, ...]:
+    candidates: list[str] = []
+    for value in (
+        channel_id,
+        getattr(channel, "id", None) if channel is not None else None,
+        getattr(channel, "parent_id", None) if channel is not None else None,
+    ):
+        text = str(value or "").strip()
+        if text and text not in candidates:
+            candidates.append(text)
+    return tuple(candidates)
+
+
+def authorize_candidates(config: AdapterConfig, guild_id: Any, candidate_channel_ids: tuple[str, ...], user_id: Any) -> DiscordUser:
     guild = str(guild_id or "")
-    channel = str(channel_id or "")
     user = str(user_id or "")
     if config.allowed_guild_ids and guild not in config.allowed_guild_ids:
         raise PermissionDenied("Permission denied: guild is not allowlisted.")
-    if config.allowed_channel_ids and channel not in config.allowed_channel_ids:
+    if config.allowed_channel_ids and not any(channel in config.allowed_channel_ids for channel in candidate_channel_ids):
         raise PermissionDenied("Permission denied: channel is not allowlisted.")
     if user not in config.users:
         raise PermissionDenied("Permission denied: user is not allowlisted.")
     return config.users[user]
+
+
+def authorize(config: AdapterConfig, guild_id: Any, channel_id: Any, user_id: Any) -> DiscordUser:
+    return authorize_candidates(config, guild_id, (str(channel_id or ""),), user_id)
 
 
 def ensure_prompt_allowed(prompt: str, max_chars: int) -> str:
@@ -144,6 +160,27 @@ def safe_reference_task_id(value: str) -> str:
     if not re.match(r"^task_[A-Za-z0-9_.-]+$", text):
         raise ValueError("reference_task_id must be a valid task id")
     return text
+
+
+def safe_intake_id(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if not re.match(r"^intake_[A-Za-z0-9_.-]+$", text):
+        raise ValueError("intake_id must be a valid intake id")
+    return text
+
+
+def extract_task_id_from_text(text: str) -> str:
+    for pattern in (
+        r"(?im)^task_id:\s*(task_[A-Za-z0-9_.-]+)\s*$",
+        r"(?im)^Task:\s*(task_[A-Za-z0-9_.-]+)\s*$",
+        r"\b(task_[A-Za-z0-9_.-]+)\b",
+    ):
+        match = re.search(pattern, str(text or ""))
+        if match:
+            return match.group(1)
+    return ""
 
 
 FINAL_TASK_STATUSES = {"done", "failed", "cancelled", "timeout", "stale", "policy_violation"}
@@ -331,6 +368,49 @@ def format_run_response(
     return "\n".join(lines).strip()
 
 
+def format_prepare_response(
+    data: dict[str, Any],
+    workspace: str,
+    command_prefix: str = "agent",
+) -> str:
+    intake_id = str(data.get("intake_id") or "")
+    status = str(data.get("status") or "unknown")
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    preflight = data.get("preflight") if isinstance(data.get("preflight"), dict) else {}
+    questions = data.get("questions") if isinstance(data.get("questions"), list) else []
+    lines = [
+        "任务准备结果：",
+        "",
+        f"intake_id: {intake_id or '(missing)'}",
+        f"workspace: {workspace}",
+        f"status: {status}",
+        f"objective: {contract.get('objective', 'unknown')}",
+        f"risk_class: {contract.get('risk_class', 'unknown')}",
+        f"preflight: {'ok' if preflight.get('ok') else 'blocked'}",
+    ]
+    if questions:
+        lines.extend(["", "还需要你补充："])
+        for idx, question in enumerate(questions, start=1):
+            lines.append(f"{idx}. {sanitize_discord_text(str(question))}")
+        lines.extend([
+            "",
+            f"继续方式：再次执行 /{slash_command_name(command_prefix, 'prepare')}，带上同一个 intake_id，并把回复写进 answers。",
+        ])
+    else:
+        lines.extend([
+            "",
+            f"下一步：{preflight.get('required_action', 'review')}",
+        ])
+        if data.get("ready_to_run"):
+            lines.append(f"这份 contract 已可执行；确认后可用 /{slash_command_name(command_prefix, 'run')} 正式创建任务。")
+    reasons = preflight.get("reasons") if isinstance(preflight.get("reasons"), list) else []
+    if reasons:
+        lines.extend(["", "预检说明："])
+        for reason in reasons[:3]:
+            lines.append(f"- {sanitize_discord_text(str(reason))}")
+    return "\n".join(lines).strip()
+
+
 def format_thread_intro(task_id: str, workspace: str, mode: str, prompt: str, reference_task_id: str = "") -> str:
     lines = [
         "任务已创建。",
@@ -349,9 +429,10 @@ def format_thread_intro(task_id: str, workspace: str, mode: str, prompt: str, re
         ])
     lines.extend([
         "",
-        "Prompt:",
+        "**👤 你的提问**",
         prompt_preview(prompt, 900) or "(empty)",
         "",
+        "**⏳ 等待 AI 回答**",
         "我会在这里发送完成通知。",
     ])
     return "\n".join(lines)
@@ -398,15 +479,16 @@ def format_completion_message(task_id: str, status_data: dict[str, Any], result_
         summary, truncated = truncate_text(result_text.strip() or "(empty result)", max_chars)
         suffix = "\n\nResult truncated. Open local Web UI for the full safe result." if truncated else ""
         title = "任务完成。" if status == "done" else "任务触碰了 protected path policy，已结束。"
-        return f"{title}\n\nTask: {task_id}\n\nResult:\n{sanitize_discord_text(summary)}{suffix}"
+        return f"**🤖 AI 回答**\n\n{title}\n\nTask: {task_id}\n\nResult:\n{sanitize_discord_text(summary)}{suffix}"
     short_status, _truncated = truncate_text(status_text.strip() or status, min(max_chars, 1000))
-    return f"任务已结束：{status}\n\nTask: {task_id}\n\n{sanitize_discord_text(short_status)}"
+    return f"**🤖 AI 回答**\n\n任务已结束：{status}\n\nTask: {task_id}\n\n{sanitize_discord_text(short_status)}"
 
 
 class ThreadStateStore:
     def __init__(self, state_dir: Path) -> None:
         self.state_dir = state_dir
         self.path = state_dir / "task_threads.json"
+        self.message_path = state_dir / "task_thread_messages.json"
 
     def load(self) -> dict[str, dict[str, Any]]:
         if not self.path.exists():
@@ -424,6 +506,23 @@ class ThreadStateStore:
         temp = self.path.with_suffix(f".{os.getpid()}.tmp")
         temp.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n")
         os.replace(temp, self.path)
+
+    def load_messages(self) -> dict[str, dict[str, Any]]:
+        if not self.message_path.exists():
+            return {}
+        try:
+            data = json.loads(self.message_path.read_text())
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(key): value for key, value in data.items() if isinstance(value, dict)}
+
+    def save_messages(self, records: dict[str, dict[str, Any]]) -> None:
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        temp = self.message_path.with_suffix(f".{os.getpid()}.tmp")
+        temp.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n")
+        os.replace(temp, self.message_path)
 
     def upsert_thread(
         self,
@@ -457,6 +556,29 @@ class ThreadStateStore:
         self.save(records)
         return record
 
+    def remember_message(
+        self,
+        *,
+        message_id: str,
+        task_id: str,
+        thread_id: str,
+        workspace: str,
+        kind: str,
+    ) -> None:
+        key = str(message_id or "").strip()
+        if not key:
+            return
+        records = self.load_messages()
+        records[key] = {
+            "message_id": key,
+            "task_id": task_id,
+            "thread_id": thread_id,
+            "workspace": workspace,
+            "kind": kind,
+            "updated_at": utc_now(),
+        }
+        self.save_messages(records)
+
     def task_id_for_thread(self, thread_id: str) -> str:
         thread = str(thread_id or "")
         if not thread:
@@ -469,6 +591,23 @@ class ThreadStateStore:
             return ""
         matches.sort(key=lambda record: str(record.get("updated_at") or record.get("created_at") or ""), reverse=True)
         return str(matches[0].get("task_id") or "")
+
+    def latest_record_for_thread(self, thread_id: str) -> dict[str, Any]:
+        thread = str(thread_id or "")
+        if not thread:
+            return {}
+        matches = [
+            record for record in self.load().values()
+            if str(record.get("thread_id") or "") == thread
+        ]
+        if not matches:
+            return {}
+        matches.sort(key=lambda record: str(record.get("updated_at") or record.get("created_at") or ""), reverse=True)
+        return matches[0]
+
+    def task_id_for_message(self, message_id: str) -> str:
+        record = self.load_messages().get(str(message_id or "").strip(), {})
+        return str(record.get("task_id") or "")
 
     def pending(self) -> list[dict[str, Any]]:
         return [record for record in self.load().values() if not record.get("notified_done")]
@@ -527,6 +666,22 @@ def default_mode_for_workspace(workspaces: dict[str, Any], workspace: str) -> st
         if str(item.get("id", "")) == workspace:
             return str(item.get("default_mode") or "readonly")
     return "readonly"
+
+
+def resolve_reference_task_id_from_reply(
+    store: ThreadStateStore,
+    *,
+    thread_id: str,
+    referenced_message_id: str = "",
+    referenced_message_text: str = "",
+) -> str:
+    task_id = store.task_id_for_message(referenced_message_id)
+    if task_id:
+        return task_id
+    task_id = extract_task_id_from_text(referenced_message_text)
+    if task_id:
+        return task_id
+    return store.task_id_for_thread(thread_id)
 
 
 def format_error(error: Exception) -> str:
@@ -619,6 +774,7 @@ def run_bot(config: AdapterConfig) -> None:
         raise RuntimeError("discord.py is not installed. Run: python3 -m pip install -r requirements.txt")
 
     intents = discord.Intents.default()
+    intents.message_content = True
 
     class AgentDiscordBot(discord.Client):
         def __init__(self) -> None:
@@ -649,7 +805,20 @@ def run_bot(config: AdapterConfig) -> None:
             await super().close()
 
         def require_user(self, interaction: Any) -> DiscordUser:
-            return authorize(config, interaction.guild_id, interaction.channel_id, interaction.user.id)
+            return authorize_candidates(
+                config,
+                interaction.guild_id,
+                channel_candidates(interaction.channel_id, getattr(interaction, "channel", None)),
+                interaction.user.id,
+            )
+
+        def require_message_user(self, message: Any) -> DiscordUser:
+            return authorize_candidates(
+                config,
+                getattr(message.guild, "id", None),
+                channel_candidates(getattr(message.channel, "id", None), message.channel),
+                getattr(message.author, "id", None),
+            )
 
         async def reply_error(self, interaction: Any, error: Exception) -> None:
             text = format_error(error)
@@ -682,7 +851,47 @@ def run_bot(config: AdapterConfig) -> None:
             if target is None:
                 target = await self.fetch_channel(int(thread_id))
             text, _truncated = truncate_text(sanitize_discord_text(message), 1900)
-            await target.send(text)
+            sent = await target.send(text)
+            self.thread_store.remember_message(
+                message_id=str(getattr(sent, "id", "") or ""),
+                task_id=str(record.get("task_id") or ""),
+                thread_id=thread_id,
+                workspace=str(record.get("workspace") or ""),
+                kind="completion",
+            )
+
+        async def attach_task_to_thread(
+            self,
+            *,
+            thread: Any,
+            guild_id: str,
+            channel_id: str,
+            created_by: str,
+            task_id: str,
+            workspace: str,
+            mode: str,
+            prompt: str,
+            status: str,
+            reference_task_id: str = "",
+        ) -> None:
+            intro = await thread.send(format_thread_intro(task_id, workspace, mode, prompt, reference_task_id))
+            self.thread_store.upsert_thread(
+                task_id=task_id,
+                guild_id=guild_id,
+                channel_id=channel_id,
+                thread_id=str(thread.id),
+                created_by=created_by,
+                workspace=workspace,
+                status=status,
+                reference_task_id=reference_task_id,
+            )
+            self.thread_store.remember_message(
+                message_id=str(getattr(intro, "id", "") or ""),
+                task_id=task_id,
+                thread_id=str(thread.id),
+                workspace=workspace,
+                kind="thread_intro",
+            )
 
         async def create_task_thread(
             self,
@@ -715,18 +924,100 @@ def run_bot(config: AdapterConfig) -> None:
             else:
                 return None
 
-            await thread.send(format_thread_intro(task_id, workspace, mode, prompt, reference_task_id))
-            self.thread_store.upsert_thread(
-                task_id=task_id,
+            await self.attach_task_to_thread(
+                thread=thread,
                 guild_id=str(interaction.guild_id or ""),
                 channel_id=str(interaction.channel_id or ""),
-                thread_id=str(thread.id),
                 created_by=str(interaction.user.id),
+                task_id=task_id,
                 workspace=workspace,
+                mode=mode,
+                prompt=prompt,
                 status=status,
                 reference_task_id=reference_task_id,
             )
             return thread
+
+        async def on_message(self, message: Any) -> None:
+            if self.user is None:
+                return
+            if getattr(message.author, "bot", False):
+                return
+            if not isinstance(getattr(message, "channel", None), discord.Thread):
+                return
+            if not str(getattr(message, "content", "") or "").strip():
+                return
+            if str(message.content).lstrip().startswith("/"):
+                return
+            record = self.thread_store.latest_record_for_thread(str(message.channel.id))
+            if not record:
+                return
+            if not getattr(message, "reference", None) or not getattr(message.reference, "message_id", None):
+                return
+            try:
+                self.require_message_user(message)
+            except PermissionDenied:
+                return
+
+            referenced_message_id = str(message.reference.message_id or "")
+            referenced_message = getattr(message.reference, "resolved", None)
+            if referenced_message is None:
+                try:
+                    referenced_message = await message.channel.fetch_message(int(referenced_message_id))
+                except Exception:
+                    referenced_message = None
+            referenced_text = ""
+            if referenced_message is not None:
+                if self.user is not None and getattr(getattr(referenced_message, "author", None), "id", None) != self.user.id:
+                    return
+                referenced_text = str(getattr(referenced_message, "content", "") or "")
+
+            reference_task_id = resolve_reference_task_id_from_reply(
+                self.thread_store,
+                thread_id=str(message.channel.id),
+                referenced_message_id=referenced_message_id,
+                referenced_message_text=referenced_text,
+            )
+            if not reference_task_id:
+                return
+
+            workspace = str(record.get("workspace") or config.default_workspace or "").strip()
+            if not workspace:
+                return
+
+            try:
+                workspaces = self.agent.workspaces()
+                mode = default_mode_for_workspace(workspaces, workspace)
+                data = self.agent.run(
+                    workspace=workspace,
+                    prompt=ensure_prompt_allowed(str(message.content or ""), config.max_prompt_chars),
+                    mode=mode,
+                    source_user_id=str(message.author.id),
+                    source_channel_id=str(message.channel.id),
+                    source_message_id=str(message.id),
+                    idempotency_key=f"discord-message:{message.id}",
+                    guild_id=str(getattr(message.guild, "id", "") or ""),
+                    reference_task_id=reference_task_id,
+                    command_name="discord_reply",
+                )
+                task_id = str(data.get("task_id") or "")
+                if task_id:
+                    await self.attach_task_to_thread(
+                        thread=message.channel,
+                        guild_id=str(getattr(message.guild, "id", "") or ""),
+                        channel_id=str(getattr(message.channel, "parent_id", None) or getattr(message.channel, "id", "") or ""),
+                        created_by=str(message.author.id),
+                        task_id=task_id,
+                        workspace=workspace,
+                        mode=str(data.get("mode") or mode),
+                        prompt=str(message.content or ""),
+                        status=str(data.get("status", "queued")),
+                        reference_task_id=reference_task_id,
+                    )
+            except Exception as error:
+                text = sanitize_discord_text(format_error(error))
+                if text:
+                    await message.channel.send(f"无法创建 follow-up task：{text}")
 
         def register_commands(self) -> None:
             @self.tree.command(name=slash_command_name(config.command_prefix, "status"), description="Check the local Agent Host status")
@@ -760,6 +1051,54 @@ def run_bot(config: AdapterConfig) -> None:
                     self.require_user(interaction)
                     await interaction.response.defer(ephemeral=True, thinking=True)
                     await interaction.followup.send(format_workspaces(self.agent.workspaces()), ephemeral=True)
+                except Exception as error:
+                    await self.reply_error(interaction, error)
+
+            @self.tree.command(name=slash_command_name(config.command_prefix, "prepare"), description="Prepare a task contract and clarification questions")
+            async def agent_prepare(
+                interaction: Any,
+                prompt: str = "",
+                workspace: str = "",
+                intake_id: str = "",
+                answers: str = "",
+                reference_task_id: str = "",
+            ) -> None:
+                try:
+                    self.require_user(interaction)
+                    clean_prompt = str(prompt or "").strip()
+                    if clean_prompt and len(clean_prompt) > config.max_prompt_chars:
+                        raise ValueError(f"prompt is too long; max {config.max_prompt_chars} chars")
+                    selected_workspace = str(workspace or config.default_workspace or "").strip()
+                    if not selected_workspace:
+                        raise ValueError("workspace is required; configure discord.default_workspace or pass workspace explicitly")
+                    selected_intake_id = safe_intake_id(intake_id)
+                    if not clean_prompt and not selected_intake_id:
+                        raise ValueError("prompt is required unless you are continuing an existing intake_id")
+                    selected_answers = str(answers or "").strip()
+                    if len(selected_answers) > config.max_prompt_chars:
+                        raise ValueError(f"answers is too long; max {config.max_prompt_chars} chars")
+                    selected_reference_task_id = safe_reference_task_id(reference_task_id)
+                    if not selected_reference_task_id and isinstance(interaction.channel, discord.Thread):
+                        selected_reference_task_id = self.thread_store.task_id_for_thread(str(interaction.channel.id))
+                    await interaction.response.defer(ephemeral=True, thinking=True)
+                    mode = default_mode_for_workspace(self.agent.workspaces(), selected_workspace)
+                    data = self.agent.prepare(
+                        workspace=selected_workspace,
+                        prompt=clean_prompt,
+                        source_user_id=str(interaction.user.id),
+                        source_channel_id=str(interaction.channel_id or ""),
+                        source_message_id=str(interaction.id),
+                        guild_id=str(interaction.guild_id or ""),
+                        intake_id=selected_intake_id or None,
+                        answers=selected_answers or None,
+                        mode=mode,
+                        reference_task_id=selected_reference_task_id or None,
+                        command_name=f"/{slash_command_name(config.command_prefix, 'prepare')}",
+                    )
+                    await interaction.followup.send(
+                        format_prepare_response(data, selected_workspace, config.command_prefix),
+                        ephemeral=True,
+                    )
                 except Exception as error:
                     await self.reply_error(interaction, error)
 

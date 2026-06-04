@@ -81,7 +81,16 @@ class RecordingHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         payload = self.read_json()
         item = self.record(payload)
-        if item["path"] == "/codex/run":
+        if item["path"] == "/codex/prepare":
+            self.send_payload(200, {
+                "ok": True,
+                "intake_id": "intake_20260604_000001_ab12cd",
+                "status": "need_user_reply",
+                "questions": ["请说明允许改动的文件范围。"],
+                "contract": {"objective": "local_workspace_copy", "risk_class": "medium"},
+                "preflight": {"ok": False, "required_action": "reply_to_questions", "reasons": ["Task intent still has unresolved gray areas."]},
+            })
+        elif item["path"] == "/codex/run":
             self.send_payload(200, {"ok": True, "task_id": "task_123", "status": "queued"})
         elif item["path"] == "/codex/status":
             self.send_payload(200, {"ok": True, "text": "task_id: task_123\nstatus: done\n"})
@@ -150,6 +159,33 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(payload["metadata"]["command"], "/agent_run")
         self.assertNotIn("user", payload)
         self.assertNotIn("internal_user", payload)
+
+    def test_prepare_constructs_agent_host_request(self):
+        response = self.client().prepare(
+            workspace="self",
+            prompt="Please fix this config issue",
+            source_user_id="discord-user",
+            source_channel_id="discord-channel",
+            source_message_id="interaction-2",
+            guild_id="guild-1",
+            intake_id="intake_20260604_000001_ab12cd",
+            answers="Only modify README.md and docs/setup/README.md",
+            mode="readonly",
+            reference_task_id="task_20260525_120000_ref001",
+        )
+
+        self.assertEqual(response["status"], "need_user_reply")
+        record = RecordingHandler.records[-1]
+        self.assertEqual(record["path"], "/codex/prepare")
+        self.assertEqual(record["authorization"], "Bearer demo")
+        payload = record["payload"]
+        self.assertEqual(payload["workspace"], "self")
+        self.assertEqual(payload["prompt"], "Please fix this config issue")
+        self.assertEqual(payload["intake_id"], "intake_20260604_000001_ab12cd")
+        self.assertEqual(payload["answers"], "Only modify README.md and docs/setup/README.md")
+        self.assertEqual(payload["mode"], "readonly")
+        self.assertEqual(payload["reference_task_id"], "task_20260525_120000_ref001")
+        self.assertEqual(payload["metadata"]["command"], "/agent_prepare")
 
     def test_cancel_error_uses_stable_error_format_without_token_leak(self):
         with self.assertRaises(AgentHostError) as ctx:
@@ -265,6 +301,23 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("/server_agent_run", response)
         self.assertIn("/server_agent_task", response)
 
+    def test_format_prepare_response_shows_questions(self):
+        response = bot.format_prepare_response(
+            {
+                "intake_id": "intake_20260604_000001_ab12cd",
+                "status": "need_user_reply",
+                "questions": ["请说明允许改动的文件范围。"],
+                "contract": {"objective": "local_workspace_copy", "risk_class": "medium"},
+                "preflight": {"ok": False, "required_action": "reply_to_questions", "reasons": ["Task intent still has unresolved gray areas."]},
+            },
+            "self",
+            "agent",
+        )
+
+        self.assertIn("intake_id: intake_20260604_000001_ab12cd", response)
+        self.assertIn("请说明允许改动的文件范围", response)
+        self.assertIn("/agent_prepare", response)
+
     def test_format_health_summary_is_safe(self):
         response = bot.format_health_summary(
             {
@@ -347,6 +400,30 @@ class BotHelperTests(unittest.TestCase):
             self.assertEqual(len(restored.pending()), 1)
             restored.mark_notified("task_123", "done")
             self.assertEqual(restored.pending(), [])
+
+    def test_thread_state_store_persists_message_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = bot.ThreadStateStore(Path(tmp))
+            store.upsert_thread(
+                task_id="task_123",
+                guild_id="guild-1",
+                channel_id="channel-1",
+                thread_id="thread-1",
+                created_by="user-1",
+                workspace="main_codex",
+                status="running",
+            )
+            store.remember_message(
+                message_id="msg-1",
+                task_id="task_123",
+                thread_id="thread-1",
+                workspace="main_codex",
+                kind="thread_intro",
+            )
+
+            restored = bot.ThreadStateStore(Path(tmp))
+            self.assertEqual(restored.task_id_for_message("msg-1"), "task_123")
+            self.assertEqual(restored.latest_record_for_thread("thread-1")["workspace"], "main_codex")
 
     def test_completion_watcher_notifies_done_once(self):
         class FakeAgent:
@@ -438,6 +515,7 @@ class BotHelperTests(unittest.TestCase):
             500,
         )
 
+        self.assertIn("🤖 AI 回答", response)
         self.assertNotIn("/home/example", response)
         self.assertNotIn("Bearer demo", response)
         self.assertIn("Authorization: Bearer [REDACTED]", response)
@@ -461,6 +539,8 @@ class BotHelperTests(unittest.TestCase):
             "check this DISCORD_BOT_TOKEN=dummy-secret and SECRET_KEY=super-secret",
         )
 
+        self.assertIn("👤 你的提问", response)
+        self.assertIn("⏳ 等待 AI 回答", response)
         self.assertNotIn("dummy-secret", response)
         self.assertNotIn("super-secret", response)
         self.assertIn("DISCORD_BOT_TOKEN=[REDACTED_SECRET]", response)
@@ -483,11 +563,78 @@ class BotHelperTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bot.safe_reference_task_id("../../bad")
 
+    def test_extract_task_id_from_text_supports_intro_and_completion_formats(self):
+        self.assertEqual(
+            bot.extract_task_id_from_text("task_id: task_20260604_000001_abc123"),
+            "task_20260604_000001_abc123",
+        )
+        self.assertEqual(
+            bot.extract_task_id_from_text("任务完成。\n\nTask: task_20260604_000002_def456"),
+            "task_20260604_000002_def456",
+        )
+        self.assertEqual(bot.extract_task_id_from_text("no task here"), "")
+
+    def test_resolve_reference_task_id_from_reply_prefers_message_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = bot.ThreadStateStore(Path(tmp))
+            store.upsert_thread(
+                task_id="task_latest",
+                guild_id="guild-1",
+                channel_id="channel-1",
+                thread_id="thread-1",
+                created_by="user-1",
+                workspace="main_codex",
+                status="done",
+            )
+            store.remember_message(
+                message_id="msg-1",
+                task_id="task_specific",
+                thread_id="thread-1",
+                workspace="main_codex",
+                kind="completion",
+            )
+
+            resolved = bot.resolve_reference_task_id_from_reply(
+                store,
+                thread_id="thread-1",
+                referenced_message_id="msg-1",
+                referenced_message_text="Task: task_other",
+            )
+
+        self.assertEqual(resolved, "task_specific")
+
+    def test_resolve_reference_task_id_from_reply_falls_back_to_thread_latest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = bot.ThreadStateStore(Path(tmp))
+            store.upsert_thread(
+                task_id="task_latest",
+                guild_id="guild-1",
+                channel_id="channel-1",
+                thread_id="thread-1",
+                created_by="user-1",
+                workspace="main_codex",
+                status="done",
+            )
+
+            resolved = bot.resolve_reference_task_id_from_reply(
+                store,
+                thread_id="thread-1",
+                referenced_message_id="unknown",
+                referenced_message_text="",
+            )
+
+        self.assertEqual(resolved, "task_latest")
+
     def test_command_prefix_validation(self):
         self.assertEqual(bot.safe_command_prefix("server_agent"), "server_agent")
         self.assertEqual(bot.slash_command_name("server_agent", "run"), "server_agent_run")
         with self.assertRaises(ValueError):
             bot.safe_command_prefix("Bad Prefix!")
+
+    def test_authorize_candidates_accepts_thread_parent_channel(self):
+        config = self.make_config()
+        user = bot.authorize_candidates(config, "guild-1", ("thread-1", "channel-1"), "user-1")
+        self.assertEqual(user.internal_user, "chenma")
 
     def test_load_config_from_environment(self):
         with tempfile.TemporaryDirectory() as tmp:

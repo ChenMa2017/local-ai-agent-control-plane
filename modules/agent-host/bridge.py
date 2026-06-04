@@ -34,12 +34,14 @@ MAX_RESPONSE_CHARS = 3500
 AGENT_HOST_VERSION = "mvp-v0.7"
 PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 CODEX_TASK_ID_RE = re.compile(r"^task_[A-Za-z0-9_.-]+$")
+INTAKE_ID_RE = re.compile(r"^intake_[A-Za-z0-9_.-]+$")
 SUPPORTED_CODEX_MODES = {"readonly", "workspace-write"}
 TASK_LIST_DEFAULT_LIMIT = 50
 TASK_LIST_MAX_LIMIT = 200
 PROMPT_PREVIEW_CHARS = 110
 RESULT_PAGE_DEFAULT_SIZE = 1800
 RESULT_PAGE_MAX_SIZE = 8000
+INTAKE_QUESTION_MAX = 3
 CODEX_FINAL_STATUSES = {"done", "failed", "cancelled", "timeout", "stale", "policy_violation"}
 CODEX_ACTIVE_STATUSES = {"queued", "running", "cancelling", "cancel_requested"}
 STREAM_TOKEN_TTL_SECONDS = 300
@@ -60,6 +62,8 @@ SUPERVISOR_ALLOWED_BLOCKERS = {
     "none",
     "unknown",
 }
+WRITE_SCOPE_HINT_RE = re.compile(r"(/|\.(?:md|txt|json|py|js|ts|tsx|jsx|yaml|yml|sh)\b|README|agent/|workspace/|runs/)", re.I)
+DEICTIC_HINT_RE = re.compile(r"\b(this|that|it|these|those|here|there)\b|这个|这个问题|这个任务|它|上述|前面的", re.I)
 STREAM_TOKENS: dict[str, dict[str, Any]] = {}
 STREAM_TOKEN_LOCK = threading.Lock()
 
@@ -782,7 +786,7 @@ def handle_codex_capabilities(config: BridgeConfig, _principal: AuthPrincipal) -
     return {
         "ok": True,
         "version": AGENT_HOST_VERSION,
-        "commands": ["run", "tasks", "status", "result", "logs", "cancel"],
+        "commands": ["prepare", "run", "tasks", "status", "result", "logs", "cancel"],
         "features": {
             "auth": True,
             "safe_output": True,
@@ -791,6 +795,7 @@ def handle_codex_capabilities(config: BridgeConfig, _principal: AuthPrincipal) -
             "timeout": True,
             "resume": False,
             "write_mode": write_mode,
+            "prepare_intake": True,
             "raw_admin_access": True,
         },
         "modes": modes,
@@ -1037,6 +1042,441 @@ def validate_codex_project(config: BridgeConfig, project: str) -> Project:
     if not item.root.exists() or not item.root.is_dir():
         raise BridgeError(f"project root does not exist: {item.root}", 500)
     return item
+
+
+def validate_intake_id(intake_id: str) -> str:
+    if not INTAKE_ID_RE.match(intake_id or ""):
+        raise BridgeError("invalid intake_id", 400, "invalid_request")
+    return intake_id
+
+
+def new_intake_id() -> str:
+    stamp = utc_now().strftime("%Y%m%d_%H%M%S")
+    return f"intake_{stamp}_{secrets.token_hex(3)}"
+
+
+def intake_root(config: BridgeConfig) -> Path:
+    return config.codex_bridge_root / ".codex-bridge" / "intake"
+
+
+def intake_dir(config: BridgeConfig, intake_id: str) -> Path:
+    return intake_root(config) / validate_intake_id(intake_id)
+
+
+def load_intake_intent(config: BridgeConfig, intake_id: str) -> dict[str, Any]:
+    path = intake_dir(config, intake_id) / "INTENT_DRAFT.json"
+    if not path.exists():
+        raise BridgeError(f"intake not found: {intake_id}", 404, "intake_not_found")
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise BridgeError(f"intake metadata is invalid: {intake_id}: {exc}", 500) from exc
+    if not isinstance(data, dict):
+        raise BridgeError(f"intake metadata is invalid: {intake_id}", 500)
+    return data
+
+
+def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    os.replace(temp, path)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    temp.write_text(text)
+    os.replace(temp, path)
+
+
+def append_jsonl(path: Path, event: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def safe_intake_text(value: str, max_chars: int = 6000) -> str:
+    text = str(value or "").strip()
+    if len(text) > max_chars:
+        raise BridgeError(f"text is too long; max {max_chars} chars", 400, "invalid_request")
+    return text
+
+
+def intake_answers_text(payload: dict[str, str]) -> str:
+    return safe_intake_text(payload.get("answers") or payload.get("answer") or "", 4000)
+
+
+def intake_words(text: str) -> str:
+    return " ".join(str(text or "").split()).lower()
+
+
+def parse_intent_signals(prompt: str, answers: str) -> dict[str, bool]:
+    text = intake_words(f"{prompt}\n{answers}")
+    return {
+        "wants_write": any(term in text for term in ("fix", "update", "modify", "change", "edit", "rewrite", "implement", "修复", "修改", "更新", "实现", "改一下")),
+        "wants_report_only": any(term in text for term in ("summarize", "summary", "explain", "review", "analyze", "status", "report", "总结", "说明", "检查", "分析", "状态")),
+        "wants_local_workspace_copy": any(term in text for term in ("local workspace", "project_local_copy", "workspace/", "copy into workspace", "本地副本", "副本")),
+        "wants_cpu_eval": any(term in text for term in ("cpu", "cpu32", "smoke", "eval", "probe", "bounded cpu", "sample_count", "cpu-only", "cpu only")),
+        "wants_gpu": "gpu" in text,
+        "wants_training": any(term in text for term in ("train", "training", "finetune", "qat", "训练")),
+        "wants_promotion": any(term in text for term in ("promote", "promotion", "shared_model", "deployment", "public docs", "合并到共享", "发布")),
+        "wants_external_send": any(term in text for term in ("external send", "reviewer send", "deep research send", "发给 reviewer", "外部发送")),
+        "wants_secret_or_service": any(term in text for term in ("token", "secret", ".env", "systemd", "restart service", "private key", "密码")),
+    }
+
+
+def explicit_scope_present(prompt: str, answers: str) -> bool:
+    text = f"{prompt}\n{answers}"
+    if WRITE_SCOPE_HINT_RE.search(text):
+        return True
+    return any(term in text.lower() for term in ("file ", "files ", "folder ", "directory ", "path ", "目录", "文件", "路径"))
+
+
+def infer_objective(signals: dict[str, bool]) -> str:
+    if signals["wants_external_send"]:
+        return "external_send"
+    if signals["wants_promotion"]:
+        return "promotion_apply"
+    if signals["wants_training"]:
+        return "bounded_training_canary" if signals["wants_cpu_eval"] else "training"
+    if signals["wants_gpu"]:
+        return "bounded_gpu_probe" if signals["wants_cpu_eval"] else "gpu"
+    if signals["wants_local_workspace_copy"]:
+        return "local_workspace_copy"
+    if signals["wants_cpu_eval"]:
+        return "bounded_cpu_eval"
+    if signals["wants_write"]:
+        return "local_workspace_copy"
+    return "report_only"
+
+
+def build_gray_areas(prompt: str, answers: str, reference_task_id: str, signals: dict[str, bool]) -> list[str]:
+    gray: list[str] = []
+    merged = f"{prompt}\n{answers}"
+    if signals["wants_write"] and not explicit_scope_present(prompt, answers):
+        gray.append("write_scope_missing")
+    if DEICTIC_HINT_RE.search(merged) and not reference_task_id and not explicit_scope_present(prompt, answers):
+        gray.append("target_reference_missing")
+    if not prompt.strip():
+        gray.append("empty_prompt")
+    return gray
+
+
+def clarification_questions(gray_areas: list[str], signals: dict[str, bool]) -> list[str]:
+    questions: list[str] = []
+    if "target_reference_missing" in gray_areas:
+        questions.append("你指的是哪个具体对象？请给出文件、目录、工作区，或提供 reference_task_id。")
+    if "write_scope_missing" in gray_areas:
+        questions.append("如果允许修改，请明确允许改动的文件或目录范围；如果只想先分析，也可以直接说明“先只读总结”。")
+    if signals["wants_write"] and not signals["wants_local_workspace_copy"] and not signals["wants_cpu_eval"]:
+        questions.append("这次是希望先做本地副本修复方案，还是只整理可执行 task contract？")
+    return questions[:INTAKE_QUESTION_MAX]
+
+
+def intake_risk_class(objective: str, signals: dict[str, bool]) -> str:
+    if objective in {"external_send", "promotion_apply", "training", "gpu"} or signals["wants_secret_or_service"]:
+        return "high"
+    if objective in {"bounded_gpu_probe", "bounded_training_canary", "local_workspace_copy", "bounded_cpu_eval"}:
+        return "medium"
+    return "low"
+
+
+def make_task_contract(
+    *,
+    intake_id: str,
+    project: Project,
+    prompt: str,
+    answers: str,
+    objective: str,
+    mode: str,
+    reference_task_id: str,
+    risk_class: str,
+    signals: dict[str, bool],
+    status: str,
+) -> dict[str, Any]:
+    decision_source = "user+answers" if answers else "user"
+    requires_human = risk_class == "high"
+    write_scope = []
+    if objective == "local_workspace_copy":
+        write_scope = ["workspace/<task_id>/", "runs/<task_id>/", "agent/status/", "agent/reports/"]
+    return {
+        "schema_version": 1,
+        "intake_id": intake_id,
+        "workspace": project.name,
+        "status": status,
+        "objective": objective,
+        "mode": mode,
+        "risk_class": risk_class,
+        "decision_source": decision_source,
+        "requires_human": requires_human,
+        "reference_task_id": reference_task_id or "",
+        "prompt": prompt,
+        "answers_summary": answers,
+        "summary": prompt_preview(prompt),
+        "write_scope": write_scope,
+        "blocked_actions": [
+            "shared_file_promotion_without_human_review",
+            "dataset_or_checkpoint_mutation",
+            "external_send_without_human_review",
+            "service_or_secret_mutation",
+        ],
+        "signals": signals,
+        "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
+    }
+
+
+def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
+    objective = str(contract.get("objective") or "")
+    if objective == "report_only":
+        return {
+            "schema_version": 1,
+            "intake_id": contract["intake_id"],
+            "status": "ready",
+            "allowed_runner": "report_only",
+            "workspace_mode": "readonly",
+            "allowed_write_paths": [],
+            "blocked_actions": contract.get("blocked_actions", []),
+            "summary": "Report-only clarification result; no execution side effects.",
+        }
+    if objective == "bounded_cpu_eval":
+        return {
+            "schema_version": 1,
+            "intake_id": contract["intake_id"],
+            "status": "ready",
+            "allowed_runner": "cpu",
+            "workspace_mode": "readonly",
+            "allowed_write_paths": ["runs/<task_id>/", "agent/status/", "agent/reports/"],
+            "blocked_actions": contract.get("blocked_actions", []),
+            "summary": "Bounded CPU evaluation or smoke-check task.",
+        }
+    if objective == "local_workspace_copy":
+        return {
+            "schema_version": 1,
+            "intake_id": contract["intake_id"],
+            "status": "ready",
+            "allowed_runner": "cpu",
+            "workspace_mode": "project_local_copy",
+            "allowed_write_paths": contract.get("write_scope", []),
+            "blocked_actions": contract.get("blocked_actions", []),
+            "summary": "Project-local copy task; shared files remain protected.",
+        }
+    return {
+        "schema_version": 1,
+        "intake_id": contract["intake_id"],
+        "status": "blocked",
+        "allowed_runner": "none",
+        "workspace_mode": "none",
+        "allowed_write_paths": [],
+        "blocked_actions": contract.get("blocked_actions", []),
+        "summary": "High-risk or nondelegable task; requires human approval before execution.",
+    }
+
+
+def make_policy_preflight(project: Project, contract: dict[str, Any], taskbox: dict[str, Any], questions: list[str]) -> dict[str, Any]:
+    objective = str(contract.get("objective") or "")
+    risk_class = str(contract.get("risk_class") or "low")
+    blocked_by: list[str] = []
+    reasons: list[str] = []
+    if questions:
+        blocked_by.append("clarification_required")
+        reasons.append("Task intent still has unresolved gray areas.")
+    if risk_class == "high":
+        blocked_by.append("human_review_required")
+        reasons.append(f"Objective {objective} is intentionally held for human approval.")
+    if str(contract.get("mode") or "") not in project.allowed_modes:
+        blocked_by.append("workspace_mode_not_allowed")
+        reasons.append(f"Workspace {project.name} does not allow mode={contract.get('mode')}.")
+    if objective not in {"report_only", "bounded_cpu_eval", "local_workspace_copy"} and risk_class != "high":
+        blocked_by.append("unsupported_objective")
+        reasons.append(f"Objective {objective} is not yet supported by the prepare pipeline.")
+    ok = not blocked_by
+    decision = "ready" if ok else "blocked"
+    required_action = "run" if ok else ("reply_to_questions" if "clarification_required" in blocked_by else "human_review")
+    return {
+        "schema_version": 1,
+        "intake_id": contract["intake_id"],
+        "ok": ok,
+        "decision": decision,
+        "blocked_by": blocked_by,
+        "required_action": required_action,
+        "reasons": reasons,
+        "allowed_runner": taskbox.get("allowed_runner"),
+        "workspace_mode": taskbox.get("workspace_mode"),
+    }
+
+
+def intake_summary_markdown(contract: dict[str, Any], questions: list[str], preflight: dict[str, Any]) -> str:
+    lines = [
+        "# Task Contract Summary",
+        "",
+        f"- intake_id: {contract.get('intake_id')}",
+        f"- workspace: {contract.get('workspace')}",
+        f"- objective: {contract.get('objective')}",
+        f"- risk_class: {contract.get('risk_class')}",
+        f"- decision_source: {contract.get('decision_source')}",
+        f"- status: {contract.get('status')}",
+        f"- preflight_ok: {'true' if preflight.get('ok') else 'false'}",
+        "",
+        "## Prompt",
+        "",
+        str(contract.get("prompt") or ""),
+        "",
+    ]
+    answers = str(contract.get("answers_summary") or "")
+    if answers:
+        lines.extend(["## Answers", "", answers, ""])
+    if questions:
+        lines.append("## Pending Questions")
+        lines.append("")
+        for idx, question in enumerate(questions, start=1):
+            lines.append(f"{idx}. {question}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def persist_intake_artifacts(
+    *,
+    config: BridgeConfig,
+    intake_id: str,
+    intent: dict[str, Any],
+    gray_areas: list[str],
+    questions: list[str],
+    contract: dict[str, Any],
+    taskbox: dict[str, Any],
+    preflight: dict[str, Any],
+    answers: str,
+    event_type: str,
+) -> None:
+    root = intake_dir(config, intake_id)
+    write_json_atomic(root / "INTENT_DRAFT.json", intent)
+    write_json_atomic(root / "GRAY_AREAS.json", {"schema_version": 1, "intake_id": intake_id, "items": gray_areas})
+    write_text_atomic(
+        root / "QUESTIONS.md",
+        "\n".join(
+            ["# Clarification Questions", ""] +
+            ([f"{idx}. {question}" for idx, question in enumerate(questions, start=1)] if questions else ["No pending clarification questions."])
+        ).rstrip() + "\n",
+    )
+    if answers:
+        append_jsonl(root / "ANSWERS.jsonl", {"received_at": utc_now().isoformat().replace("+00:00", "Z"), "text": answers})
+    write_json_atomic(root / "TASK_CONTRACT.json", contract)
+    write_json_atomic(root / "TASKBOX_DRAFT.json", taskbox)
+    write_json_atomic(root / "POLICY_PREFLIGHT.json", preflight)
+    write_text_atomic(
+        root / "ASSUMPTIONS.md",
+        "\n".join([
+            "# Assumptions",
+            "",
+            f"- objective_guess: {contract.get('objective')}",
+            f"- risk_class: {contract.get('risk_class')}",
+            f"- workspace_mode: {taskbox.get('workspace_mode')}",
+        ]).rstrip() + "\n",
+    )
+    write_text_atomic(root / f"TASK_CONTRACT_{intake_id}.md", intake_summary_markdown(contract, questions, preflight))
+    append_jsonl(
+        root / "TASK_INTAKE.events.jsonl",
+        {
+            "event": event_type,
+            "intake_id": intake_id,
+            "status": contract.get("status"),
+            "objective": contract.get("objective"),
+            "risk_class": contract.get("risk_class"),
+            "preflight_ok": preflight.get("ok"),
+            "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
+        },
+    )
+
+
+def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
+    reject_frontend_identity(payload)
+    intake_id = (payload.get("intake_id") or "").strip()
+    existing_intent: dict[str, Any] = {}
+    if intake_id:
+        intake_id = validate_intake_id(intake_id)
+        existing_intent = load_intake_intent(config, intake_id)
+    else:
+        intake_id = new_intake_id()
+
+    project_name = (payload.get("workspace") or payload.get("project", "")).strip() or str(existing_intent.get("workspace") or "")
+    prompt = safe_intake_text(payload.get("prompt", "") or str(existing_intent.get("prompt") or ""), MAX_TASK_CHARS)
+    if not prompt:
+        raise BridgeError("prompt is required", 400, "invalid_request")
+    project = validate_codex_project(config, project_name)
+    mode = (payload.get("mode") or str(existing_intent.get("desired_mode") or "") or project.default_mode).strip() or project.default_mode
+    if mode not in project.allowed_modes:
+        allowed = ", ".join(project.allowed_modes)
+        raise BridgeError(f"mode {mode} is not allowed for workspace {project.name}; allowed: {allowed}", 400, "invalid_request")
+
+    answers = intake_answers_text(payload)
+    reference_task_id = (payload.get("reference_task_id") or payload.get("referenceTaskId") or str(existing_intent.get("reference_task_id") or "")).strip()
+    if reference_task_id:
+        reference_task_id = validate_task_id(reference_task_id)
+        authorize_codex_task(config, principal, reference_task_id)
+
+    source = safe_adapter_source(payload.get("source", "web"))
+    signals = parse_intent_signals(prompt, answers)
+    objective = infer_objective(signals)
+    gray_areas = build_gray_areas(prompt, answers, reference_task_id, signals)
+    questions = clarification_questions(gray_areas, signals)
+    risk_class = intake_risk_class(objective, signals)
+    status = "blocked" if risk_class == "high" else ("clarifying" if questions else "compiled")
+    contract = make_task_contract(
+        intake_id=intake_id,
+        project=project,
+        prompt=prompt,
+        answers=answers,
+        objective=objective,
+        mode=mode,
+        reference_task_id=reference_task_id,
+        risk_class=risk_class,
+        signals=signals,
+        status=status,
+    )
+    taskbox = make_taskbox_draft(contract)
+    preflight = make_policy_preflight(project, contract, taskbox, questions)
+    intent = {
+        "schema_version": 1,
+        "intake_id": intake_id,
+        "workspace": project.name,
+        "source": source,
+        "user": principal.user,
+        "reference_task_id": reference_task_id or "",
+        "prompt": prompt,
+        "prompt_preview": prompt_preview(prompt),
+        "desired_mode": mode,
+        "status": status,
+        "objective_guess": objective,
+        "signals": signals,
+        "gray_area_count": len(gray_areas),
+        "answers_count": 1 if answers else 0,
+        "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
+    }
+    persist_intake_artifacts(
+        config=config,
+        intake_id=intake_id,
+        intent=intent,
+        gray_areas=gray_areas,
+        questions=questions,
+        contract=contract,
+        taskbox=taskbox,
+        preflight=preflight,
+        answers=answers,
+        event_type="intake_replied" if answers else "intake_created",
+    )
+    return {
+        "ok": True,
+        "intake_id": intake_id,
+        "workspace": project.name,
+        "status": "blocked" if risk_class == "high" else ("need_user_reply" if questions else ("blocked" if not preflight.get("ok") else "prepared")),
+        "questions": questions,
+        "gray_areas": gray_areas,
+        "contract": contract,
+        "taskbox": taskbox,
+        "preflight": preflight,
+        "artifacts_dir": str(intake_dir(config, intake_id)),
+        "ready_to_run": bool(preflight.get("ok") and not questions),
+    }
 
 
 def safe_adapter_source(value: str) -> str:
@@ -2309,6 +2749,7 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
         route = parsed.path.rstrip("/")
         if route not in {
             "/mattermost/watchdog",
+            "/codex/prepare",
             "/codex/run",
             "/codex/status",
             "/codex/result",
@@ -2335,6 +2776,10 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
                 response = handle_watchdog(payload, self.config)
             else:
                 principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
+                if route == "/codex/prepare":
+                    response = handle_codex_prepare(payload, self.config, principal)
+                    self.send_json(200, response)
+                    return
                 if route == "/codex/run":
                     response = handle_codex_run(payload, self.config, principal)
                     self.send_json(200, response)

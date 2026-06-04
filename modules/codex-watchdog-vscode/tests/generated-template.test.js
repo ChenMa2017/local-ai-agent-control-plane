@@ -66,7 +66,18 @@ function loadExtensionTestApi(projectRoot) {
   };
   vm.runInNewContext(`${source}
 output = { appendLine() {} };
-module.exports.__test__ = { ensureGeneratedDirs, refreshGeneratedWatcherFiles };`, sandbox, {
+module.exports.__test__ = {
+  ensureGeneratedDirs,
+  refreshGeneratedWatcherFiles,
+  readBootstrapConversation,
+  writeBootstrapConversation,
+  renderBootstrapConversationMarkdown,
+  writeBootstrapChangePreview,
+  archiveAndResetBootstrapConversation,
+  stageBootstrapDraftFiles,
+  applyBootstrapDraftFiles,
+  taskLooksInstantiated
+};`, sandbox, {
     filename: extensionPath
   });
   return sandbox.module.exports.__test__;
@@ -111,6 +122,8 @@ async function main() {
   assert.strictEqual(manifest.control_plane_module, "codex-watchdog-vscode");
   assert.match(manifest.control_plane_version, /^\d+\.\d+\.\d+$/);
   assert.match(manifest.template_hashes["agent/bin/run_watchdog.sh"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["agent/schemas/bootstrap_conversation_turn.schema.json"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["agent/schemas/bootstrap_instantiation.schema.json"], /^sha256:[a-f0-9]{64}$/);
   assert.ok(manifest.placeholder_policy.public_paths.includes("$PROJECT_ROOT"));
   assert.ok(manifest.placeholder_policy.public_paths.includes("$CONTROL_PLANE_ROOT"));
   assert.ok(manifest.placeholder_policy.public_paths.includes("$COLLAB_ROOT"));
@@ -139,6 +152,123 @@ async function main() {
   assert.ok(watchSchema.required.includes("supervisor_mode"));
   assert.ok(watchSchema.required.includes("review_scope"));
   assert.ok(watchSchema.required.includes("review_resolver"));
+
+  const bootstrapSchema = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "schemas", "bootstrap_instantiation.schema.json"), "utf8"));
+  assert.deepStrictEqual(
+    new Set(bootstrapSchema.required),
+    new Set(Object.keys(bootstrapSchema.properties)),
+    "bootstrap_instantiation schema root required must include every property for strict response_format validation"
+  );
+  assert.ok(bootstrapSchema.required.includes("assistant_reply"));
+  assert.ok(bootstrapSchema.required.includes("ready_for_start_guard"));
+
+  const bootstrapConversationSchema = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "schemas", "bootstrap_conversation_turn.schema.json"), "utf8"));
+  assert.deepStrictEqual(
+    new Set(bootstrapConversationSchema.required),
+    new Set(Object.keys(bootstrapConversationSchema.properties)),
+    "bootstrap_conversation_turn schema root required must include every property for strict response_format validation"
+  );
+  assert.ok(bootstrapConversationSchema.required.includes("assistant_reply"));
+  assert.ok(bootstrapConversationSchema.required.includes("suggested_next_step"));
+
+  await api.writeBootstrapConversation(projectRoot, {
+    updated_at: "2026-06-04T12:00:00Z",
+    draft_input: "请把这个项目初始化成 watchdog 项目。",
+    turns: [
+      { role: "user", text: "Please initialize this project as a watchdog bootstrap.", created_at: "2026-06-04T11:59:00Z" },
+      { role: "assistant", text: "Drafted PLAN/TODO/STATE/SAFETY/DAILY_HANDOFF for a read-only bootstrap.", created_at: "2026-06-04T12:00:00Z" }
+    ],
+    latest_result: {
+      ready_for_start_guard: false,
+      open_questions: ["Should Start Guard wait until after a manual readiness review?"],
+      suggested_next_step: "Review the drafted files in the panel before starting the guard."
+    }
+  });
+  const conversation = await api.readBootstrapConversation(projectRoot);
+  assert.strictEqual(conversation.turns.length, 2);
+  assert.strictEqual(conversation.turns[0].role, "user");
+  assert.strictEqual(conversation.draft_input, "请把这个项目初始化成 watchdog 项目。");
+  assert.strictEqual(conversation.latest_result.ready_for_start_guard, false);
+  const transcriptMarkdown = fs.readFileSync(path.join(projectRoot, "agent", "status", "bootstrap_conversation.md"), "utf8");
+  assert.match(transcriptMarkdown, /Bootstrap Conversation/);
+  assert.match(transcriptMarkdown, /AI reply/);
+  assert.match(transcriptMarkdown, /Should Start Guard wait until after a manual readiness review/);
+  assert.match(api.renderBootstrapConversationMarkdown(conversation), /Latest Setup Status/);
+
+  await api.writeBootstrapChangePreview(projectRoot, [
+    {
+      relativePath: "agent/PLAN.md",
+      changed: true,
+      previousLength: 12,
+      nextLength: 48,
+      preview: "# Plan\n\nConcrete watchdog bootstrap objective."
+    },
+    {
+      relativePath: "agent/TODO.md",
+      changed: false,
+      previousLength: 32,
+      nextLength: 32,
+      preview: "# TODO\n\n- unchanged"
+    }
+  ]);
+  const previewMarkdown = fs.readFileSync(path.join(projectRoot, "agent", "status", "bootstrap_change_preview.md"), "utf8");
+  assert.match(previewMarkdown, /Bootstrap Change Preview/);
+  assert.match(previewMarkdown, /agent\/PLAN\.md/);
+  assert.match(previewMarkdown, /Status: updated/);
+
+  writeFile(projectRoot, "agent/PLAN.md", "# PLAN\n\nTemplate placeholder.\n");
+  writeFile(projectRoot, "agent/TODO.md", "# TODO\n\nTemplate placeholder.\n");
+  writeFile(projectRoot, "agent/STATE.md", "# STATE\n\nTemplate placeholder.\n");
+  writeFile(projectRoot, "agent/SAFETY.md", "# SAFETY\n\nTemplate placeholder.\n");
+  writeFile(projectRoot, "agent/DAILY_HANDOFF.md", "# DAILY HANDOFF\n\nTemplate placeholder.\n");
+  const templatePlanPath = path.join(projectRoot, "agent", "PLAN.md");
+  const templatePlanBeforeDraft = fs.readFileSync(templatePlanPath, "utf8");
+  await api.stageBootstrapDraftFiles(projectRoot, {
+    assistant_reply: "Drafted the bootstrap files but did not apply them yet.",
+    plan_md: "# PLAN\n\nConcrete bootstrap plan.\n",
+    todo_md: "# TODO\n\n- [ ] First concrete task.\n",
+    state_md: "# STATE\n\nBootstrap draft is ready.\n",
+    safety_md: "# SAFETY\n\nRead-only bootstrap for now.\n",
+    daily_handoff_md: "# DAILY HANDOFF\n\nNo guard start yet.\n",
+    open_questions: ["Should the first guard cycle stay read-only?"],
+    suggested_next_step: "Instantiate the project when the setup looks right.",
+    ready_for_start_guard: false
+  });
+  const templatePlanAfterDraft = fs.readFileSync(templatePlanPath, "utf8");
+  assert.strictEqual(templatePlanAfterDraft, templatePlanBeforeDraft, "staging a bootstrap draft must not write PLAN.md yet");
+  await api.applyBootstrapDraftFiles(projectRoot, {
+    assistant_reply: "Apply the same staged draft.",
+    plan_md: "# PLAN\n\nConcrete bootstrap plan.\n",
+    todo_md: "# TODO\n\n- [ ] First concrete task.\n",
+    state_md: "# STATE\n\nBootstrap draft is ready.\n",
+    safety_md: "# SAFETY\n\nRead-only bootstrap for now.\n",
+    daily_handoff_md: "# DAILY HANDOFF\n\nNo guard start yet.\n",
+    open_questions: [],
+    suggested_next_step: "Review and start later.",
+    ready_for_start_guard: false
+  });
+  const templatePlanAfterApply = fs.readFileSync(templatePlanPath, "utf8");
+  assert.match(templatePlanAfterApply, /Concrete bootstrap plan/);
+  assert.ok(api.taskLooksInstantiated(projectRoot), "concrete instantiated files should be accepted even if safety stays read-only");
+
+  writeFile(projectRoot, "agent/SAFETY.md", [
+    "<!-- CODEX_WATCHDOG_TEMPLATE_FILE: remove this marker after task instantiation -->",
+    "",
+    "# Safety Policy",
+    "",
+    "Default watcher mode: read-only reasoning.",
+    ""
+  ].join("\n"));
+  assert.ok(!api.taskLooksInstantiated(projectRoot), "template marker must still block Start Guard readiness");
+
+  await api.archiveAndResetBootstrapConversation(projectRoot);
+  const resetConversation = await api.readBootstrapConversation(projectRoot);
+  assert.strictEqual(resetConversation.turns.length, 0);
+  assert.strictEqual(resetConversation.latest_result.ready_for_start_guard, false);
+  const archiveDir = path.join(projectRoot, "agent", "status", "bootstrap_archive");
+  const archivedNames = fs.readdirSync(archiveDir);
+  assert.ok(archivedNames.some((name) => name.endsWith("bootstrap_conversation.json")));
+  assert.ok(archivedNames.some((name) => name.endsWith("bootstrap_change_preview.md")));
 
   writeJson(projectRoot, "agent/STATE.json", {
     schema_version: 1,

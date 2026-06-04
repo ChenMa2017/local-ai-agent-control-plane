@@ -13,16 +13,21 @@ http://127.0.0.1:8787
 ```text
 /agent_status
 /agent_workspaces
+/agent_prepare prompt [workspace] [intake_id] [answers] [reference_task_id]
 /agent_run workspace prompt
 /agent_task task_id
 /agent_cancel task_id
 ```
+
+In bot-created task threads, a plain Discord reply to a bot task message can also create a follow-up task automatically. The adapter resolves `reference_task_id` from the replied bot message, so you do not need to copy/paste task ids by hand.
 
 ## Setup
 
 Create a Discord Application and Bot in the Discord Developer Portal.
 
 Enable the bot in your target server with the `applications.commands` scope and bot permissions needed to receive slash commands. For local development, keep the Agent Host bound to `127.0.0.1`; this bot uses Discord Gateway and does not need a public inbound webhook.
+
+If you want the direct-reply follow-up flow inside task threads, also enable the bot's Message Content intent in the Discord Developer Portal. Slash commands continue to work without it, but plain-text thread replies need message content delivery.
 
 Install dependencies:
 
@@ -198,9 +203,39 @@ idempotency
 
 ## Command Mapping
 
+`/<prefix>_prepare` is the intake/clarification entrypoint. It does not execute Codex directly. Instead it asks Agent Host to persist:
+
+```text
+INTENT_DRAFT
+QUESTIONS
+TASK_CONTRACT
+TASKBOX_DRAFT
+POLICY_PREFLIGHT
+```
+
+If clarification is still needed, the adapter returns the generated questions plus an `intake_id`. A later `/<prefix>_prepare` call can continue the same intake by sending that `intake_id` with `answers`.
+
 `/<prefix>_run workspace:grokking prompt:"..."` becomes a Codex task request. With the default prefix this is `/agent_run`. If `workspace` is omitted, the adapter uses `discord.default_workspace`, usually `main_codex`. The adapter asks the Agent Host for the selected workspace's default mode and sends that mode with the run request. For example, a normal project may be `readonly`, while the main coordination workspace can be `workspace-write`.
 
 `reference_task_id` is optional. When provided, the new task becomes a follow-up to a previous task. The Agent Host checks that the authenticated user can access the referenced task, and `codex-bridge` injects only the previous task's safe result excerpt into the new Codex prompt. If `/agent_run` is used inside a bot-created task thread and `reference_task_id` is omitted, the adapter uses that thread's current task as the reference.
+
+If you reply directly to a bot-authored task message inside a bot-created task thread, the adapter treats that reply as a follow-up task request in the same thread. It tries to resolve `reference_task_id` from the replied bot message first, then falls back to the thread's latest known task. This makes the thread behave more like an email chain:
+
+```text
+bot completion message
+  └─ your Discord reply
+       -> new task in same thread
+       -> reference_task_id automatically set
+```
+
+This reply flow is intentionally narrow:
+
+```text
+- only inside bot-created task threads
+- only for allowlisted users
+- only when replying to a bot task message
+- still routed through Agent Host API and normal safety checks
+```
 
 ```json
 {

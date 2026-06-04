@@ -14,6 +14,7 @@ let extensionContext;
 let controlPanel;
 let statusBarItem;
 let statusBarRefresh;
+let panelOperationState;
 
 const PROJECT_ROOT_KEY = "projectRoot";
 const STATUS_REFRESH_MS = 60000;
@@ -26,6 +27,18 @@ const DEFAULT_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS = 4;
 const DEFAULT_SUPERVISOR_LIGHT_FOLLOWUP = true;
 const DEFAULT_SERVICE_PREFIX = "codex-watchdog";
 const LOGIN_READY_RE = /(?:logged\s+in|authenticated)/i;
+const BOOTSTRAP_CONVERSATION_SCHEMA_VERSION = 1;
+
+function emptyPanelOperationState() {
+  return {
+    status: "idle",
+    title: "",
+    detail: "",
+    startedAt: ""
+  };
+}
+
+panelOperationState = emptyPanelOperationState();
 
 function activate(context) {
   extensionContext = context;
@@ -202,9 +215,128 @@ async function prepareProjectCommand() {
     title: "Preparing Codex Watchdog project template",
     cancellable: false
   }, async () => {
-    await prepareProjectForInstantiation(root);
-    await openInstantiationFiles(root);
-    vscode.window.showInformationMessage("Codex Watchdog project template is ready. Ask daily Codex to instantiate the task before starting the guard.");
+    const startedAt = new Date().toISOString();
+    try {
+      await setPanelOperationState({
+        title: "Preparing project",
+        detail: "Creating or refreshing the watchdog project template files...",
+        startedAt
+      });
+      await prepareProjectForInstantiation(root);
+      await setPanelOperationState({
+        title: "Preparing project",
+        detail: "Opening the setup files so you can review the initial handoff documents...",
+        startedAt
+      });
+      await openInstantiationFiles(root);
+      vscode.window.showInformationMessage("Codex Watchdog project template is ready. Continue the setup in the Bootstrap Conversation section before starting the guard.");
+    } finally {
+      await clearPanelOperationState();
+    }
+  });
+}
+
+async function generateBootstrapConversationCommand(rawText) {
+  const root = await getProjectRoot();
+  if (!root) {
+    return;
+  }
+  const userText = String(rawText || "").trim();
+  if (!userText) {
+    throw new Error("Enter a bootstrap request before generating drafts.");
+  }
+
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: "Generating bootstrap drafts in Codex Watchdog",
+    cancellable: false
+  }, async (progress) => {
+    const startedAt = new Date().toISOString();
+    try {
+      await writeBootstrapRuntimeState(root, {
+        status: "running",
+        detail: "Preparing the project scaffold and the bootstrap conversation...",
+        started_at: startedAt,
+        updated_at: new Date().toISOString(),
+        completed_at: "",
+        error: "",
+        pending_input: userText
+      });
+      await updateControlPanel();
+
+      progress.report({ message: "Preparing project scaffold" });
+      await ensureBootstrapConversationReady(root);
+      await writeBootstrapRuntimeState(root, {
+        status: "running",
+        detail: "Preparing the project scaffold and the bootstrap conversation...",
+        started_at: startedAt,
+        updated_at: new Date().toISOString(),
+        completed_at: "",
+        error: "",
+        pending_input: userText
+      });
+      await updateControlPanel();
+
+      progress.report({ message: "Checking Codex login" });
+      await ensureCodexHome(root);
+      await writeBootstrapRuntimeState(root, {
+        status: "running",
+        detail: "Checking login and starting a fresh Codex discussion turn. This is still slower than ordinary chat because the panel launches a separate codex exec and keeps the conversation/project state in sync.",
+        started_at: startedAt,
+        updated_at: new Date().toISOString(),
+        completed_at: "",
+        error: "",
+        pending_input: userText
+      });
+      await updateControlPanel();
+      const canContinue = await confirmLoginIfNeeded(root);
+      if (!canContinue) {
+        await writeBootstrapRuntimeState(root, {
+          ...emptyBootstrapRuntimeState(),
+          pending_input: userText
+        });
+        await updateControlPanel();
+        return;
+      }
+
+      progress.report({ message: "Running Codex setup conversation" });
+      await writeBootstrapRuntimeState(root, {
+        status: "running",
+        detail: "Codex is answering your setup question and updating the shared bootstrap conversation...",
+        started_at: startedAt,
+        updated_at: new Date().toISOString(),
+        completed_at: "",
+        error: "",
+        pending_input: userText
+      });
+      await updateControlPanel();
+      const result = await runBootstrapConversationTurn(root, userText);
+      await writeBootstrapRuntimeState(root, {
+        status: "idle",
+        detail: "",
+        started_at: "",
+        updated_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+        error: "",
+        pending_input: ""
+      });
+      const nextStep = String(result.suggested_next_step || "").trim() ||
+        "AI replied. Continue the setup conversation, or use Preview Changed Files / Instantiate Project when the goal feels clear.";
+      vscode.window.showInformationMessage(nextStep);
+    } catch (error) {
+      await writeBootstrapRuntimeState(root, {
+        status: "error",
+        detail: "Bootstrap drafting failed.",
+        started_at: "",
+        updated_at: new Date().toISOString(),
+        completed_at: "",
+        error: error && error.message ? error.message : String(error),
+        pending_input: userText
+      });
+      throw error;
+    } finally {
+      await updateControlPanel();
+    }
   });
 }
 
@@ -236,7 +368,7 @@ async function offerProjectInitialization(root) {
       await prepareProjectForInstantiation(root);
       await openInstantiationFiles(root);
     });
-    vscode.window.showInformationMessage("Project template prepared. Ask Codex to instantiate PLAN/TODO/STATE/SAFETY/DAILY_HANDOFF from your plain-language requirement, then Start Guard.");
+    vscode.window.showInformationMessage("Project template prepared. Continue in the Bootstrap Conversation section to instantiate PLAN/TODO/STATE/SAFETY/DAILY_HANDOFF, then Start Guard when ready.");
     return;
   }
 
@@ -374,6 +506,65 @@ async function handleControlPanelMessage(message) {
     return;
   }
 
+  if (command === "generateBootstrap") {
+    await generateBootstrapConversationCommand(message.text);
+    await updateControlPanel();
+    return;
+  }
+
+  if (command === "instantiateBootstrapProject") {
+    const root = await getProjectRoot();
+    if (root) {
+      await instantiateBootstrapProjectCommand(root);
+    }
+    await updateControlPanel();
+    return;
+  }
+
+  if (command === "openSetupFiles") {
+    const root = await getProjectRoot();
+    if (root) {
+      await openInstantiationFiles(root);
+    }
+    await updateControlPanel();
+    return;
+  }
+
+  if (command === "openBootstrapTranscript") {
+    const root = await getProjectRoot();
+    if (root) {
+      await openBootstrapTranscriptCommand(root);
+    }
+    await updateControlPanel();
+    return;
+  }
+
+  if (command === "openBootstrapPreview") {
+    const root = await getProjectRoot();
+    if (root) {
+      await openBootstrapChangePreviewCommand(root);
+    }
+    await updateControlPanel();
+    return;
+  }
+
+  if (command === "resetBootstrapConversation") {
+    const root = await getProjectRoot();
+    if (root) {
+      const answer = await vscode.window.showWarningMessage(
+        "Reset the bootstrap conversation? Current transcript and last draft artifacts will be archived under agent/status/bootstrap_archive/ before the panel is cleared.",
+        { modal: true },
+        "Reset Conversation"
+      );
+      if (answer === "Reset Conversation") {
+        await archiveAndResetBootstrapConversation(root);
+        vscode.window.showInformationMessage("Bootstrap conversation reset. Previous transcript and draft artifacts were archived under agent/status/bootstrap_archive/.");
+      }
+    }
+    await updateControlPanel();
+    return;
+  }
+
   if (command === "runOnce") {
     await runOnceCommand();
     await updateControlPanel();
@@ -443,6 +634,21 @@ async function updateControlPanel() {
   await updateStatusBar();
 }
 
+async function setPanelOperationState(data) {
+  panelOperationState = {
+    status: "running",
+    title: String(data && data.title || ""),
+    detail: String(data && data.detail || ""),
+    startedAt: String(data && data.startedAt || panelOperationState.startedAt || new Date().toISOString())
+  };
+  await updateControlPanel();
+}
+
+async function clearPanelOperationState() {
+  panelOperationState = emptyPanelOperationState();
+  await updateControlPanel();
+}
+
 async function getControlPanelState() {
   const root = getKnownProjectRoot();
 	  const state = {
@@ -461,6 +667,22 @@ async function getControlPanelState() {
     timer: { text: "Unavailable", isActive: false, isEnabled: false, activeText: "unknown", enabledText: "unknown" },
     latestReport: "",
 	    latestSummary: "",
+    bootstrap: {
+      messages: [],
+      openQuestions: [],
+      readyForStartGuard: false,
+      draftText: "",
+      isRunning: false,
+      runtimeDetail: "",
+      runtimeStartedAt: "",
+      statusText: "Prepare the project, then describe the watchdog objective here."
+    },
+    operation: {
+      isRunning: false,
+      title: "",
+      detail: "",
+      startedAt: ""
+    },
     nextStep: "Select a project root, then start the guard."
   };
 
@@ -486,6 +708,13 @@ async function getControlPanelState() {
     return state;
   }
   state.nextStep = getControlPanelNextStep(state);
+  state.bootstrap = await getBootstrapConversationState(root);
+  state.operation = {
+    isRunning: panelOperationState.status === "running",
+    title: panelOperationState.title || "",
+    detail: panelOperationState.detail || "",
+    startedAt: panelOperationState.startedAt || ""
+  };
 
 	  const latest = path.join(root, "agent", "reports", "latest.md");
 	  if (fs.existsSync(latest)) {
@@ -507,10 +736,10 @@ function getControlPanelNextStep(state) {
     return "Watchdog is paused. Resume Guard when you want the next timer wakeup to run.";
   }
   if (!state.initialized) {
-    return "Project folder is selected. Click Prepare Project, then ask Codex to instantiate the watchdog task from your plain-language requirement.";
+    return "Project folder is selected. Click Prepare Project, then use the Bootstrap Conversation section to instantiate the watchdog task from your plain-language requirement.";
   }
   if (!state.taskReady) {
-    return "Ask daily Codex to instantiate PLAN/TODO/STATE/SAFETY/DAILY_HANDOFF from your request, then Start Guard.";
+    return "Use the Bootstrap Conversation section to talk through the setup, preview the candidate files, then click Instantiate Project before Start Guard.";
   }
   if (!state.login.ok) {
     return "Open the login terminal, complete OpenAI login, then click Start Guard again.";
@@ -545,8 +774,47 @@ function renderControlPanel(state, nonce) {
   const projectLabel = state.root ? path.basename(state.root) || state.root : "No project selected";
   const prepareButtonClass = !state.initialized || !state.taskReady ? "" : "secondary";
   const startButtonClass = state.initialized && state.taskReady && !timerActive ? "" : "secondary";
+  const instantiateButtonClass = state.bootstrap.hasDraft ? "" : "secondary";
   const selectedOnlyStyle = state.root ? "" : ' style="display:none"';
   const timerPill = state.root ? `<div class="pill ${timerClass}">Timer ${esc(timerLabel)}</div>` : "";
+  const bootstrapConversationHtml = state.bootstrap.messages.length
+    ? state.bootstrap.messages.map((message) => {
+      const roleClass = message.role === "assistant" ? "assistant" : "user";
+      const roleLabel = message.role === "assistant" ? "AI reply" : "You";
+      return `
+        <div class="message ${roleClass}">
+          <div class="message-meta">${esc(roleLabel)}${message.createdAt ? ` · ${esc(message.createdAt)}` : ""}</div>
+          <div class="message-body">${esc(message.text)}</div>
+        </div>
+      `;
+    }).join("")
+    : `<div class="subtle">No bootstrap conversation yet. Describe the project goal here, then let Codex draft the watchdog setup files inside this panel.</div>`;
+  const bootstrapQuestionsHtml = state.bootstrap.openQuestions.length
+    ? `
+      <div class="hint">
+        <strong>Open questions</strong>
+        <ul>
+          ${state.bootstrap.openQuestions.map((item) => `<li>${esc(item)}</li>`).join("")}
+        </ul>
+      </div>
+    `
+    : "";
+  const bootstrapPendingHtml = state.bootstrap.isRunning
+    ? `
+      <div class="message assistant pending">
+        <div class="message-meta">⌛ Waiting for AI reply${state.bootstrap.runtimeStartedAt ? ` · ${esc(state.bootstrap.runtimeStartedAt)}` : ""}</div>
+        <div class="message-body">${esc(state.bootstrap.runtimeDetail || "Codex is thinking about the next reply...")}</div>
+      </div>
+    `
+    : "";
+  const operationPendingHtml = state.operation.isRunning
+    ? `
+      <div class="message assistant pending">
+        <div class="message-meta">⌛ ${esc(state.operation.title || "Working")}${state.operation.startedAt ? ` · ${esc(state.operation.startedAt)}` : ""}</div>
+        <div class="message-body">${esc(state.operation.detail || "Codex Watchdog is still working on this step...")}</div>
+      </div>
+    `
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -609,7 +877,7 @@ function renderControlPanel(state, nonce) {
       margin-top: 18px;
     }
     .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
-    input {
+    input, textarea {
       flex: 1;
       min-width: min(360px, 100%);
       min-height: 32px;
@@ -620,7 +888,14 @@ function renderControlPanel(state, nonce) {
       border-radius: 5px;
     }
     input.small { flex: 0 0 92px; min-width: 92px; }
-    input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+    textarea {
+      width: 100%;
+      min-height: 116px;
+      resize: vertical;
+      font: inherit;
+      line-height: 1.45;
+    }
+    input:focus, textarea:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
     button {
       appearance: none;
       min-height: 32px;
@@ -708,12 +983,72 @@ function renderControlPanel(state, nonce) {
     }
     summary:hover { color: var(--vscode-foreground); }
     .advanced-actions { margin-top: 10px; }
+    .workflow-stack {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .workflow-card {
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 8px;
+      padding: 12px;
+      background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-sideBar-background));
+    }
+    .workflow-card.ready {
+      border-color: color-mix(in srgb, #3fb950 55%, var(--vscode-panel-border));
+      background: color-mix(in srgb, #3fb950 7%, var(--vscode-editor-background));
+    }
+    .workflow-step-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--vscode-descriptionForeground);
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      letter-spacing: 0;
+    }
+    .workflow-step-body {
+      margin-bottom: 10px;
+      white-space: pre-wrap;
+    }
+    .conversation {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .message {
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: color-mix(in srgb, var(--vscode-editor-background) 84%, var(--vscode-sideBar-background));
+    }
+    .message.user {
+      border-left: 4px solid color-mix(in srgb, var(--vscode-focusBorder) 72%, transparent);
+    }
+    .message.assistant {
+      border-left: 4px solid color-mix(in srgb, #3fb950 72%, transparent);
+    }
+    .message.pending {
+      border-left: 4px solid color-mix(in srgb, #d29922 72%, transparent);
+      background: color-mix(in srgb, #d29922 8%, var(--vscode-editor-background));
+    }
+    .message-meta {
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .message-body {
+      white-space: pre-wrap;
+    }
+    .subtle {
+      color: var(--vscode-descriptionForeground);
+    }
     @media (max-width: 640px) {
       body { padding: 16px; }
       .header { display: block; }
       .pill { margin-top: 10px; }
       .grid { grid-template-columns: 1fr; }
-      input { min-width: 100%; }
+      input, textarea { min-width: 100%; }
     }
   </style>
 </head>
@@ -734,6 +1069,7 @@ function renderControlPanel(state, nonce) {
     <div class="metric-item"><span>Control</span><strong class="${state.paused ? "warn" : "ok"}">${state.paused ? "Paused" : "Live"}</strong></div>
 	  </div>
 	  <div class="hint selected-only"${selectedOnlyStyle}>${esc(state.nextStep)}</div>
+  ${state.root ? operationPendingHtml : ""}
 
   <div class="section">
   <h2>Project</h2>
@@ -783,7 +1119,6 @@ function renderControlPanel(state, nonce) {
   <h2>Actions</h2>
   <div class="actions">
     <button id="prepareProject" class="${esc(prepareButtonClass)}">Prepare Project</button>
-	    <button id="startGuard" class="${esc(startButtonClass)}">Start Guard</button>
     <button id="pauseGuard" class="secondary">Pause Guard</button>
     <button id="resumeGuard" class="secondary">Resume Guard</button>
     <button id="stopGuard" class="danger">Stop Guard</button>
@@ -799,6 +1134,47 @@ function renderControlPanel(state, nonce) {
       <button id="stopTimer" class="danger">Stop Timer Only</button>
     </div>
   </details>
+  </div>
+
+  <div class="section selected-only"${selectedOnlyStyle}>
+    <h2>Bootstrap Conversation</h2>
+    <div class="hint">Keep the watchdog setup discussion here. Codex will read the bootstrap files, answer inside this panel, stage a candidate setup draft, and keep the setup transcript in the project for later follow-up.</div>
+    <div class="status">${esc(state.bootstrap.statusText)}</div>
+    ${bootstrapQuestionsHtml}
+    <div class="conversation">
+      ${bootstrapConversationHtml}
+      ${bootstrapPendingHtml}
+    </div>
+    <div class="row">
+      <textarea id="bootstrapPrompt" placeholder="Describe what this watchdog project should do, what to avoid, and whether guard start should wait for review.">${esc(state.bootstrap.draftText || "")}</textarea>
+    </div>
+    <div class="workflow-stack">
+      <div class="workflow-card">
+        <div class="workflow-step-title">Step 1</div>
+        <div class="workflow-step-body"><strong>Generate Drafts</strong>\n先讨论。让 AI 回答当前问题，并继续澄清项目目标。</div>
+        <button id="generateBootstrap">Generate Drafts</button>
+      </div>
+      <div class="workflow-card">
+        <div class="workflow-step-title">Step 2</div>
+        <div class="workflow-step-body"><strong>Preview Changed Files</strong>\n看根据当前讨论自动合成的候选项目方案。</div>
+        <button id="openBootstrapPreview" class="secondary">Preview Changed Files</button>
+      </div>
+      <div class="workflow-card">
+        <div class="workflow-step-title">Step 3</div>
+        <div class="workflow-step-body"><strong>Instantiate Project</strong>\n真正把候选方案写入 PLAN / TODO / STATE / SAFETY / DAILY_HANDOFF。</div>
+        <button id="instantiateBootstrapProject" class="${esc(instantiateButtonClass)}">Instantiate Project</button>
+      </div>
+      <div class="workflow-card ${state.taskReady ? "ready" : ""}">
+        <div class="workflow-step-title">Step 4</div>
+        <div class="workflow-step-body"><strong>Start Guard</strong>\n最后再启动 guard，让项目进入定时 watchdog 模式。${state.taskReady ? "\n\n当前状态：已满足启动条件。" : "\n\n当前状态：还要先完成实例化。"} </div>
+        <button id="startGuard" class="${esc(startButtonClass)}">Start Guard</button>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:10px;">
+      <button id="openSetupFiles" class="secondary">Open Setup Files</button>
+      <button id="openBootstrapTranscript" class="ghost">Open Setup Transcript</button>
+      <button id="resetBootstrapConversation" class="ghost">Reset Conversation</button>
+    </div>
   </div>
 
   <div class="section selected-only"${selectedOnlyStyle}>
@@ -835,6 +1211,22 @@ function renderControlPanel(state, nonce) {
       compactEveryRuns: document.getElementById('compactEveryRuns').value
     }));
     document.getElementById('prepareProject').addEventListener('click', () => post('prepareProject'));
+    const bootstrapPrompt = document.getElementById('bootstrapPrompt');
+    const sendBootstrapPrompt = () => post('generateBootstrap', {
+      text: bootstrapPrompt.value
+    });
+    document.getElementById('generateBootstrap').addEventListener('click', sendBootstrapPrompt);
+    bootstrapPrompt.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendBootstrapPrompt();
+      }
+    });
+    document.getElementById('instantiateBootstrapProject').addEventListener('click', () => post('instantiateBootstrapProject'));
+    document.getElementById('openSetupFiles').addEventListener('click', () => post('openSetupFiles'));
+    document.getElementById('openBootstrapTranscript').addEventListener('click', () => post('openBootstrapTranscript'));
+    document.getElementById('openBootstrapPreview').addEventListener('click', () => post('openBootstrapPreview'));
+    document.getElementById('resetBootstrapConversation').addEventListener('click', () => post('resetBootstrapConversation'));
     document.getElementById('startGuard').addEventListener('click', () => post('startGuard'));
     document.getElementById('pauseGuard').addEventListener('click', () => post('pauseGuard'));
     document.getElementById('resumeGuard').addEventListener('click', () => post('resumeGuard'));
@@ -862,6 +1254,659 @@ function createNonce() {
   return crypto.randomBytes(16).toString("base64");
 }
 
+function bootstrapConversationJsonPath(root) {
+  return path.join(root, "agent", "status", "bootstrap_conversation.json");
+}
+
+function bootstrapConversationMarkdownPath(root) {
+  return path.join(root, "agent", "status", "bootstrap_conversation.md");
+}
+
+function bootstrapLastResultPath(root) {
+  return path.join(root, "agent", "status", "bootstrap_last_result.json");
+}
+
+function bootstrapChangePreviewPath(root) {
+  return path.join(root, "agent", "status", "bootstrap_change_preview.md");
+}
+
+function bootstrapArchiveDir(root) {
+  return path.join(root, "agent", "status", "bootstrap_archive");
+}
+
+function bootstrapRuntimeStatePath(root) {
+  return path.join(root, "agent", "status", "bootstrap_runtime.json");
+}
+
+function bootstrapResultSchemaPath(root) {
+  return path.join(root, "agent", "schemas", "bootstrap_instantiation.schema.json");
+}
+
+function bootstrapConversationTurnSchemaPath(root) {
+  return path.join(root, "agent", "schemas", "bootstrap_conversation_turn.schema.json");
+}
+
+function emptyBootstrapConversation(root) {
+  return {
+    schema_version: BOOTSTRAP_CONVERSATION_SCHEMA_VERSION,
+    project_root: root,
+    updated_at: "",
+    draft_input: "",
+    turns: [],
+    latest_result: {
+      ready_for_start_guard: false,
+      open_questions: [],
+      suggested_next_step: "Prepare the project and describe the watchdog setup goal.",
+      has_draft: false,
+      applied_at: ""
+    }
+  };
+}
+
+function emptyBootstrapRuntimeState() {
+  return {
+    status: "idle",
+    detail: "",
+    started_at: "",
+    updated_at: "",
+    completed_at: "",
+    error: "",
+    pending_input: ""
+  };
+}
+
+async function readBootstrapConversation(root) {
+  const file = bootstrapConversationJsonPath(root);
+  if (!fs.existsSync(file)) {
+    return emptyBootstrapConversation(root);
+  }
+  try {
+    const parsed = JSON.parse(await fsp.readFile(file, "utf8"));
+    if (!parsed || parsed.schema_version !== BOOTSTRAP_CONVERSATION_SCHEMA_VERSION || !Array.isArray(parsed.turns)) {
+      return emptyBootstrapConversation(root);
+    }
+    return {
+      schema_version: BOOTSTRAP_CONVERSATION_SCHEMA_VERSION,
+      project_root: root,
+      updated_at: String(parsed.updated_at || ""),
+      draft_input: String(parsed.draft_input || ""),
+      turns: parsed.turns.map((turn) => ({
+        id: String(turn.id || createNonce()),
+        role: turn.role === "assistant" ? "assistant" : "user",
+        text: String(turn.text || "").trim(),
+        created_at: String(turn.created_at || "")
+      })).filter((turn) => turn.text),
+      latest_result: {
+        ready_for_start_guard: Boolean(parsed.latest_result && parsed.latest_result.ready_for_start_guard),
+        open_questions: Array.isArray(parsed.latest_result && parsed.latest_result.open_questions)
+          ? parsed.latest_result.open_questions.map((item) => String(item || "").trim()).filter(Boolean)
+          : [],
+        suggested_next_step: String(parsed.latest_result && parsed.latest_result.suggested_next_step || ""),
+        has_draft: Boolean(parsed.latest_result && parsed.latest_result.has_draft),
+        applied_at: String(parsed.latest_result && parsed.latest_result.applied_at || "")
+      }
+    };
+  } catch (_error) {
+    return emptyBootstrapConversation(root);
+  }
+}
+
+async function readBootstrapRuntimeState(root) {
+  const file = bootstrapRuntimeStatePath(root);
+  if (!fs.existsSync(file)) {
+    return emptyBootstrapRuntimeState();
+  }
+  try {
+    const parsed = JSON.parse(await fsp.readFile(file, "utf8"));
+    return {
+      status: ["idle", "running", "error"].includes(parsed && parsed.status) ? parsed.status : "idle",
+      detail: String(parsed && parsed.detail || ""),
+      started_at: String(parsed && parsed.started_at || ""),
+      updated_at: String(parsed && parsed.updated_at || ""),
+      completed_at: String(parsed && parsed.completed_at || ""),
+      error: String(parsed && parsed.error || ""),
+      pending_input: String(parsed && parsed.pending_input || "")
+    };
+  } catch (_error) {
+    return emptyBootstrapRuntimeState();
+  }
+}
+
+function renderBootstrapConversationMarkdown(data) {
+  const lines = [
+    "# Bootstrap Conversation",
+    "",
+    data.updated_at ? `Last updated: ${data.updated_at}` : "Last updated: unknown",
+    "",
+    "This file keeps the watchdog project setup conversation inside the project so later Codex sessions can understand how the bootstrap was decided.",
+    ""
+  ];
+
+  for (const turn of data.turns) {
+    lines.push(`## ${turn.role === "assistant" ? "AI reply" : "User request"}`);
+    if (turn.created_at) {
+      lines.push(`Time: ${turn.created_at}`);
+      lines.push("");
+    }
+    lines.push(turn.text);
+    lines.push("");
+  }
+
+  lines.push("## Latest Setup Status");
+  lines.push("");
+  lines.push(`- Draft prepared: ${data.latest_result.has_draft ? "yes" : "not yet"}`);
+  lines.push(`- Applied to project files: ${data.latest_result.applied_at || "not yet"}`);
+  lines.push(`- Ready for Start Guard: ${data.latest_result.ready_for_start_guard ? "yes" : "not yet"}`);
+  lines.push(`- Suggested next step: ${data.latest_result.suggested_next_step || "Review the setup files and continue the conversation if needed."}`);
+  if (data.latest_result.open_questions.length) {
+    lines.push("- Open questions:");
+    for (const item of data.latest_result.open_questions) {
+      lines.push(`  - ${item}`);
+    }
+  } else {
+    lines.push("- Open questions: none");
+  }
+  lines.push("");
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+async function writeBootstrapConversation(root, data) {
+  const normalized = {
+    schema_version: BOOTSTRAP_CONVERSATION_SCHEMA_VERSION,
+    project_root: root,
+    updated_at: data.updated_at || new Date().toISOString(),
+    draft_input: String(data.draft_input || ""),
+    turns: Array.isArray(data.turns) ? data.turns.map((turn) => ({
+      id: String(turn.id || createNonce()),
+      role: turn.role === "assistant" ? "assistant" : "user",
+      text: String(turn.text || "").trim(),
+      created_at: String(turn.created_at || new Date().toISOString())
+    })).filter((turn) => turn.text) : [],
+    latest_result: {
+      ready_for_start_guard: Boolean(data.latest_result && data.latest_result.ready_for_start_guard),
+      open_questions: Array.isArray(data.latest_result && data.latest_result.open_questions)
+        ? data.latest_result.open_questions.map((item) => String(item || "").trim()).filter(Boolean)
+        : [],
+      suggested_next_step: String(data.latest_result && data.latest_result.suggested_next_step || ""),
+      has_draft: Boolean(data.latest_result && data.latest_result.has_draft),
+      applied_at: String(data.latest_result && data.latest_result.applied_at || "")
+    }
+  };
+  const jsonFile = bootstrapConversationJsonPath(root);
+  const markdownFile = bootstrapConversationMarkdownPath(root);
+  await ensureDir(path.dirname(jsonFile));
+  await fsp.writeFile(jsonFile, `${JSON.stringify(normalized, null, 2)}\n`);
+  await fsp.writeFile(markdownFile, renderBootstrapConversationMarkdown(normalized));
+  return normalized;
+}
+
+async function writeBootstrapRuntimeState(root, data) {
+  const file = bootstrapRuntimeStatePath(root);
+  const normalized = {
+    status: ["idle", "running", "error"].includes(data && data.status) ? data.status : "idle",
+    detail: String(data && data.detail || ""),
+    started_at: String(data && data.started_at || ""),
+    updated_at: String(data && data.updated_at || new Date().toISOString()),
+    completed_at: String(data && data.completed_at || ""),
+    error: String(data && data.error || ""),
+    pending_input: String(data && data.pending_input || "")
+  };
+  await ensureDir(path.dirname(file));
+  await fsp.writeFile(file, `${JSON.stringify(normalized, null, 2)}\n`);
+  return normalized;
+}
+
+async function getBootstrapConversationState(root) {
+  const conversation = await readBootstrapConversation(root);
+  const latest = conversation.latest_result || {};
+  const previewFile = bootstrapChangePreviewPath(root);
+  const runtime = await readBootstrapRuntimeState(root);
+  const messages = conversation.turns.slice(-10).map((turn) => ({
+    role: turn.role,
+    text: turn.text,
+    createdAt: turn.created_at
+  }));
+  let statusText;
+  if (runtime.status === "running") {
+    statusText = [
+      "Waiting for AI reply.",
+      runtime.detail || "Running setup conversation..."
+    ].join("\n\n");
+  } else if (runtime.status === "error") {
+    statusText = [
+      "The last draft attempt failed.",
+      runtime.error || runtime.detail || "Check the Codex Watchdog output panel for details."
+    ].join("\n\n");
+  } else if (latest.has_draft && !latest.applied_at) {
+    statusText = [
+      "A new bootstrap draft is ready.",
+      "Continue the conversation if you still want to refine the idea. When the goal is clear enough, click Instantiate Project to apply the current draft to PLAN/TODO/STATE/SAFETY/DAILY_HANDOFF."
+    ].join("\n\n");
+  } else if (latest.applied_at) {
+    statusText = [
+      "The latest bootstrap draft has been applied to the project files.",
+      latest.ready_for_start_guard
+        ? "Review the instantiated files, then Start Guard when you want to enter unattended mode."
+        : "Review the instantiated files and continue the conversation if more setup work is still needed before any guard start."
+    ].join("\n\n");
+  } else {
+    statusText = [
+      latest.ready_for_start_guard
+        ? "Bootstrap drafts are in place. Review the files, then you can start the guard when ready."
+        : "Use this conversation to refine the watchdog setup before any guard start.",
+      latest.suggested_next_step || "Describe the project goal, allowed scope, and whether guard start should wait for review."
+    ].join("\n\n");
+  }
+  return {
+    messages,
+    openQuestions: Array.isArray(latest.open_questions) ? latest.open_questions : [],
+    readyForStartGuard: Boolean(latest.ready_for_start_guard),
+    hasPreview: fs.existsSync(previewFile),
+    hasDraft: Boolean(latest.has_draft),
+    hasAppliedDraft: Boolean(latest.applied_at),
+    draftText: String(runtime.pending_input || conversation.draft_input || ""),
+    isRunning: runtime.status === "running",
+    runtimeDetail: String(runtime.detail || ""),
+    runtimeStartedAt: String(runtime.started_at || runtime.updated_at || ""),
+    statusText
+  };
+}
+
+function bootstrapConversationPromptText(root, conversation) {
+  const transcript = conversation.turns.slice(-12).map((turn) => {
+    const label = turn.role === "assistant" ? "AI reply" : "User request";
+    return `### ${label}\n${turn.text}`;
+  }).join("\n\n");
+  return [
+    "You are helping the user discuss and refine a Codex Watchdog project bootstrap inside the VSCode control panel.",
+    "",
+    `Project root: ${root}`,
+    "",
+    "Read these files before answering:",
+    "- README.codex-watchdog.md",
+    "- agent/TASK_REQUEST.md",
+    "- agent/CODEX_TAKEOVER.md",
+    "- agent/PLAN.md",
+    "- agent/TODO.md",
+    "- agent/STATE.md",
+    "- agent/SAFETY.md",
+    "- agent/DAILY_HANDOFF.md",
+    "",
+    "Your job in this turn is discussion, not full file instantiation.",
+    "- First answer the user's latest question directly and conversationally.",
+    "- Reply in the same language the user is currently using, unless they ask you to switch.",
+    "- Then briefly explain how your current understanding of the watchdog setup changed.",
+    "- Ask only the most important follow-up questions, if any.",
+    "- Do not narrate internal progress as if it were the final answer.",
+    "- Do not claim the project files were already updated unless the user explicitly ran Instantiate Project.",
+    "",
+    "Return JSON matching the provided schema.",
+    "`assistant_reply` should read like a real answer to the user, not like a status log.",
+    "`suggested_next_step` should explain whether the user should keep discussing, preview the candidate setup, or instantiate the project.",
+    "",
+    "Bootstrap conversation transcript:",
+    transcript || "(no previous messages)"
+  ].join("\n");
+}
+
+function bootstrapInstantiationPromptText(root, conversation) {
+  const transcript = conversation.turns.slice(-12).map((turn) => {
+    const label = turn.role === "assistant" ? "AI reply" : "User request";
+    return `### ${label}\n${turn.text}`;
+  }).join("\n\n");
+  return [
+    "You are daily Codex working inside the Codex Watchdog VSCode bootstrap conversation.",
+    "",
+    `Project root: ${root}`,
+    "",
+    "Read these files from the project before deciding the setup:",
+    "- README.codex-watchdog.md",
+    "- agent/TASK_REQUEST.md",
+    "- agent/CODEX_TAKEOVER.md",
+    "- agent/PLAN.md",
+    "- agent/TODO.md",
+    "- agent/STATE.md",
+    "- agent/SAFETY.md",
+    "- agent/DAILY_HANDOFF.md",
+    "",
+    "Goal:",
+    "- turn the user's setup conversation into concrete watchdog bootstrap files;",
+    "- keep the first objective bounded and safe;",
+    "- do not start the guard;",
+    "- do not assume training, GPU work, external sends, or destructive actions unless the user explicitly asks and the files make that safe;",
+    "- prefer read-only bootstrap goals when the project is still being defined.",
+    "",
+    "Return JSON matching the provided schema.",
+    "The markdown fields must be complete file contents, not summaries and not fenced code blocks.",
+    "`assistant_reply` should use the same language the user is currently using.",
+    "`assistant_reply` should be a concise UI-facing answer that explains the candidate setup and what still needs review.",
+    "`ready_for_start_guard` should be true only if the files look concrete enough that a later manual Start Guard would make sense.",
+    "",
+    "Bootstrap conversation transcript:",
+    transcript || "(no previous messages)"
+  ].join("\n");
+}
+
+function normalizeMarkdownDraft(text) {
+  const trimmed = String(text || "").trim();
+  const fenceMatch = trimmed.match(/^```(?:markdown|md)?\n([\s\S]*?)\n```$/i);
+  const body = fenceMatch ? fenceMatch[1] : trimmed;
+  return `${body.trimEnd()}\n`;
+}
+
+function summarizeBootstrapDraftChanges(changes) {
+  const lines = [
+    "# Bootstrap Change Preview",
+    "",
+    `Generated at: ${new Date().toISOString()}`,
+    "",
+    "This preview summarizes what the latest bootstrap conversation changed in the five core watchdog handoff files.",
+    ""
+  ];
+  for (const change of changes) {
+    lines.push(`## ${change.relativePath}`);
+    lines.push("");
+    lines.push(`- Status: ${change.changed ? "updated" : "unchanged"}`);
+    lines.push(`- Previous length: ${change.previousLength}`);
+    lines.push(`- New length: ${change.nextLength}`);
+    lines.push("");
+    lines.push("### Incoming preview");
+    lines.push("");
+    lines.push("```markdown");
+    lines.push(change.preview.trimEnd());
+    lines.push("```");
+    lines.push("");
+  }
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+async function writeBootstrapChangePreview(root, changes) {
+  const file = bootstrapChangePreviewPath(root);
+  await ensureDir(path.dirname(file));
+  await fsp.writeFile(file, summarizeBootstrapDraftChanges(changes));
+  return file;
+}
+
+async function clearBootstrapDraftArtifacts(root) {
+  for (const file of [
+    bootstrapLastResultPath(root),
+    bootstrapChangePreviewPath(root)
+  ]) {
+    if (fs.existsSync(file)) {
+      await fsp.unlink(file);
+    }
+  }
+}
+
+async function collectBootstrapDraftChanges(root, result) {
+  const mapping = [
+    ["agent/PLAN.md", result.plan_md],
+    ["agent/TODO.md", result.todo_md],
+    ["agent/STATE.md", result.state_md],
+    ["agent/SAFETY.md", result.safety_md],
+    ["agent/DAILY_HANDOFF.md", result.daily_handoff_md]
+  ];
+  const changes = [];
+  for (const [relativePath, content] of mapping) {
+    const target = path.join(root, relativePath);
+    const nextText = normalizeMarkdownDraft(content);
+    const previousText = fs.existsSync(target) ? await fsp.readFile(target, "utf8") : "";
+    changes.push({
+      target,
+      relativePath,
+      changed: previousText !== nextText,
+      previousLength: previousText.length,
+      nextLength: nextText.length,
+      preview: nextText.split(/\r?\n/).slice(0, 24).join("\n"),
+      nextText
+    });
+  }
+  return changes;
+}
+
+async function stageBootstrapDraftFiles(root, result) {
+  const changes = await collectBootstrapDraftChanges(root, result);
+  await fsp.writeFile(bootstrapLastResultPath(root), `${JSON.stringify(result, null, 2)}\n`);
+  await writeBootstrapChangePreview(root, changes);
+  return changes;
+}
+
+async function applyBootstrapDraftFiles(root, result) {
+  const changes = await collectBootstrapDraftChanges(root, result);
+  for (const change of changes) {
+    await ensureDir(path.dirname(change.target));
+    await fsp.writeFile(change.target, change.nextText);
+  }
+  await fsp.writeFile(bootstrapLastResultPath(root), `${JSON.stringify(result, null, 2)}\n`);
+  await writeBootstrapChangePreview(root, changes);
+  return changes;
+}
+
+async function runBootstrapConversationTurn(root, userText) {
+  const codexBin = await resolveCodexBin(root);
+  const codexHome = codexHomeSetting(root);
+  const conversation = await readBootstrapConversation(root);
+  const userTurn = {
+    id: createNonce(),
+    role: "user",
+    text: userText,
+    created_at: new Date().toISOString()
+  };
+  conversation.draft_input = userText;
+  conversation.turns.push(userTurn);
+  conversation.updated_at = userTurn.created_at;
+  await writeBootstrapConversation(root, conversation);
+  await clearBootstrapDraftArtifacts(root);
+
+  const resultFile = bootstrapLastResultPath(root);
+  const prompt = bootstrapConversationPromptText(root, conversation);
+  const args = [
+    "--ask-for-approval", "never",
+    "exec",
+    "--cd", root,
+    "--skip-git-repo-check",
+    "--sandbox", "read-only",
+    "--output-schema", bootstrapConversationTurnSchemaPath(root),
+    "--output-last-message", resultFile,
+    "-"
+  ];
+  await runLoggedWithInput(codexBin, args, prompt, {
+    cwd: root,
+    env: {
+      CODEX_HOME: codexHome,
+      CUDA_VISIBLE_DEVICES: ""
+    },
+    timeout: watchdogCommandTimeoutMs(root)
+  });
+
+  const parsed = JSON.parse(await fsp.readFile(resultFile, "utf8"));
+  await clearBootstrapDraftArtifacts(root);
+
+  conversation.turns.push({
+    id: createNonce(),
+    role: "assistant",
+    text: String(parsed.assistant_reply || "").trim(),
+    created_at: new Date().toISOString()
+  });
+  conversation.draft_input = "";
+  conversation.updated_at = new Date().toISOString();
+  conversation.latest_result = {
+    ready_for_start_guard: false,
+    open_questions: Array.isArray(parsed.open_questions) ? parsed.open_questions.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    suggested_next_step: String(parsed.suggested_next_step || ""),
+    has_draft: false,
+    applied_at: ""
+  };
+  await writeBootstrapConversation(root, conversation);
+  return parsed;
+}
+
+async function buildBootstrapInstantiationDraft(root) {
+  const codexBin = await resolveCodexBin(root);
+  const codexHome = codexHomeSetting(root);
+  const conversation = await readBootstrapConversation(root);
+  const resultFile = bootstrapLastResultPath(root);
+  const prompt = bootstrapInstantiationPromptText(root, conversation);
+  const args = [
+    "--ask-for-approval", "never",
+    "exec",
+    "--cd", root,
+    "--skip-git-repo-check",
+    "--sandbox", "read-only",
+    "--output-schema", bootstrapResultSchemaPath(root),
+    "--output-last-message", resultFile,
+    "-"
+  ];
+  await runLoggedWithInput(codexBin, args, prompt, {
+    cwd: root,
+    env: {
+      CODEX_HOME: codexHome,
+      CUDA_VISIBLE_DEVICES: ""
+    },
+    timeout: watchdogCommandTimeoutMs(root)
+  });
+  const parsed = JSON.parse(await fsp.readFile(resultFile, "utf8"));
+  await stageBootstrapDraftFiles(root, parsed);
+  const latestConversation = await readBootstrapConversation(root);
+  latestConversation.updated_at = new Date().toISOString();
+  latestConversation.latest_result = {
+    ready_for_start_guard: Boolean(parsed.ready_for_start_guard),
+    open_questions: Array.isArray(parsed.open_questions) ? parsed.open_questions.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    suggested_next_step: String(parsed.suggested_next_step || ""),
+    has_draft: true,
+    applied_at: ""
+  };
+  await writeBootstrapConversation(root, latestConversation);
+  return parsed;
+}
+
+async function instantiateBootstrapProjectCommand(root) {
+  const result = await ensureBootstrapInstantiationDraft(root);
+  if (!result) {
+    return;
+  }
+  const changes = await applyBootstrapDraftFiles(root, result);
+  const conversation = await readBootstrapConversation(root);
+  const appliedAt = new Date().toISOString();
+  conversation.updated_at = appliedAt;
+  conversation.latest_result = {
+    ready_for_start_guard: Boolean(result.ready_for_start_guard),
+    open_questions: Array.isArray(result.open_questions) ? result.open_questions.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    suggested_next_step: String(result.suggested_next_step || ""),
+    has_draft: true,
+    applied_at: appliedAt
+  };
+  await writeBootstrapConversation(root, conversation);
+
+  const changedCount = changes.filter((change) => change.changed).length;
+  if (changedCount === 0) {
+    vscode.window.showInformationMessage(taskLooksInstantiated(root)
+      ? "Instantiate Project finished. The latest draft already matches the current setup files, and Start Guard is now available."
+      : "Instantiate Project finished. The latest draft already matches the current setup files.");
+  } else {
+    vscode.window.showInformationMessage(taskLooksInstantiated(root)
+      ? `Instantiate Project applied the latest draft to ${changedCount} setup file${changedCount === 1 ? "" : "s"}. Start Guard is now available.`
+      : `Instantiate Project applied the latest draft to ${changedCount} setup file${changedCount === 1 ? "" : "s"}. Review them, then Start Guard when ready.`);
+  }
+}
+
+async function openBootstrapTranscriptCommand(root) {
+  const file = bootstrapConversationMarkdownPath(root);
+  if (!fs.existsSync(file)) {
+    vscode.window.showWarningMessage("No bootstrap conversation transcript exists yet. Generate drafts first.");
+    return;
+  }
+  await openDocument(file, false);
+}
+
+async function ensureBootstrapInstantiationDraft(root) {
+  if (fs.existsSync(bootstrapLastResultPath(root)) && fs.existsSync(bootstrapChangePreviewPath(root))) {
+    return JSON.parse(await fsp.readFile(bootstrapLastResultPath(root), "utf8"));
+  }
+  return await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: "Building watchdog setup candidate",
+    cancellable: false
+  }, async () => {
+    const startedAt = new Date().toISOString();
+    await ensureBootstrapConversationReady(root);
+    await ensureCodexHome(root);
+    await writeBootstrapRuntimeState(root, {
+      status: "running",
+      detail: "Codex is turning the discussion transcript into a concrete candidate setup draft...",
+      started_at: startedAt,
+      updated_at: new Date().toISOString(),
+      completed_at: "",
+      error: ""
+    });
+    await updateControlPanel();
+    const canContinue = await confirmLoginIfNeeded(root);
+    if (!canContinue) {
+      await writeBootstrapRuntimeState(root, emptyBootstrapRuntimeState());
+      await updateControlPanel();
+      return null;
+    }
+    try {
+      const parsed = await buildBootstrapInstantiationDraft(root);
+      await writeBootstrapRuntimeState(root, {
+        status: "idle",
+        detail: "",
+        started_at: "",
+        updated_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+        error: ""
+      });
+      return parsed;
+    } catch (error) {
+      await writeBootstrapRuntimeState(root, {
+        status: "error",
+        detail: "Bootstrap instantiation draft failed.",
+        started_at: "",
+        updated_at: new Date().toISOString(),
+        completed_at: "",
+        error: error && error.message ? error.message : String(error)
+      });
+      throw error;
+    } finally {
+      await updateControlPanel();
+    }
+  });
+}
+
+async function openBootstrapChangePreviewCommand(root) {
+  const draft = await ensureBootstrapInstantiationDraft(root);
+  if (!draft) {
+    return;
+  }
+  const file = bootstrapChangePreviewPath(root);
+  if (!fs.existsSync(file)) {
+    vscode.window.showWarningMessage("No bootstrap change preview exists yet. Generate drafts first.");
+    return;
+  }
+  await openDocument(file, false);
+}
+
+async function archiveAndResetBootstrapConversation(root) {
+  const archiveDir = bootstrapArchiveDir(root);
+  await ensureDir(archiveDir);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const candidates = [
+    bootstrapConversationJsonPath(root),
+    bootstrapConversationMarkdownPath(root),
+    bootstrapLastResultPath(root),
+    bootstrapChangePreviewPath(root)
+  ];
+  for (const source of candidates) {
+    if (!fs.existsSync(source)) {
+      continue;
+    }
+    const target = path.join(archiveDir, `${stamp}-${path.basename(source)}`);
+    await fsp.rename(source, target);
+  }
+  await writeBootstrapConversation(root, emptyBootstrapConversation(root));
+  await writeBootstrapRuntimeState(root, emptyBootstrapRuntimeState());
+}
+
 async function refreshGeneratedFilesCommand() {
   const root = await getProjectRoot();
   if (!root) {
@@ -881,9 +1926,19 @@ async function refreshGeneratedFilesCommand() {
     title: "Refreshing Codex Watchdog generated files",
     cancellable: false
   }, async () => {
-    await ensureGeneratedDirs(root);
-    await refreshGeneratedWatcherFiles(root);
-    vscode.window.showInformationMessage("Codex Watchdog generated files refreshed.");
+    const startedAt = new Date().toISOString();
+    try {
+      await setPanelOperationState({
+        title: "Refreshing generated files",
+        detail: "Rebuilding watchdog scripts, skills, prompts, and schema files...",
+        startedAt
+      });
+      await ensureGeneratedDirs(root);
+      await refreshGeneratedWatcherFiles(root);
+      vscode.window.showInformationMessage("Codex Watchdog generated files refreshed.");
+    } finally {
+      await clearPanelOperationState();
+    }
   });
 }
 
@@ -892,10 +1947,25 @@ async function prepareEveningHandoffCommand() {
   if (!root) {
     return;
   }
-  await bootstrapProject(root);
-  await ensureHandoffFiles(root);
-  await openDocument(path.join(root, "agent", "DAILY_HANDOFF.md"), false);
-  vscode.window.showInformationMessage("Evening handoff is ready. Update DAILY_HANDOFF, PLAN, TODO, STATE, and SAFETY before starting the timer.");
+  const startedAt = new Date().toISOString();
+  try {
+    await setPanelOperationState({
+      title: "Preparing evening handoff",
+      detail: "Refreshing project bootstrap files and preparing DAILY_HANDOFF for tonight...",
+      startedAt
+    });
+    await bootstrapProject(root);
+    await ensureHandoffFiles(root);
+    await setPanelOperationState({
+      title: "Preparing evening handoff",
+      detail: "Opening DAILY_HANDOFF so you can review it before unattended mode...",
+      startedAt
+    });
+    await openDocument(path.join(root, "agent", "DAILY_HANDOFF.md"), false);
+    vscode.window.showInformationMessage("Evening handoff is ready. Update DAILY_HANDOFF, PLAN, TODO, STATE, and SAFETY before starting the timer.");
+  } finally {
+    await clearPanelOperationState();
+  }
 }
 
 async function openMorningBriefCommand() {
@@ -930,32 +2000,52 @@ async function startGuardCommand() {
     title: "Starting Codex Watchdog guard",
     cancellable: false
   }, async (progress) => {
-    progress.report({ message: "Preparing generated files" });
-    await prepareProjectForGuard(root);
-    const taskReady = await confirmTaskInstantiatedIfNeeded(root);
-    if (!taskReady) {
-      return;
+    const startedAt = new Date().toISOString();
+    try {
+      progress.report({ message: "Preparing generated files" });
+      await setPanelOperationState({
+        title: "Starting guard",
+        detail: "Refreshing generated watchdog files and checking project readiness...",
+        startedAt
+      });
+      await prepareProjectForGuard(root);
+      const taskReady = await confirmTaskInstantiatedIfNeeded(root);
+      if (!taskReady) {
+        return;
+      }
+
+      progress.report({ message: "Preparing Codex home" });
+      await setPanelOperationState({
+        title: "Starting guard",
+        detail: "Checking CODEX_HOME and login state before unattended mode starts...",
+        startedAt
+      });
+      await ensureCodexHome(root);
+      const canContinue = await confirmLoginIfNeeded(root);
+      if (!canContinue) {
+        return;
+      }
+
+      progress.report({ message: "Running one wakeup, then starting timer" });
+      await setPanelOperationState({
+        title: "Starting guard",
+        detail: "Running one immediate watchdog wakeup, then enabling the repeating timer...",
+        startedAt
+      });
+      output.show(true);
+      output.appendLine(`\n# ${new Date().toISOString()} Start Guard`);
+      output.appendLine(`Project root: ${root}`);
+      await runLogged(path.join(root, "agent", "bin", "watchdog"), ["start"], {
+        cwd: root,
+        env: await watchdogCommandEnv(root),
+        timeout: watchdogCommandTimeoutMs(root)
+      });
+
+      vscode.window.showInformationMessage("Codex Watchdog guard started. Future operations can use ./agent/bin/watchdog.");
+      await updateStatusBar();
+    } finally {
+      await clearPanelOperationState();
     }
-
-    progress.report({ message: "Preparing Codex home" });
-    await ensureCodexHome(root);
-    const canContinue = await confirmLoginIfNeeded(root);
-    if (!canContinue) {
-      return;
-    }
-
-    progress.report({ message: "Running one wakeup, then starting timer" });
-    output.show(true);
-    output.appendLine(`\n# ${new Date().toISOString()} Start Guard`);
-    output.appendLine(`Project root: ${root}`);
-    await runLogged(path.join(root, "agent", "bin", "watchdog"), ["start"], {
-      cwd: root,
-      env: await watchdogCommandEnv(root),
-      timeout: watchdogCommandTimeoutMs(root)
-    });
-
-    vscode.window.showInformationMessage("Codex Watchdog guard started. Future operations can use ./agent/bin/watchdog.");
-    await updateStatusBar();
   });
 }
 
@@ -1026,6 +2116,17 @@ async function prepareProjectForInstantiation(root) {
   await refreshGeneratedWatcherFiles(root);
 }
 
+async function ensureBootstrapConversationReady(root) {
+  await ensureDir(root);
+  const result = await bootstrapProject(root);
+  if (result.created.length) {
+    showBootstrapResult(result);
+  }
+  if (!fs.existsSync(bootstrapResultSchemaPath(root)) || !fs.existsSync(bootstrapConversationTurnSchemaPath(root))) {
+    await refreshGeneratedWatcherFiles(root);
+  }
+}
+
 async function openInstantiationFiles(root) {
   for (const rel of [
     "agent/TASK_REQUEST.md",
@@ -1067,26 +2168,29 @@ async function confirmTaskInstantiatedIfNeeded(root) {
 }
 
 function taskLooksInstantiated(root) {
-  const files = [
-    path.join(root, "agent", "PLAN.md"),
-    path.join(root, "agent", "TODO.md"),
-    path.join(root, "agent", "STATE.md"),
-    path.join(root, "agent", "SAFETY.md"),
-    path.join(root, "agent", "DAILY_HANDOFF.md")
-  ];
-  if (files.some((file) => !fs.existsSync(file))) {
+  const requiredFiles = {
+    plan: path.join(root, "agent", "PLAN.md"),
+    todo: path.join(root, "agent", "TODO.md"),
+    state: path.join(root, "agent", "STATE.md"),
+    safety: path.join(root, "agent", "SAFETY.md"),
+    dailyHandoff: path.join(root, "agent", "DAILY_HANDOFF.md")
+  };
+  if (Object.values(requiredFiles).some((file) => !fs.existsSync(file))) {
     return false;
   }
-  const combined = files.map((file) => fs.readFileSync(file, "utf8")).join("\n");
-  const placeholders = [
-    "CODEX_WATCHDOG_TEMPLATE_FILE",
-    "Continue monitoring the current training/evaluation pipeline",
-    "Replace this line with the concrete objective",
-    "Replace this row with the first approved monitoring task",
-    "Default watcher mode: read-only reasoning",
-    "In Level 2 only, after explicit implementation of a policy gate"
+  const contents = Object.fromEntries(
+    Object.entries(requiredFiles).map(([key, file]) => [key, fs.readFileSync(file, "utf8")])
+  );
+  const containsTemplateMarker = Object.values(contents).some((text) => text.includes("CODEX_WATCHDOG_TEMPLATE_FILE"));
+  if (containsTemplateMarker) {
+    return false;
+  }
+  const exactTemplateChecks = [
+    /Continue monitoring the current training\/evaluation pipeline/i.test(contents.plan),
+    /Replace this line with the concrete objective/i.test(contents.dailyHandoff),
+    /Replace this row with the first approved monitoring task/i.test(contents.todo)
   ];
-  return !placeholders.some((placeholder) => combined.includes(placeholder));
+  return !exactTemplateChecks.some(Boolean);
 }
 
 function isGuardPaused(root) {
@@ -1201,26 +2305,41 @@ async function startTimerCommand() {
     title: "Running Codex Watchdog once, then starting timer",
     cancellable: false
   }, async () => {
-    await prepareProjectForGuard(root);
-    const taskReady = await confirmTaskInstantiatedIfNeeded(root);
-    if (!taskReady) {
-      return;
+    const startedAt = new Date().toISOString();
+    try {
+      await setPanelOperationState({
+        title: "Run once and start timer",
+        detail: "Refreshing the project, checking login, then launching one wakeup before the timer starts...",
+        startedAt
+      });
+      await prepareProjectForGuard(root);
+      const taskReady = await confirmTaskInstantiatedIfNeeded(root);
+      if (!taskReady) {
+        return;
+      }
+      await ensureCodexHome(root);
+      const canContinue = await confirmLoginIfNeeded(root);
+      if (!canContinue) {
+        return;
+      }
+      await setPanelOperationState({
+        title: "Run once and start timer",
+        detail: "Executing one immediate watchdog cycle and enabling the repeating timer...",
+        startedAt
+      });
+      output.show(true);
+      output.appendLine(`\n# ${new Date().toISOString()} Run Once And Start Timer`);
+      output.appendLine(`Project root: ${root}`);
+      await runLogged(path.join(root, "agent", "bin", "watchdog"), ["start"], {
+        cwd: root,
+        env: await watchdogCommandEnv(root),
+        timeout: watchdogCommandTimeoutMs(root)
+      });
+      vscode.window.showInformationMessage("Codex Watchdog immediate wakeup succeeded and timer started.");
+      await updateStatusBar();
+    } finally {
+      await clearPanelOperationState();
     }
-    await ensureCodexHome(root);
-    const canContinue = await confirmLoginIfNeeded(root);
-    if (!canContinue) {
-      return;
-    }
-    output.show(true);
-    output.appendLine(`\n# ${new Date().toISOString()} Run Once And Start Timer`);
-    output.appendLine(`Project root: ${root}`);
-    await runLogged(path.join(root, "agent", "bin", "watchdog"), ["start"], {
-      cwd: root,
-      env: await watchdogCommandEnv(root),
-      timeout: watchdogCommandTimeoutMs(root)
-    });
-    vscode.window.showInformationMessage("Codex Watchdog immediate wakeup succeeded and timer started.");
-    await updateStatusBar();
   });
 }
 
@@ -1335,8 +2454,10 @@ async function bootstrapProject(root) {
   for (const [rel, content] of generatedSkillFiles()) {
     await writeIfAbsent(root, path.join(root, rel), content, created, skipped);
   }
-	  await writeIfAbsent(root, path.join(root, "agent", "prompts", "wakeup.md"), templates.wakeup(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "prompts", "wakeup.md"), templates.wakeup(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "watch_decision.schema.json"), templates.schema(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "schemas", "bootstrap_conversation_turn.schema.json"), templates.bootstrapConversationTurnSchema(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "schemas", "bootstrap_instantiation.schema.json"), templates.bootstrapInstantiationSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "state.schema.json"), templates.stateSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "job.schema.json"), templates.jobSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "gate.schema.json"), templates.gateSchema(), created, skipped);
@@ -1503,6 +2624,8 @@ async function generatedWatcherFileEntries(root) {
     ["agent/WATCHDOG_PROTOCOL.md", templates.watchdogProtocol(), 0o644],
     ["agent/prompts/wakeup.md", templates.wakeup(), 0o644],
     ["agent/schemas/watch_decision.schema.json", templates.schema(), 0o644],
+    ["agent/schemas/bootstrap_conversation_turn.schema.json", templates.bootstrapConversationTurnSchema(), 0o644],
+    ["agent/schemas/bootstrap_instantiation.schema.json", templates.bootstrapInstantiationSchema(), 0o644],
     ["agent/schemas/state.schema.json", templates.stateSchema(), 0o644],
     ["agent/schemas/job.schema.json", templates.jobSchema(), 0o644],
     ["agent/schemas/gate.schema.json", templates.gateSchema(), 0o644],
@@ -2605,6 +3728,19 @@ async function runLogged(command, args, options = {}) {
   return result;
 }
 
+async function runLoggedWithInput(command, args, input, options = {}) {
+  output.show(true);
+  output.appendLine(`$ ${[command, ...args].join(" ")} <stdin>`);
+  const result = await runWithInput(command, args, input, options);
+  if (result.stdout.trim()) {
+    output.appendLine(result.stdout.trimEnd());
+  }
+  if (result.stderr.trim()) {
+    output.appendLine(result.stderr.trimEnd());
+  }
+  return result;
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     cp.execFile(command, args, {
@@ -2620,6 +3756,82 @@ function run(command, args, options = {}) {
       }
       resolve({ stdout: stdout || "", stderr: stderr || "", error });
     });
+  });
+}
+
+function runWithInput(command, args, input, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = cp.spawn(command, args, {
+      cwd: options.cwd || os.homedir(),
+      env: { ...process.env, ...(options.env || {}) },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timeoutId;
+
+    const finish = (error, result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (error && !options.allowFailure) {
+        error.message = `${error.message}\n${stderr || ""}`.trim();
+        reject(error);
+        return;
+      }
+      resolve(result);
+    };
+
+    if (options.timeout) {
+      timeoutId = setTimeout(() => {
+        child.kill("SIGTERM");
+        const error = new Error(`Command timed out after ${options.timeout} ms`);
+        error.code = "ETIMEDOUT";
+        finish(error, { stdout, stderr, error });
+      }, options.timeout);
+    }
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if ((options.maxBuffer || 16 * 1024 * 1024) < Buffer.byteLength(stdout + stderr, "utf8")) {
+        child.kill("SIGTERM");
+        const error = new Error("stdout/stderr maxBuffer exceeded");
+        finish(error, { stdout, stderr, error });
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      if ((options.maxBuffer || 16 * 1024 * 1024) < Buffer.byteLength(stdout + stderr, "utf8")) {
+        child.kill("SIGTERM");
+        const error = new Error("stdout/stderr maxBuffer exceeded");
+        finish(error, { stdout, stderr, error });
+      }
+    });
+    child.on("error", (error) => {
+      finish(error, { stdout, stderr, error });
+    });
+    child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      if ((code && code !== 0) || signal) {
+        const error = new Error(signal ? `Command terminated by ${signal}` : `Command exited with status ${code}`);
+        error.code = code;
+        finish(error, { stdout, stderr, error });
+        return;
+      }
+      finish(null, { stdout, stderr, error: null });
+    });
+
+    child.stdin.end(String(input || ""));
   });
 }
 
@@ -4103,6 +5315,54 @@ The final output must follow the JSON schema.
       ledger_update_markdown: { type: "string" },
       proposal_markdown: { type: "string" },
       report_markdown: { type: "string" }
+    },
+    additionalProperties: false
+  }, null, 2) + "\n",
+
+  bootstrapConversationTurnSchema: () => JSON.stringify({
+    type: "object",
+    required: [
+      "assistant_reply",
+      "open_questions",
+      "suggested_next_step"
+    ],
+    properties: {
+      assistant_reply: { type: "string" },
+      open_questions: {
+        type: "array",
+        items: { type: "string" }
+      },
+      suggested_next_step: { type: "string" }
+    },
+    additionalProperties: false
+  }, null, 2) + "\n",
+
+  bootstrapInstantiationSchema: () => JSON.stringify({
+    type: "object",
+    required: [
+      "assistant_reply",
+      "plan_md",
+      "todo_md",
+      "state_md",
+      "safety_md",
+      "daily_handoff_md",
+      "ready_for_start_guard",
+      "open_questions",
+      "suggested_next_step"
+    ],
+    properties: {
+      assistant_reply: { type: "string" },
+      plan_md: { type: "string" },
+      todo_md: { type: "string" },
+      state_md: { type: "string" },
+      safety_md: { type: "string" },
+      daily_handoff_md: { type: "string" },
+      ready_for_start_guard: { type: "boolean" },
+      open_questions: {
+        type: "array",
+        items: { type: "string" }
+      },
+      suggested_next_step: { type: "string" }
     },
     additionalProperties: false
   }, null, 2) + "\n",
@@ -6748,6 +8008,8 @@ def validate_progress():
 def validate_schema_files():
     for rel in (
         "agent/schemas/watch_decision.schema.json",
+        "agent/schemas/bootstrap_conversation_turn.schema.json",
+        "agent/schemas/bootstrap_instantiation.schema.json",
         "agent/schemas/state.schema.json",
         "agent/schemas/job.schema.json",
         "agent/schemas/gate.schema.json",
