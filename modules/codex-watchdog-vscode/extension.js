@@ -484,7 +484,12 @@ async function handleControlPanelMessage(message) {
     }
     await updateProjectSetting(root, "codexWatchdog.intervalMinutes", interval);
     await updateProjectSetting(root, "codexWatchdog.compactEveryRuns", compactEveryRuns);
-    vscode.window.showInformationMessage(`Codex Watchdog schedule saved: ${interval} minutes; compact every ${compactEveryRuns} runs`);
+    const drift = readWatcherUnitDrift(root, await effectiveWatchdogSettings(root));
+    vscode.window.showInformationMessage(
+      drift.needsReinstall
+        ? `Codex Watchdog schedule saved: ${interval} minutes; compact every ${compactEveryRuns} runs. Reinstall the timer so systemd uses the new schedule.`
+        : `Codex Watchdog schedule saved: ${interval} minutes; compact every ${compactEveryRuns} runs`
+    );
     await updateControlPanel();
     return;
   }
@@ -651,20 +656,22 @@ async function clearPanelOperationState() {
 
 async function getControlPanelState() {
   const root = getKnownProjectRoot();
-	  const state = {
+		  const state = {
     root: root || "",
     rootExists: Boolean(root && fs.existsSync(root)),
     initialized: Boolean(root && fs.existsSync(root) && isWatchdogInitialized(root)),
     taskReady: Boolean(root && fs.existsSync(root) && isWatchdogInitialized(root) && taskLooksInstantiated(root)),
-    paused: Boolean(root && fs.existsSync(root) && isGuardPaused(root)),
-    codexHome: "",
-    codexBin: "",
+	    paused: Boolean(root && fs.existsSync(root) && isGuardPaused(root)),
+	    codexHome: "",
+    codexHomeNotice: "",
+	    codexBin: "",
     sandboxMode: "",
     timeoutMinutes: "",
     intervalMinutes: "",
     compactEveryRuns: "",
-    login: { ok: false, text: "Select a project root first." },
-    timer: { text: "Unavailable", isActive: false, isEnabled: false, activeText: "unknown", enabledText: "unknown" },
+    login: { ok: false, text: "Select a project root first.", bootstrapText: "", canSeedFromMainAuth: false },
+	    timer: { text: "Unavailable", isActive: false, isEnabled: false, activeText: "unknown", enabledText: "unknown", needsReinstall: false, warningText: "" },
+    runtime: { queueText: "", signals: [] },
     latestReport: "",
 	    latestSummary: "",
     bootstrap: {
@@ -691,19 +698,26 @@ async function getControlPanelState() {
     return state;
   }
 
-  try {
-    state.codexHome = codexHomeSetting(root);
-    state.codexBin = await resolveCodexBin(root);
-    state.sandboxMode = sandboxModeSetting(root);
-    state.timeoutMinutes = String(positiveNumberSetting(root, "codexWatchdog.timeoutMinutes", extensionSetting("timeoutMinutes", DEFAULT_TIMEOUT_MINUTES), 1, DEFAULT_TIMEOUT_MINUTES));
-    state.intervalMinutes = String(positiveNumberSetting(root, "codexWatchdog.intervalMinutes", extensionSetting("intervalMinutes", DEFAULT_INTERVAL_MINUTES), 5, DEFAULT_INTERVAL_MINUTES));
-    state.compactEveryRuns = String(positiveNumberSetting(root, "codexWatchdog.compactEveryRuns", extensionSetting("compactEveryRuns", DEFAULT_COMPACT_EVERY_RUNS), 0, DEFAULT_COMPACT_EVERY_RUNS));
-    state.login = await getCodexLoginStatus(root);
-    state.timer = await getTimerStatus(root);
-  } catch (error) {
+	  try {
+    const codexHome = codexHomePlan(root);
+	    state.codexHome = codexHome.effectivePath;
+    state.codexHomeNotice = codexHome.migrationReason || "";
+	    state.codexBin = await resolveCodexBin(root);
+	    state.sandboxMode = sandboxModeSetting(root);
+	    state.timeoutMinutes = String(positiveNumberSetting(root, "codexWatchdog.timeoutMinutes", extensionSetting("timeoutMinutes", DEFAULT_TIMEOUT_MINUTES), 1, DEFAULT_TIMEOUT_MINUTES));
+	    state.intervalMinutes = String(positiveNumberSetting(root, "codexWatchdog.intervalMinutes", extensionSetting("intervalMinutes", DEFAULT_INTERVAL_MINUTES), 5, DEFAULT_INTERVAL_MINUTES));
+	    state.compactEveryRuns = String(positiveNumberSetting(root, "codexWatchdog.compactEveryRuns", extensionSetting("compactEveryRuns", DEFAULT_COMPACT_EVERY_RUNS), 0, DEFAULT_COMPACT_EVERY_RUNS));
+	    state.login = await getCodexLoginStatus(root);
+	    state.timer = await getTimerStatus(root);
+    state.runtime = inspectProjectRuntimeClarity(root);
+    const settings = await effectiveWatchdogSettings(root);
+    const timerDrift = readWatcherUnitDrift(root, settings);
+    state.timer.needsReinstall = timerDrift.needsReinstall;
+    state.timer.warningText = timerDrift.text;
+	  } catch (error) {
     const message = error && error.message ? error.message : String(error);
-    state.login = { ok: false, text: `Configuration error:\n${message}` };
-    state.timer = { text: "Unavailable until configuration is fixed.", isActive: false, isEnabled: false, activeText: "unknown", enabledText: "unknown" };
+    state.login = { ok: false, text: `Configuration error:\n${message}`, bootstrapText: "", canSeedFromMainAuth: false };
+	    state.timer = { text: "Unavailable until configuration is fixed.", isActive: false, isEnabled: false, activeText: "unknown", enabledText: "unknown", needsReinstall: false, warningText: "" };
     state.nextStep = "Fix the project-local watchdog configuration, then refresh status.";
     return state;
   }
@@ -743,6 +757,9 @@ function getControlPanelNextStep(state) {
   }
   if (!state.login.ok) {
     return "Open the login terminal, complete OpenAI login, then click Start Guard again.";
+  }
+  if (state.timer && state.timer.needsReinstall) {
+    return "Watchdog settings changed. Click Start Guard or run ./agent/bin/watchdog timer-install to reinstall the timer with the current CODEX_HOME and schedule.";
   }
   if (state.timer.isActive) {
     return "Watchdog is running. Use Open Latest Report or Open Morning Brief to inspect its work.";
@@ -815,6 +832,9 @@ function renderControlPanel(state, nonce) {
       </div>
     `
     : "";
+  const runtimeSignalsHtml = state.runtime.signals.length
+    ? state.runtime.signals.map((signal) => `<div class="status ${esc(signal.level || "muted")}">${esc(signal.text || "")}</div>`).join("")
+    : `<div class="subtle">No paused/stale-state warning is visible from the local watchdog runtime files.</div>`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1081,19 +1101,21 @@ function renderControlPanel(state, nonce) {
     <button id="clearRoot" class="ghost">Clear</button>
   </div>
   <div id="pendingRootHint" class="hint" hidden>This path is not selected yet. Click <strong>Use / Create Project</strong> to create/select it before viewing reports or starting the guard.</div>
-  <div class="grid selected-only"${selectedOnlyStyle}>
-    <div class="label">Folder</div><div class="${state.rootExists ? "ok" : "bad"}">${state.rootExists ? "exists" : "missing"}</div>
-    <div class="label">Template</div><div class="${initializedClass}">${state.initialized ? "initialized" : "not initialized"}</div>
-    <div class="label">Task</div><div class="${state.taskReady ? "ok" : "warn"}">${state.taskReady ? "instantiated" : "needs setup"}</div>
-    <div class="label">Sandbox</div><div><code>${esc(state.sandboxMode || "-")}</code></div>
-    <div class="label">Codex Home</div><div><code>${esc(state.codexHome || "-")}</code></div>
-    <div class="label">Codex Bin</div><div><code>${esc(state.codexBin || "-")}</code></div>
-  </div>
-  </div>
+	  <div class="grid selected-only"${selectedOnlyStyle}>
+	    <div class="label">Folder</div><div class="${state.rootExists ? "ok" : "bad"}">${state.rootExists ? "exists" : "missing"}</div>
+	    <div class="label">Template</div><div class="${initializedClass}">${state.initialized ? "initialized" : "not initialized"}</div>
+	    <div class="label">Task</div><div class="${state.taskReady ? "ok" : "warn"}">${state.taskReady ? "instantiated" : "needs setup"}</div>
+	    <div class="label">Sandbox</div><div><code>${esc(state.sandboxMode || "-")}</code></div>
+	    <div class="label">Codex Home</div><div><code>${esc(state.codexHome || "-")}</code></div>
+	    <div class="label">Codex Bin</div><div><code>${esc(state.codexBin || "-")}</code></div>
+	  </div>
+    ${state.codexHomeNotice ? `<div class="status warn">${esc(state.codexHomeNotice)}</div>` : ""}
+	  </div>
 
   <div class="section selected-only"${selectedOnlyStyle}>
 	  <h2>Login</h2>
 	  <div class="status ${loginClass}">${esc(state.login.text)}</div>
+    ${state.login.bootstrapText ? `<div class="status warn">${esc(state.login.bootstrapText)}</div>` : ""}
 	  <div class="hint">OpenAI login is the only manual authorization step. The extension prepares the folder and scripts, then waits for this login before starting unattended runs.</div>
 	  <div class="row">
 	    <button id="refresh" class="secondary">Refresh Status</button>
@@ -1103,17 +1125,18 @@ function renderControlPanel(state, nonce) {
 
   <div class="section selected-only"${selectedOnlyStyle}>
   <h2>Schedule</h2>
-  <div class="row">
-    <label for="interval">Repeat every</label>
-    <input id="interval" class="small" type="number" min="5" value="${esc(state.intervalMinutes || "30")}">
-    <span>minutes</span>
+	  <div class="row">
+	    <label for="interval">Repeat every</label>
+	    <input id="interval" class="small" type="number" min="5" value="${esc(state.intervalMinutes || "30")}">
+	    <span>minutes</span>
     <label for="compactEveryRuns">Compact every</label>
     <input id="compactEveryRuns" class="small" type="number" min="0" value="${esc(state.compactEveryRuns || "6")}">
     <span>runs</span>
     <button id="saveInterval">Save</button>
-  </div>
-  <div class="status">${esc(state.timer.text)}</div>
-  </div>
+	  </div>
+	  <div class="status">${esc(state.timer.text)}</div>
+    ${state.timer.warningText ? `<div class="status warn">${esc(state.timer.warningText)}</div>` : ""}
+	  </div>
 
   <div class="section selected-only"${selectedOnlyStyle}>
   <h2>Actions</h2>
@@ -1134,6 +1157,12 @@ function renderControlPanel(state, nonce) {
       <button id="stopTimer" class="danger">Stop Timer Only</button>
     </div>
   </details>
+  </div>
+
+  <div class="section selected-only"${selectedOnlyStyle}>
+  <h2>Runtime Clarity</h2>
+  ${state.runtime.queueText ? `<div class="status">${esc(state.runtime.queueText)}</div>` : ""}
+  ${runtimeSignalsHtml}
   </div>
 
   <div class="section selected-only"${selectedOnlyStyle}>
@@ -2679,6 +2708,7 @@ async function writeGeneratedManifest(root, entries) {
 }
 
 async function refreshGeneratedWatcherFiles(root) {
+  await ensureCodexHome(root);
   const files = await generatedWatcherFileEntries(root);
   for (const { file, content, mode } of files) {
     await ensureDir(path.dirname(file));
@@ -2835,34 +2865,121 @@ async function writeSystemdUnits(root, units) {
 }
 
 async function ensureCodexHome(root) {
-  const codexHome = codexHomeSetting(root);
+  let plan = codexHomePlan(root);
+  if (plan.requiresProjectSettingUpdate) {
+    await updateProjectSetting(root, "codexWatchdog.codexHome", plan.effectivePath);
+    output.appendLine(`[warning] ${plan.migrationReason}`);
+    vscode.window.showInformationMessage(`Codex Watchdog moved this project's watcher home to ${plan.effectivePath}. Reinstall the timer after review so systemd uses the migrated CODEX_HOME.`);
+    plan = codexHomePlan(root);
+  }
+  const codexHome = plan.effectivePath;
   await ensureDir(codexHome);
   const configPath = path.join(codexHome, "config.toml");
+  const profileDefaults = watcherProfileModelDefaults();
   if (!fs.existsSync(configPath)) {
-    await fsp.writeFile(configPath, [
-      'approval_policy = "never"',
-      'sandbox_mode = "read-only"',
-      "allow_login_shell = false",
-      "",
-      "[features]",
-      "hooks = true",
-      ""
-    ].join("\n"));
+    const merged = mergeWatcherConfigText("", profileDefaults);
+    await fsp.writeFile(configPath, merged.text);
     output.appendLine(`Wrote ${configPath}`);
+    if (merged.inheritedModel) {
+      output.appendLine("Seeded watcher model config from the main Codex profile.");
+    }
   } else {
     const existing = await fsp.readFile(configPath, "utf8");
-    const migrated = existing.replace(/(^|\n)codex_hooks\s*=\s*true(\s*(?:\n|$))/g, "$1hooks = true$2");
-    if (migrated !== existing) {
-      await fsp.writeFile(configPath, migrated);
-      output.appendLine(`Migrated deprecated codex_hooks setting in ${configPath}`);
+    const merged = mergeWatcherConfigText(existing, profileDefaults);
+    if (merged.changed) {
+      await fsp.writeFile(configPath, merged.text);
+      output.appendLine(`Updated ${configPath}`);
+      if (merged.inheritedModel && !hasTomlAssignment(existing, "model")) {
+        output.appendLine("Seeded missing watcher model config from the main Codex profile.");
+      }
     }
   }
+}
+
+function inspectWatcherHomeBootstrapState(watcherHome, mainCodexHome = path.join(os.homedir(), ".codex")) {
+  const authPath = path.join(watcherHome, "auth.json");
+  const configPath = path.join(watcherHome, "config.toml");
+  const modelsCachePath = path.join(watcherHome, "models_cache.json");
+  const mainAuthPath = path.join(mainCodexHome, "auth.json");
+  const mainModelsCachePath = path.join(mainCodexHome, "models_cache.json");
+  const configText = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+  const model = parseTomlBasicString(configText, "model");
+  const modelReasoningEffort = parseTomlBasicString(configText, "model_reasoning_effort");
+  const authExists = fs.existsSync(authPath);
+  const mainAuthExists = fs.existsSync(mainAuthPath);
+  const modelsCacheExists = fs.existsSync(modelsCachePath);
+  const mainModelsCacheExists = fs.existsSync(mainModelsCachePath);
+  const signals = [];
+
+  if (!authExists) {
+    signals.push("This watcher home does not have auth.json yet.");
+    if (mainAuthExists) {
+      signals.push("Your main ~/.codex profile is already logged in, so you can seed this watcher home locally or open a dedicated login terminal.");
+    } else {
+      signals.push("Open Login Terminal to create login state inside this CODEX_HOME.");
+    }
+  }
+  if (!model) {
+    signals.push("This watcher home does not declare a model in config.toml yet.");
+  }
+  if (authExists && !modelsCacheExists && mainModelsCacheExists) {
+    signals.push("models_cache.json is still missing here; a local seed from ~/.codex can warm it up.");
+  }
+
+  return {
+    watcherHome,
+    authPath,
+    configPath,
+    modelsCachePath,
+    model,
+    modelReasoningEffort,
+    authExists,
+    configExists: fs.existsSync(configPath),
+    modelsCacheExists,
+    mainCodexHome,
+    mainAuthPath,
+    mainModelsCachePath,
+    mainAuthExists,
+    mainModelsCacheExists,
+    canSeedFromMainAuth: mainAuthExists && (!authExists || !modelsCacheExists),
+    bootstrapText: signals.join("\n"),
+  };
+}
+
+function inspectWatcherHomeBootstrap(root) {
+  return inspectWatcherHomeBootstrapState(codexHomeSetting(root));
+}
+
+async function seedWatcherHomeBootstrapFromProfilePaths(watcherHome, mainCodexHome = path.join(os.homedir(), ".codex")) {
+  await ensureDir(watcherHome);
+  const copied = [];
+  for (const fileName of ["auth.json", "models_cache.json"]) {
+    const source = path.join(mainCodexHome, fileName);
+    if (!fs.existsSync(source)) {
+      continue;
+    }
+    const target = path.join(watcherHome, fileName);
+    await fsp.copyFile(source, target);
+    copied.push(fileName);
+  }
+  return {
+    watcherHome,
+    mainCodexHome,
+    copied,
+    copiedAuth: copied.includes("auth.json"),
+    copiedModelsCache: copied.includes("models_cache.json"),
+  };
+}
+
+async function seedWatcherHomeAuthFromMainProfile(root) {
+  return seedWatcherHomeBootstrapFromProfilePaths(codexHomeSetting(root));
 }
 
 async function getCodexLoginStatus(root) {
   try {
     const codexBin = await resolveCodexBin(root);
     const codexHome = codexHomeSetting(root);
+    const bootstrap = inspectWatcherHomeBootstrapState(codexHome);
     const result = await run(codexBin, ["login", "status"], {
       cwd: root,
       env: { CODEX_HOME: codexHome },
@@ -2877,31 +2994,43 @@ async function getCodexLoginStatus(root) {
     if (ok) {
       return {
         ok: true,
+        bootstrapText: bootstrap.bootstrapText,
+        canSeedFromMainAuth: bootstrap.canSeedFromMainAuth,
         text: [
           statusText,
           "",
+          `Watcher auth: ${bootstrap.authExists ? "present" : "missing"}`,
+          `Watcher model: ${bootstrap.model || "not set"}`,
+          bootstrap.modelReasoningEffort ? `Reasoning effort: ${bootstrap.modelReasoningEffort}` : "",
           `CODEX_HOME=${codexHome}`,
           `CODEX_BIN=${codexBin}`
-        ].join("\n")
+        ].filter(Boolean).join("\n")
       };
     }
 
     return {
       ok: false,
+      bootstrapText: bootstrap.bootstrapText,
+      canSeedFromMainAuth: bootstrap.canSeedFromMainAuth,
       text: [
         spawnMissing
           ? "Codex CLI executable was not found for watchdog mode."
           : "Codex login is not ready for watchdog mode.",
         statusText || "No login status output was returned.",
         "",
+        `Watcher auth: ${bootstrap.authExists ? "present" : "missing"}`,
+        `Watcher model: ${bootstrap.model || "not set"}`,
+        bootstrap.modelReasoningEffort ? `Reasoning effort: ${bootstrap.modelReasoningEffort}` : "",
         `CODEX_HOME=${codexHome}`,
         `CODEX_BIN=${codexBin}`
-      ].join("\n")
+      ].filter(Boolean).join("\n")
     };
   } catch (error) {
     return {
       ok: false,
-      text: `Could not check Codex login status: ${error.message || String(error)}`
+      text: `Could not check Codex login status: ${error.message || String(error)}`,
+      bootstrapText: "",
+      canSeedFromMainAuth: false
     };
   }
 }
@@ -2918,6 +3047,7 @@ async function confirmLoginIfNeeded(root) {
         ? "Codex Watchdog could not find a Codex CLI executable."
         : "Codex Watchdog needs an OpenAI login before it can start unattended work.",
       "",
+      ...(login.bootstrapText ? [login.bootstrapText, ""] : []),
       login.text,
       "",
       login.text.includes("executable was not found")
@@ -2925,8 +3055,24 @@ async function confirmLoginIfNeeded(root) {
         : "The project files and watchdog scripts are ready. Complete login in the terminal, then run Start Guard again."
     ].join("\n"),
     { modal: true },
+    ...(login.canSeedFromMainAuth ? ["Seed from Main Profile"] : []),
     "Open Login Terminal"
   );
+
+  if (answer === "Seed from Main Profile") {
+    const seeded = await seedWatcherHomeAuthFromMainProfile(root);
+    if (!seeded.copiedAuth) {
+      vscode.window.showWarningMessage("No ~/.codex/auth.json was found to seed this watcher home. Open Login Terminal instead.");
+    } else {
+      output.appendLine(`Seeded watcher auth bootstrap from ${seeded.mainCodexHome} into ${seeded.watcherHome}`);
+      const recheck = await getCodexLoginStatus(root);
+      if (recheck.ok) {
+        vscode.window.showInformationMessage("Seeded watcher auth from the main Codex profile. Start Guard can continue now.");
+        return true;
+      }
+      vscode.window.showWarningMessage("Seeded local watcher files, but this watcher home still needs a fresh login.");
+    }
+  }
 
   if (answer === "Open Login Terminal") {
     await openLoginTerminal(root);
@@ -2981,6 +3127,8 @@ async function getTimerStatus(root) {
       activeText,
       enabledText,
       nextText,
+      needsReinstall: false,
+      warningText: "",
       text: [
         units.timer,
         `active: ${activeText}`,
@@ -2995,6 +3143,8 @@ async function getTimerStatus(root) {
       activeText: "unknown",
       enabledText: "unknown",
       nextText: "",
+      needsReinstall: false,
+      warningText: "",
       text: `Could not read timer status: ${error.message || String(error)}`
     };
   }
@@ -3242,7 +3392,7 @@ function extensionSettingWithSource(key, fallback) {
 
 function unitNames(root) {
   const prefix = servicePrefixSetting(root);
-  const slug = path.basename(root).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "project";
+  const slug = projectSlug(root);
   const hash = crypto.createHash("sha1").update(root).digest("hex").slice(0, 8);
   const units = {
     service: `${prefix}-${slug}-${hash}.service`,
@@ -3251,6 +3401,10 @@ function unitNames(root) {
   validateUnitName(units.service, ".service");
   validateUnitName(units.timer, ".timer");
   return units;
+}
+
+function projectSlug(root) {
+  return path.basename(root).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "project";
 }
 
 async function resolveCodexBin(root) {
@@ -3458,6 +3612,10 @@ function workspaceWritePolicyAllowed(root) {
 }
 
 function codexHomeSetting(root) {
+  return codexHomePlan(root).effectivePath;
+}
+
+function codexHomePlan(root) {
   const setting = projectSettingWithSource(root, "codexWatchdog.codexHome", extensionSettingWithSource("codexHome", "~/.codex-watcher"));
   const expanded = expandHome(String(setting.value || "~/.codex-watcher"));
   if (!path.isAbsolute(expanded)) {
@@ -3468,42 +3626,64 @@ function codexHomeSetting(root) {
   }
   const home = os.homedir();
   const normalized = path.normalize(expanded);
-  {
-    const realHome = fs.realpathSync(home);
-    const realTarget = realpathForPotentialPath(normalized);
-    if (setting.source === "project" && realTarget === realHome) {
-      throw new Error("Refusing project-local codexWatchdog.codexHome equal to the home directory.");
-    }
-    if (setting.source === "project" && !isPathInside(realTarget, realHome)) {
+  const plan = {
+    configuredPath: expanded,
+    effectivePath: expanded,
+    source: setting.source,
+    migrationReason: "",
+    requiresProjectSettingUpdate: false
+  };
+  const realHome = fs.realpathSync(home);
+  const realTarget = realpathForPotentialPath(normalized);
+  if (setting.source === "project" && realTarget === realHome) {
+    throw new Error("Refusing project-local codexWatchdog.codexHome equal to the home directory.");
+  }
+  if (setting.source === "project" && !isPathInside(realTarget, realHome)) {
+    const logicalRoot = path.resolve(root);
+    const realRoot = realpathForPotentialPath(logicalRoot);
+    const targetInsideSelectedProject = isPathInside(normalized, logicalRoot) || isPathInside(realTarget, realRoot);
+    if (targetInsideSelectedProject) {
+      plan.effectivePath = defaultProjectWatcherHome(root);
+      plan.migrationReason = [
+        "Project-local codexWatchdog.codexHome resolved outside the current user's home after realpath.",
+        `Using ${plan.effectivePath} instead so bind-mounted server workspaces still get a safe watcher home.`
+      ].join(" ");
+      plan.requiresProjectSettingUpdate = plan.effectivePath !== plan.configuredPath;
+    } else {
       throw new Error(`Refusing project-local codexWatchdog.codexHome outside the current user's home: ${expanded}`);
     }
-    for (const blocked of [
-      "/etc",
-      "/root",
-      "/bin",
-      "/sbin",
-      "/usr",
-      "/lib",
-      "/lib64",
-      "/boot",
-      "/dev",
-      "/proc",
-      "/sys",
-      "/run",
-      path.join(home, ".ssh"),
-      path.join(home, ".config", "systemd"),
-      path.join(home, ".vscode-server", "extensions"),
-      path.join(home, ".vscode", "extensions")
-    ]) {
-      const realBlocked = fs.existsSync(blocked)
-        ? fs.realpathSync(blocked)
-        : realpathForPotentialPath(blocked);
-      if (isPathInside(realTarget, realBlocked)) {
-        throw new Error(`Refusing project-local codexWatchdog.codexHome inside protected path: ${expanded}`);
-      }
+  }
+  const effectiveRealTarget = realpathForPotentialPath(path.normalize(plan.effectivePath));
+  for (const blocked of [
+    "/etc",
+    "/root",
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/lib",
+    "/lib64",
+    "/boot",
+    "/dev",
+    "/proc",
+    "/sys",
+    "/run",
+    path.join(home, ".ssh"),
+    path.join(home, ".config", "systemd"),
+    path.join(home, ".vscode-server", "extensions"),
+    path.join(home, ".vscode", "extensions")
+  ]) {
+    const realBlocked = fs.existsSync(blocked)
+      ? fs.realpathSync(blocked)
+      : realpathForPotentialPath(blocked);
+    if (isPathInside(effectiveRealTarget, realBlocked)) {
+      throw new Error(`Refusing project-local codexWatchdog.codexHome inside protected path: ${plan.effectivePath}`);
     }
   }
-  return expanded;
+  return plan;
+}
+
+function defaultProjectWatcherHome(root) {
+  return path.join(os.homedir(), ".codex-watchers", projectSlug(root));
 }
 
 function servicePrefixSetting(root) {
@@ -3606,6 +3786,254 @@ async function updateProjectSetting(root, key, value) {
   settings[key] = value;
   await fsp.writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
   output.appendLine(`Updated ${path.relative(root, settingsPath)}: ${key}=${JSON.stringify(value)}`);
+}
+
+function parseTomlBasicString(text, key) {
+  const match = String(text || "").match(new RegExp(`^\\s*${key}\\s*=\\s*"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"\\s*$`, "m"));
+  if (!match) {
+    return "";
+  }
+  return match[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
+function hasTomlAssignment(text, key) {
+  return new RegExp(`^\\s*${key}\\s*=`, "m").test(String(text || ""));
+}
+
+function tomlStringLiteral(value) {
+  return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function insertRootTomlAssignments(text, assignments) {
+  const lines = assignments.filter(Boolean);
+  if (!lines.length) {
+    return String(text || "");
+  }
+  const source = String(text || "");
+  const withTrailingNewline = source.endsWith("\n") ? source : `${source}\n`;
+  const sectionMatch = withTrailingNewline.match(/^\s*\[[^\n]+\]\s*$/m);
+  if (!sectionMatch) {
+    const prefix = withTrailingNewline.trimEnd();
+    return `${prefix}${prefix ? "\n" : ""}${lines.join("\n")}\n`;
+  }
+  const before = withTrailingNewline.slice(0, sectionMatch.index).trimEnd();
+  const after = withTrailingNewline.slice(sectionMatch.index).trimStart();
+  return `${before}${before ? "\n" : ""}${lines.join("\n")}\n\n${after}`;
+}
+
+function ensureHooksFeature(text) {
+  const source = String(text || "");
+  if (/^\s*hooks\s*=/m.test(source)) {
+    return source;
+  }
+  if (/^\s*\[features\]\s*$/m.test(source)) {
+    return source.replace(/(^\s*\[features\]\s*$)/m, "$1\nhooks = true");
+  }
+  const prefix = source.trimEnd();
+  return `${prefix}${prefix ? "\n\n" : ""}[features]\nhooks = true\n`;
+}
+
+function watcherProfileModelDefaults() {
+  const profilePath = path.join(os.homedir(), ".codex", "config.toml");
+  if (!fs.existsSync(profilePath)) {
+    return { model: "", modelReasoningEffort: "" };
+  }
+  try {
+    const text = fs.readFileSync(profilePath, "utf8");
+    return {
+      model: parseTomlBasicString(text, "model"),
+      modelReasoningEffort: parseTomlBasicString(text, "model_reasoning_effort")
+    };
+  } catch (_error) {
+    return { model: "", modelReasoningEffort: "" };
+  }
+}
+
+function mergeWatcherConfigText(existingText, profileDefaults = watcherProfileModelDefaults()) {
+  let next = String(existingText || "");
+  let changed = false;
+
+  const migratedHooks = next.replace(/(^|\n)codex_hooks\s*=\s*true(\s*(?:\n|$))/g, "$1hooks = true$2");
+  if (migratedHooks !== next) {
+    next = migratedHooks;
+    changed = true;
+  }
+
+  const rootAssignments = [];
+  if (!hasTomlAssignment(next, "approval_policy")) {
+    rootAssignments.push('approval_policy = "never"');
+  }
+  if (!hasTomlAssignment(next, "sandbox_mode")) {
+    rootAssignments.push('sandbox_mode = "read-only"');
+  }
+  if (!hasTomlAssignment(next, "allow_login_shell")) {
+    rootAssignments.push("allow_login_shell = false");
+  }
+  if (profileDefaults.model && !hasTomlAssignment(next, "model")) {
+    rootAssignments.push(`model = ${tomlStringLiteral(profileDefaults.model)}`);
+  }
+  if (profileDefaults.modelReasoningEffort && !hasTomlAssignment(next, "model_reasoning_effort")) {
+    rootAssignments.push(`model_reasoning_effort = ${tomlStringLiteral(profileDefaults.modelReasoningEffort)}`);
+  }
+  if (rootAssignments.length) {
+    next = insertRootTomlAssignments(next, rootAssignments);
+    changed = true;
+  }
+
+  const withHooks = ensureHooksFeature(next);
+  if (withHooks !== next) {
+    next = withHooks;
+    changed = true;
+  }
+
+  return {
+    text: next.endsWith("\n") ? next : `${next}\n`,
+    changed,
+    inheritedModel: Boolean(profileDefaults.model),
+    inheritedReasoning: Boolean(profileDefaults.modelReasoningEffort)
+  };
+}
+
+function userSystemdUnitDir() {
+  return path.join(os.homedir(), ".config", "systemd", "user");
+}
+
+function readWatcherUnitDrift(root, settings, unitDir = userSystemdUnitDir()) {
+  const units = unitNames(root);
+  const servicePath = path.join(unitDir, units.service);
+  const timerPath = path.join(unitDir, units.timer);
+  if (!fs.existsSync(servicePath) || !fs.existsSync(timerPath)) {
+    return {
+      installed: false,
+      needsReinstall: false,
+      reasons: [],
+      text: ""
+    };
+  }
+  const serviceText = fs.readFileSync(servicePath, "utf8");
+  const timerText = fs.readFileSync(timerPath, "utf8");
+  const checks = [
+    [`Environment=CODEX_BIN=${systemdEnvValue(settings.codexBin)}`, "Codex binary"],
+    [`Environment=CODEX_HOME=${systemdEnvValue(settings.codexHome)}`, "Codex home"],
+    [`Environment=CODEX_SANDBOX_MODE=${systemdEnvValue(settings.sandboxMode)}`, "sandbox mode"],
+    [`Environment=WATCHDOG_TIMEOUT_MINUTES=${settings.timeoutMinutes}`, "timeout minutes"],
+    [`Environment=WATCHDOG_COMPACT_EVERY_RUNS=${settings.compactEveryRuns}`, "compact cadence"],
+    [`Environment=WATCHDOG_ROLE=${systemdEnvValue(settings.role)}`, "watchdog role"],
+    [`Environment=WATCHDOG_PHASE_OFFSET_MINUTES=${settings.phaseOffsetMinutes}`, "phase offset"],
+    [`Environment=WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP=${settings.supervisorLightFollowup ? "1" : "0"}`, "supervisor light followup"],
+    [`Environment=WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS=${settings.supervisorAuditEveryRunnerRuns}`, "supervisor audit cadence"]
+  ];
+  const reasons = [];
+  for (const [needle, label] of checks) {
+    if (!serviceText.includes(needle)) {
+      reasons.push(`${label} differs from the installed service`);
+    }
+  }
+  if (!timerText.includes(`OnActiveSec=${settings.phaseOffsetMinutes}min`)) {
+    reasons.push("phase offset differs from the installed timer");
+  }
+  if (!timerText.includes(`OnUnitActiveSec=${settings.intervalMinutes}min`)) {
+    reasons.push("repeat interval differs from the installed timer");
+  }
+  return {
+    installed: true,
+    needsReinstall: reasons.length > 0,
+    reasons,
+    text: reasons.length
+      ? `Installed timer units still reference older watchdog settings. Re-run Start Guard or ./agent/bin/watchdog timer-install.\n- ${reasons.join("\n- ")}`
+      : ""
+  };
+}
+
+function readJsonFileIfExists(file, fallback = null) {
+  if (!fs.existsSync(file)) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function countVisibleEntries(dir) {
+  try {
+    return fs.readdirSync(dir).filter((name) => name && !name.startsWith(".")).length;
+  } catch (_error) {
+    return 0;
+  }
+}
+
+function markdownFieldValue(text, label) {
+  const match = String(text || "").match(new RegExp(`^\\s*[-*]?\\s*${label}\\s*:\\s*(.+?)\\s*$`, "im"));
+  return match ? match[1].trim() : "";
+}
+
+function isTruthyMarkdownValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["true", "yes", "1", "on"].includes(normalized);
+}
+
+function inspectProjectRuntimeClarity(root) {
+  const signals = [];
+  const pauseFile = path.join(root, "agent", "control", "PAUSE");
+  if (fs.existsSync(pauseFile)) {
+    const pauseText = readFilePrefix(pauseFile, 2048).trim();
+    signals.push({
+      level: "warn",
+      text: [
+        "The guard is paused by agent/control/PAUSE.",
+        pauseText || "Open Resume Guard when you want timer wakeups to call Codex again."
+      ].join("\n")
+    });
+  }
+
+  const runState = readJsonFileIfExists(path.join(root, "agent", "RUN_STATE.json"), {});
+  if (runState && runState.blocker_type === "stale_state") {
+    signals.push({
+      level: "warn",
+      text: "RUN_STATE.json currently reports blocker_type=stale_state. Treat old failed/preflight records as historical until BLOCKERS.md or the latest report says they are still active."
+    });
+  }
+
+  const reviewPendingPath = path.join(root, "agent", "REVIEW_PENDING.md");
+  if (fs.existsSync(reviewPendingPath)) {
+    const reviewText = fs.readFileSync(reviewPendingPath, "utf8");
+    const state = markdownFieldValue(reviewText, "state");
+    const pendingSend = isTruthyMarkdownValue(markdownFieldValue(reviewText, "pending_send"));
+    const requiresHuman = isTruthyMarkdownValue(markdownFieldValue(reviewText, "requires_human_review"));
+    if (state === "pending_send" || pendingSend || requiresHuman) {
+      signals.push({
+        level: "warn",
+        text: `Review pending is active (${state || "review_required"}). This is a review/handoff wait inside the project, not a Codex login/runtime bootstrap failure.`
+      });
+    }
+  }
+
+  const queueCounts = {
+    queued: countVisibleEntries(path.join(root, "agent", "queue", "queued")) + countVisibleEntries(path.join(root, "gpu_queue")) + countVisibleEntries(path.join(root, "cpu_queue")),
+    running: countVisibleEntries(path.join(root, "agent", "queue", "running")) + countVisibleEntries(path.join(root, "gpu_running")) + countVisibleEntries(path.join(root, "cpu_running")),
+    done: countVisibleEntries(path.join(root, "agent", "queue", "done")) + countVisibleEntries(path.join(root, "gpu_done")) + countVisibleEntries(path.join(root, "cpu_done")),
+    failed: countVisibleEntries(path.join(root, "agent", "queue", "failed")) + countVisibleEntries(path.join(root, "gpu_failed")) + countVisibleEntries(path.join(root, "cpu_failed"))
+  };
+  const queueText = `Queue snapshot: queued=${queueCounts.queued}, running=${queueCounts.running}, done=${queueCounts.done}, failed=${queueCounts.failed}`;
+  if (queueCounts.running > 0 && queueCounts.failed > 0) {
+    signals.push({
+      level: "warn",
+      text: `Running and failed queue records coexist (${queueCounts.running} running, ${queueCounts.failed} failed). Treat failed entries as historical until the newest report or queue runner refresh says they are still live blockers.`
+    });
+  }
+
+  const reconciliation = readJsonFileIfExists(path.join(root, "agent", "status", "SUPERVISOR_STALE_STATE_RECONCILIATION.json"), {});
+  if (reconciliation && reconciliation.timestamp_utc) {
+    const changed = reconciliation.reconciliation && reconciliation.reconciliation.changed === true;
+    signals.push({
+      level: changed ? "ok" : "muted",
+      text: `Supervisor stale-state reconciliation last ran at ${reconciliation.timestamp_utc}${changed ? " and reported changed=true." : "."}`
+    });
+  }
+
+  return { queueText, signals };
 }
 
 function stripJsonCommentsAndTrailingCommas(text) {

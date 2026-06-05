@@ -76,7 +76,16 @@ module.exports.__test__ = {
   archiveAndResetBootstrapConversation,
   stageBootstrapDraftFiles,
   applyBootstrapDraftFiles,
-  taskLooksInstantiated
+  taskLooksInstantiated,
+  codexHomePlan,
+  ensureCodexHome,
+  mergeWatcherConfigText,
+  inspectWatcherHomeBootstrapState,
+  seedWatcherHomeBootstrapFromProfilePaths,
+  inspectProjectRuntimeClarity,
+  readWatcherUnitDrift,
+  systemdEnvValue,
+  unitNames
 };`, sandbox, {
     filename: extensionPath
   });
@@ -269,6 +278,172 @@ async function main() {
   const archivedNames = fs.readdirSync(archiveDir);
   assert.ok(archivedNames.some((name) => name.endsWith("bootstrap_conversation.json")));
   assert.ok(archivedNames.some((name) => name.endsWith("bootstrap_change_preview.md")));
+
+  const mergedWatcherConfig = api.mergeWatcherConfigText("[features]\nhooks = true\n", {
+    model: "gpt-5.4",
+    modelReasoningEffort: "xhigh"
+  });
+  assert.match(mergedWatcherConfig.text, /^approval_policy = "never"/m);
+  assert.match(mergedWatcherConfig.text, /^sandbox_mode = "read-only"/m);
+  assert.match(mergedWatcherConfig.text, /^allow_login_shell = false$/m);
+  assert.match(mergedWatcherConfig.text, /^model = "gpt-5\.4"$/m);
+  assert.match(mergedWatcherConfig.text, /^model_reasoning_effort = "xhigh"$/m);
+  assert.match(mergedWatcherConfig.text, /^\[features\]\nhooks = true$/m);
+
+  const legacyHooksConfig = api.mergeWatcherConfigText("codex_hooks = true\n", {
+    model: "",
+    modelReasoningEffort: ""
+  });
+  assert.doesNotMatch(legacyHooksConfig.text, /codex_hooks/);
+  assert.match(legacyHooksConfig.text, /^hooks = true$/m);
+
+  const watcherHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-home-"));
+  const mainCodexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-main-home-"));
+  try {
+    writeFile("", path.join(mainCodexHome, "auth.json"), "{\n  \"token\": \"example\"\n}\n");
+    writeFile("", path.join(mainCodexHome, "models_cache.json"), "{\n  \"models\": []\n}\n");
+    writeFile("", path.join(watcherHome, "config.toml"), "approval_policy = \"never\"\n");
+    let bootstrap = api.inspectWatcherHomeBootstrapState(watcherHome, mainCodexHome);
+    assert.strictEqual(bootstrap.authExists, false);
+    assert.strictEqual(bootstrap.canSeedFromMainAuth, true);
+    assert.match(bootstrap.bootstrapText, /does not have auth\.json yet/i);
+    const seeded = await api.seedWatcherHomeBootstrapFromProfilePaths(watcherHome, mainCodexHome);
+    assert.strictEqual(seeded.copiedAuth, true);
+    assert.strictEqual(seeded.copiedModelsCache, true);
+    bootstrap = api.inspectWatcherHomeBootstrapState(watcherHome, mainCodexHome);
+    assert.strictEqual(bootstrap.authExists, true);
+    assert.ok(fs.existsSync(path.join(watcherHome, "auth.json")));
+    assert.ok(fs.existsSync(path.join(watcherHome, "models_cache.json")));
+  } finally {
+    fs.rmSync(watcherHome, { recursive: true, force: true });
+    fs.rmSync(mainCodexHome, { recursive: true, force: true });
+  }
+
+  const realBoundRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-bind-real-"));
+  const linkedRoot = path.join(os.homedir(), `.codex-watchdog-bind-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`);
+  let migratedWatcherHome = "";
+  try {
+    fs.symlinkSync(realBoundRoot, linkedRoot, "dir");
+    writeJson(linkedRoot, ".vscode/settings.json", {
+      "codexWatchdog.codexHome": path.join(linkedRoot, "agent", "runtime", "codex-home")
+    });
+    const bindApi = loadExtensionTestApi(linkedRoot);
+    const bindPlan = bindApi.codexHomePlan(linkedRoot);
+    migratedWatcherHome = bindPlan.effectivePath;
+    assert.notStrictEqual(bindPlan.effectivePath, bindPlan.configuredPath, "bind-mounted project-local codexHome should migrate to a safe home-local watcher path");
+    assert.ok(bindPlan.effectivePath.startsWith(path.join(os.homedir(), ".codex-watchers")), "migrated watcher home should stay under ~/.codex-watchers");
+    await bindApi.ensureCodexHome(linkedRoot);
+    const migratedSettings = JSON.parse(fs.readFileSync(path.join(linkedRoot, ".vscode", "settings.json"), "utf8"));
+    assert.strictEqual(migratedSettings["codexWatchdog.codexHome"], bindPlan.effectivePath);
+    const migratedConfigPath = path.join(bindPlan.effectivePath, "config.toml");
+    assert.ok(fs.existsSync(migratedConfigPath), "ensureCodexHome should create the migrated watcher config");
+    const migratedConfig = fs.readFileSync(migratedConfigPath, "utf8");
+    assert.match(migratedConfig, /^approval_policy = "never"$/m);
+    assert.match(migratedConfig, /^sandbox_mode = "read-only"$/m);
+  } finally {
+    try {
+      fs.rmSync(linkedRoot, { recursive: true, force: true });
+    } catch (_error) {}
+    try {
+      fs.rmSync(realBoundRoot, { recursive: true, force: true });
+    } catch (_error) {}
+    if (migratedWatcherHome) {
+      try {
+        fs.rmSync(migratedWatcherHome, { recursive: true, force: true });
+      } catch (_error) {}
+    }
+  }
+
+  const driftRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-drift-"));
+  const driftUnitDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-units-"));
+  try {
+    const driftSettings = {
+      codexBin: "/usr/bin/codex",
+      codexHome: "/home/test/.codex-watchers/project-a",
+      sandboxMode: "read-only",
+      intervalMinutes: 30,
+      timeoutMinutes: 25,
+      compactEveryRuns: 6,
+      role: "runner",
+      phaseOffsetMinutes: 10,
+      supervisorLightFollowup: true,
+      supervisorAuditEveryRunnerRuns: 4
+    };
+    const driftUnits = api.unitNames(driftRoot);
+    fs.writeFileSync(path.join(driftUnitDir, driftUnits.service), [
+      "[Service]",
+      `Environment=CODEX_BIN=${api.systemdEnvValue(driftSettings.codexBin)}`,
+      `Environment=CODEX_HOME=${api.systemdEnvValue(driftSettings.codexHome)}`,
+      `Environment=CODEX_SANDBOX_MODE=${api.systemdEnvValue(driftSettings.sandboxMode)}`,
+      `Environment=WATCHDOG_TIMEOUT_MINUTES=${driftSettings.timeoutMinutes}`,
+      `Environment=WATCHDOG_COMPACT_EVERY_RUNS=${driftSettings.compactEveryRuns}`,
+      `Environment=WATCHDOG_ROLE=${api.systemdEnvValue(driftSettings.role)}`,
+      `Environment=WATCHDOG_PHASE_OFFSET_MINUTES=${driftSettings.phaseOffsetMinutes}`,
+      `Environment=WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP=1`,
+      `Environment=WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS=${driftSettings.supervisorAuditEveryRunnerRuns}`,
+      ""
+    ].join("\n"));
+    fs.writeFileSync(path.join(driftUnitDir, driftUnits.timer), [
+      "[Timer]",
+      `OnActiveSec=${driftSettings.phaseOffsetMinutes}min`,
+      `OnUnitActiveSec=${driftSettings.intervalMinutes}min`,
+      ""
+    ].join("\n"));
+    let drift = api.readWatcherUnitDrift(driftRoot, driftSettings, driftUnitDir);
+    assert.strictEqual(drift.needsReinstall, false, "matching units should not require reinstall");
+    fs.writeFileSync(path.join(driftUnitDir, driftUnits.service), [
+      "[Service]",
+      `Environment=CODEX_BIN=${api.systemdEnvValue(driftSettings.codexBin)}`,
+      `Environment=CODEX_HOME=${api.systemdEnvValue("/old/home/.codex-watchers/project-a")}`,
+      `Environment=CODEX_SANDBOX_MODE=${api.systemdEnvValue(driftSettings.sandboxMode)}`,
+      `Environment=WATCHDOG_TIMEOUT_MINUTES=${driftSettings.timeoutMinutes}`,
+      `Environment=WATCHDOG_COMPACT_EVERY_RUNS=${driftSettings.compactEveryRuns}`,
+      `Environment=WATCHDOG_ROLE=${api.systemdEnvValue(driftSettings.role)}`,
+      `Environment=WATCHDOG_PHASE_OFFSET_MINUTES=5`,
+      `Environment=WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP=1`,
+      `Environment=WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS=${driftSettings.supervisorAuditEveryRunnerRuns}`,
+      ""
+    ].join("\n"));
+    drift = api.readWatcherUnitDrift(driftRoot, driftSettings, driftUnitDir);
+    assert.strictEqual(drift.needsReinstall, true, "stale unit files should require reinstall");
+    assert.match(drift.text, /timer-install|Start Guard/i);
+  } finally {
+    fs.rmSync(driftRoot, { recursive: true, force: true });
+    fs.rmSync(driftUnitDir, { recursive: true, force: true });
+  }
+
+  writeJson(projectRoot, "agent/RUN_STATE.json", {
+    blocker_type: "stale_state"
+  });
+  writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
+    "# Review Pending",
+    "",
+    "- state: pending_send",
+    "- pending_send: yes",
+    "- requires_human_review: true",
+    ""
+  ].join("\n"));
+  writeFile(projectRoot, "agent/control/PAUSE", "Paused at: 2026-06-05T00:00:00Z\nReason: test pause\n");
+  writeJson(projectRoot, "agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.json", {
+    timestamp_utc: "2026-06-05T01:00:00Z",
+    reconciliation: { changed: true }
+  });
+  writeJson(projectRoot, "agent/queue/running/job.json", { status: "running" });
+  writeJson(projectRoot, "agent/queue/failed/old.json", { status: "failed" });
+  const runtimeClarity = api.inspectProjectRuntimeClarity(projectRoot);
+  assert.match(runtimeClarity.queueText, /queued=0, running=1, done=0, failed=1/);
+  assert.ok(runtimeClarity.signals.some((signal) => /PAUSE/.test(signal.text)));
+  assert.ok(runtimeClarity.signals.some((signal) => /blocker_type=stale_state/.test(signal.text)));
+  assert.ok(runtimeClarity.signals.some((signal) => /Review pending is active/.test(signal.text)));
+  assert.ok(runtimeClarity.signals.some((signal) => /running and failed queue records coexist/i.test(signal.text)));
+  assert.ok(runtimeClarity.signals.some((signal) => /reconciliation last ran/i.test(signal.text)));
+  fs.rmSync(path.join(projectRoot, "agent", "control", "PAUSE"), { force: true });
+  fs.rmSync(path.join(projectRoot, "agent", "status", "SUPERVISOR_STALE_STATE_RECONCILIATION.json"), { force: true });
+  fs.rmSync(path.join(projectRoot, "agent", "queue", "running", "job.json"), { force: true });
+  fs.rmSync(path.join(projectRoot, "agent", "queue", "failed", "old.json"), { force: true });
+  writeJson(projectRoot, "agent/RUN_STATE.json", {
+    blocker_type: "none"
+  });
 
   writeJson(projectRoot, "agent/STATE.json", {
     schema_version: 1,

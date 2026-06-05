@@ -60,8 +60,10 @@ The easiest entry point is `Codex Watchdog: Open Control Panel`. The panel lets 
 
 - enter a project root path and create it if it does not exist, or browse for an existing folder;
 - see whether the selected watcher `CODEX_HOME` is logged in;
+- see whether the watcher home still needs auth/model bootstrap;
 - open a login terminal;
 - edit the repeat interval and scheduled compaction cadence;
+- see a runtime-clarity summary for pause/stale-state/queue conditions;
 - refresh generated files, start the guard, pause/resume the guard, stop the guard, open the latest report, and open the morning brief.
 
 The control panel uses distinct button styling for actions, so clickable controls should not read like plain text.
@@ -110,6 +112,14 @@ The control panel highlights the recommended next action: `Prepare Project` is t
 
 OpenAI login is the only manual authorization step. It is not per project. By default all watchdog projects share the watcher identity in `~/.codex-watcher`, so you only need to log in once for that `CODEX_HOME`. This is intentionally separate from your daily interactive Codex session, so unattended timer runs do not inherit whatever state your VSCode/chat session happens to have.
 
+When a project uses its own watcher home, the panel now distinguishes three cases:
+
+1. the watcher home already has usable login state;
+2. the watcher home is fresh and missing `auth.json`, so it needs a login/bootstrap step;
+3. the watcher home is missing model config and should be reseeded from the main Codex profile.
+
+If login is not ready and `~/.codex/auth.json` already exists, `Start Guard` now offers a local-only `Seed from Main Profile` action. That copies `auth.json` and `models_cache.json` into the selected watcher home, then rechecks `codex login status`. It is an explicit local bootstrap convenience, not a silent background copy.
+
 If login is not ready, the extension opens a terminal for:
 
 ```bash
@@ -151,9 +161,36 @@ The extension also reads `codexWatchdog.*` settings from `<selected project>/.vs
 
 Project-local settings are treated as untrusted input. A project-local `codexWatchdog.codexBin` may be `codex` or an allowed Codex path such as the VSCode OpenAI extension binary, `~/.local/bin/codex`, `/usr/bin/codex`, or `/usr/local/bin/codex`; arbitrary project-selected executables are refused, and configured binaries must be executable files named `codex`. Project-local `codexWatchdog.codexHome` must stay inside the current user's home and away from protected locations such as `~/.ssh`, `~/.config/systemd`, and VSCode extension folders. User/global `codexHome` settings may point outside `$HOME`, but still cannot target protected system or extension directories. These checks resolve real paths, so symlinks cannot point `codexHome` into a protected directory. `codexWatchdog.servicePrefix` is restricted to systemd-safe unit-name characters.
 
+For server-style bind mounts, a selected project may live at a logical `/home/...` path that resolves to `/data...` after `realpath`. If a project-local `codexHome` lives inside that selected project tree, Codex Watchdog now migrates it to a safe home-local watcher runtime such as:
+
+```text
+~/.codex-watchers/<project-slug>
+```
+
+instead of failing during refresh/start. This keeps the watcher home writable and inside the real user home without weakening the protected-path checks for arbitrary outside-home locations.
+
+After migration, the panel records the reason in the Project section and `Start Guard`/Login status continue against the migrated watcher home. This avoids the confusing old failure mode where refresh succeeded partway but the installed timer still referenced a project-local runtime path that was no longer considered safe.
+
 For security-sensitive fallback settings, the extension reads only user/global VSCode settings or package defaults. It intentionally ignores the currently opened broad workspace's merged settings for these fallback values, so an unrelated workspace cannot silently change the selected project's Codex binary or Codex home.
 
 Saving the schedule from the control panel writes `codexWatchdog.intervalMinutes` and `codexWatchdog.compactEveryRuns` into `<selected project>/.vscode/settings.json`.
+
+The panel also checks the installed user systemd unit files against the current validated settings. If `CODEX_HOME`, interval, phase offset, role, timeout, or supervisor cadence drift from the installed timer/service, the Schedule section shows a warning banner telling the user to rerun `Start Guard` or `./agent/bin/watchdog timer-install`.
+
+## Runtime Clarity
+
+The control panel now has a `Runtime Clarity` section so pause/review/stale-state conditions do not look like generic "Codex is broken" failures.
+
+It surfaces:
+
+- `agent/control/PAUSE` as a first-class pause reason;
+- `RUN_STATE.json blocker_type=stale_state` as a stale-state warning rather than a fresh auth/runtime diagnosis;
+- active `REVIEW_PENDING.md` markers such as `pending_send` / `requires_human_review`;
+- a queue snapshot (`queued/running/done/failed`);
+- the specific mixed-state case where `running` and `failed` queue entries coexist;
+- the latest `agent/status/SUPERVISOR_STALE_STATE_RECONCILIATION.json` signal, when present.
+
+The goal is not to hide these states. It is to explain them so a paused supervisor, a stale blocker record, and a missing login each point to the right next action instead of collapsing into one vague failure.
 
 ## Runner And Supervisor Roles
 
@@ -274,7 +311,19 @@ Bootstrap also creates `agent/TASK_REQUEST.md`, `agent/watchdog.env`, `agent/COD
 
 `agent/watchdog.env` is generated from the same validated settings used by the VSCode control panel. The project-local CLI scripts source it first, then let explicit environment variables override it. This keeps `Start Guard` from VSCode and `./agent/bin/watchdog start` from Codex pointed at the same `CODEX_HOME`, Codex binary, interval, timeout, compaction cadence, sandbox mode, and systemd service prefix.
 
-For unattended server watchdogs, prefer a writable watcher runtime home. If a shared `CODEX_HOME` becomes read-only or unstable, set a project-local value such as `<project>/agent/runtime/codex-home` in `.vscode/settings.json`, refresh generated watcher files, and reinstall the user timer/service with `./agent/bin/watchdog timer-install`. Installed systemd units embed `Environment=CODEX_HOME=...`, so changing only `.vscode/settings.json` or `agent/watchdog.env` is not enough for already-installed timers.
+For unattended server watchdogs, prefer a writable watcher runtime home. If a shared `CODEX_HOME` becomes read-only or unstable, set a project-local value such as `<project>/agent/runtime/codex-home` in `.vscode/settings.json`, refresh generated watcher files, and reinstall the user timer/service with `./agent/bin/watchdog timer-install`. Installed systemd units embed `Environment=CODEX_HOME=...`, so changing only `.vscode/settings.json` or `agent/watchdog.env` is not enough for already-installed timers. The control panel now warns when the installed service/timer still reference older `CODEX_HOME`, interval, phase-offset, or watchdog-role values.
+
+New watcher homes also bootstrap a minimal `config.toml` automatically. The watcher-specific config still forces:
+
+```text
+approval_policy = "never"
+sandbox_mode = "read-only"
+allow_login_shell = false
+[features]
+hooks = true
+```
+
+and, when the main `~/.codex/config.toml` already has an explicit model selection, the watcher home inherits that `model` and `model_reasoning_effort` so a fresh watcher runtime does not silently fall back to an incompatible default model.
 
 Bootstrap and refresh also create a project-local skills layer:
 
