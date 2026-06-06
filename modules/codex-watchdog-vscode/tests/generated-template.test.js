@@ -133,6 +133,9 @@ async function main() {
   assert.match(manifest.template_hashes["agent/bin/run_watchdog.sh"], /^sha256:[a-f0-9]{64}$/);
   assert.match(manifest.template_hashes["agent/schemas/bootstrap_conversation_turn.schema.json"], /^sha256:[a-f0-9]{64}$/);
   assert.match(manifest.template_hashes["agent/schemas/bootstrap_instantiation.schema.json"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["agent/TASK_BOX.json"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["agent/ROUTE_CANONICAL.json"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["agent/EVIDENCE_LEDGER.jsonl"], /^sha256:[a-f0-9]{64}$/);
   assert.ok(manifest.placeholder_policy.public_paths.includes("$PROJECT_ROOT"));
   assert.ok(manifest.placeholder_policy.public_paths.includes("$CONTROL_PLANE_ROOT"));
   assert.ok(manifest.placeholder_policy.public_paths.includes("$COLLAB_ROOT"));
@@ -179,6 +182,9 @@ async function main() {
   );
   assert.ok(bootstrapConversationSchema.required.includes("assistant_reply"));
   assert.ok(bootstrapConversationSchema.required.includes("suggested_next_step"));
+  assert.ok(fs.existsSync(path.join(projectRoot, "agent", "TASK_BOX.json")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl")));
 
   await api.writeBootstrapConversation(projectRoot, {
     updated_at: "2026-06-04T12:00:00Z",
@@ -515,7 +521,105 @@ async function main() {
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "report_only_inventory");
-  assert.match(route.reason, /report-only task can proceed/);
+  assert.match(route.reason, /report-only task can proceed|autonomous mode allows one bounded report_only step/);
+
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "observer",
+    requires_review: false,
+    tasks: []
+  });
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "task-box-autonomy",
+    route_id: "route-autonomy",
+    route_epoch: "route-001",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "task_box_cpu_probe",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Run one bounded CPU eval from TASK_BOX.json."
+      }
+    ]
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-autonomy",
+    route_epoch: "route-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-001"
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "task_box_cpu_probe");
+  assert.match(route.reason, /TASK_BOX\.json/);
+  writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
+    "# Review Pending",
+    "",
+    "- state: pending_send",
+    "- requires_human_review: true",
+    "- scope: external_review",
+    "- resolver: human",
+    ""
+  ].join("\n"));
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "task_box_cpu_probe");
+  assert.match(route.reason, /autonomous mode allows one bounded bounded_cpu_eval step/);
+  writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
+    "# Review Pending",
+    "",
+    "- state: none",
+    "- pending_send: no",
+    "- requires_human_review: false",
+    "- scope: none",
+    "- resolver: none",
+    ""
+  ].join("\n"));
+
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-old"
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.match(route.reason, /Canonical route_epoch=route-001/);
+
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-001"
+  });
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "queue-draft-box",
+    route_id: "route-queue-draft",
+    route_epoch: "route-queue-001",
+    requires_review: false,
+    tasks: [
+      {
+        task_id: "prepare_local_queue_draft",
+        status: "pending",
+        allowed_runner: "gpu",
+        title: "Prepare queue draft only for a controlled GPU taskbox; do not enqueue yet."
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "prepare_local_queue_draft");
 
   writeJson(projectRoot, "agent/STATE.json", {
     schema_version: 1,
@@ -542,6 +646,26 @@ async function main() {
     "Use blocker types: env, queue, permission, reviewer, allowlist, pending_send, stale_state.",
     ""
   ].join("\n"));
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "empty-box",
+    route_id: "empty-route",
+    route_epoch: "empty-001",
+    requires_review: false,
+    tasks: []
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "empty-route",
+    route_epoch: "empty-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "empty-001"
+  });
   route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
   assert.match(route.reason, /No paused state/);
@@ -564,7 +688,7 @@ async function main() {
   ].join("\n"));
   route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
-  assert.match(route.reason, /continue with one report-only step/);
+  assert.match(route.reason, /continue with one bounded next step/);
 
   writeFile(projectRoot, "agent/TODO.md", "# TODO\n\n- none\n");
   route = runRoute(projectRoot, { WATCHDOG_COMPACTION_DUE: "1" });
@@ -669,23 +793,10 @@ async function main() {
     ]
   });
   route = runRoute(projectRoot);
-  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
-  assert.doesNotMatch(route.reason, /explicit supervisor approval/);
-
-  writeJson(projectRoot, "agent/supervisor_capabilities.json", {
-    schema_version: 1,
-    capabilities: {
-      state_reconcile: {
-        enabled: true
-      }
-    }
-  });
-  route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "state_reconcile_after_supervisor_approval");
   assert.match(route.reason, /explicit supervisor approval/);
-  fs.unlinkSync(path.join(projectRoot, "agent", "supervisor_capabilities.json"));
 
   writeJson(projectRoot, "agent/supervisor_capabilities.json", {
     schema_version: 1,

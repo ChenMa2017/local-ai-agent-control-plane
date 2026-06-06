@@ -2466,6 +2466,8 @@ async function bootstrapProject(root) {
   await writeIfAbsent(root, path.join(root, "agent", "PLAN.md"), templates.plan(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "STATE.md"), templates.state(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "STATE.json"), templates.stateJson(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "TASK_BOX.json"), templates.taskBoxJson(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "ROUTE_CANONICAL.json"), templates.routeCanonicalJson(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "PROGRESS_STATE.json"), templates.progressStateJson(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "CURRENT_STATE.md"), templates.currentState(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "RUN_STATE.json"), templates.runStateJson(), created, skipped);
@@ -2488,9 +2490,12 @@ async function bootstrapProject(root) {
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "bootstrap_conversation_turn.schema.json"), templates.bootstrapConversationTurnSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "bootstrap_instantiation.schema.json"), templates.bootstrapInstantiationSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "state.schema.json"), templates.stateSchema(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "schemas", "task_box.schema.json"), templates.taskBoxSchema(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "schemas", "route_canonical.schema.json"), templates.routeCanonicalSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "job.schema.json"), templates.jobSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "gate.schema.json"), templates.gateSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "status", "QUEUE_STATUS.md"), templates.queueStatus(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "EVIDENCE_LEDGER.jsonl"), templates.evidenceLedgerJsonl(), created, skipped);
   await writeIfAbsent(root, path.join(root, "research", "RESEARCH_LEDGER.md"), templates.researchLedger(), created, skipped);
   await writeIfAbsent(root, path.join(root, "research", "LEDGER_NOTES.md"), templates.ledgerNotes(), created, skipped);
 
@@ -2626,7 +2631,10 @@ async function ensureGeneratedDirs(root) {
   await ensureDir(path.join(root, "agent", "reports"));
   await ensureDir(path.join(root, "agent", "pending", "review_required"));
   await ensureDir(path.join(root, "agent", "pending", "proposed_actions"));
+  await ensureDir(path.join(root, "agent", "task_profiles"));
   await ensureDir(path.join(root, "agent", "logs"));
+  await ensureDir(path.join(root, "workspace"));
+  await ensureDir(path.join(root, "runs"));
   await ensureDir(path.join(root, "research", "proposals"));
   await ensureDir(path.join(root, "research", "analysis"));
 }
@@ -2656,8 +2664,13 @@ async function generatedWatcherFileEntries(root) {
     ["agent/schemas/bootstrap_conversation_turn.schema.json", templates.bootstrapConversationTurnSchema(), 0o644],
     ["agent/schemas/bootstrap_instantiation.schema.json", templates.bootstrapInstantiationSchema(), 0o644],
     ["agent/schemas/state.schema.json", templates.stateSchema(), 0o644],
+    ["agent/schemas/task_box.schema.json", templates.taskBoxSchema(), 0o644],
+    ["agent/schemas/route_canonical.schema.json", templates.routeCanonicalSchema(), 0o644],
     ["agent/schemas/job.schema.json", templates.jobSchema(), 0o644],
     ["agent/schemas/gate.schema.json", templates.gateSchema(), 0o644],
+    ["agent/TASK_BOX.json", templates.taskBoxJson(), 0o644],
+    ["agent/ROUTE_CANONICAL.json", templates.routeCanonicalJson(), 0o644],
+    ["agent/EVIDENCE_LEDGER.jsonl", templates.evidenceLedgerJsonl(), 0o644],
     ["agent/bin/collect_status.sh", templates.collectStatus(root), 0o755],
     ["agent/bin/make_prompt.sh", templates.makePrompt(root), 0o755],
     ["agent/bin/run_watchdog.sh", templates.runWatchdog(root), 0o755],
@@ -2769,11 +2782,14 @@ async function ensureCollaborationHandoffFiles(root) {
   const files = [
     ["agent/CURRENT_STATE.md", templates.currentState()],
     ["agent/RUN_STATE.json", templates.runStateJson()],
+    ["agent/TASK_BOX.json", templates.taskBoxJson()],
+    ["agent/ROUTE_CANONICAL.json", templates.routeCanonicalJson()],
     ["agent/NEXT_ACTION.md", templates.nextAction()],
     ["agent/BLOCKERS.md", templates.blockers()],
     ["agent/REVIEW_PENDING.md", templates.reviewPending()],
     ["agent/ANTI_SNOWBALL.md", templates.antiSnowball()],
-    ["agent/EXPERIMENT_LEDGER.md", templates.experimentLedger()]
+    ["agent/EXPERIMENT_LEDGER.md", templates.experimentLedger()],
+    ["agent/EVIDENCE_LEDGER.jsonl", templates.evidenceLedgerJsonl()]
   ];
   for (const [rel, content] of files) {
     const file = path.join(root, rel);
@@ -4748,6 +4764,8 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     updated_utc: null,
     mode: "observer",
     requires_review: false,
+    route_id: "bootstrap-route",
+    route_epoch: "bootstrap-000",
     active_task_id: null,
     active_branch: null,
     tasks: [],
@@ -4768,8 +4786,94 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     no_progress_cycles: 0,
     last_report_type: "heartbeat",
     current_blocker: "",
-    recommend_pause: false
+    recommend_pause: false,
+    route_id: "bootstrap-route",
+    route_epoch: "bootstrap-000",
+    task_box_id: "bootstrap-taskbox"
   }, null, 2) + "\n",
+
+  taskBoxJson: () => JSON.stringify({
+    schema_version: 1,
+    updated_utc: null,
+    owner: "Codex",
+    task_box_id: "bootstrap-taskbox",
+    route_id: "bootstrap-route",
+    route_epoch: "bootstrap-000",
+    active_target: "Define the first concrete watchdog mission before unattended runs.",
+    requires_review: false,
+    allowed_actions: [
+      "report_only",
+      "local_workspace_copy",
+      "bounded_cpu_eval",
+      "state_reconcile",
+      "stale_marker_cleanup",
+      "local_profile_authoring",
+      "local_queue_draft_authoring"
+    ],
+    blocked_actions: [
+      "direct_gpu_execution",
+      "shared_source_edit",
+      "dataset_mutation",
+      "checkpoint_mutation",
+      "promotion_apply",
+      "external_send"
+    ],
+    success_gates: [
+      "one bounded watchdog cycle completes with compact state updates",
+      "shared files outside allowed local/state paths are untouched"
+    ],
+    stop_conditions: [
+      "finish one bounded step and refresh compact watchdog state",
+      "if the next step would change shared facts or external state, switch to review-required"
+    ],
+    allowed_write_paths: [
+      "agent/status/",
+      "agent/reports/",
+      "agent/logs/",
+      "agent/pending/",
+      "agent/task_profiles/",
+      "workspace/",
+      "runs/"
+    ],
+    allowed_commands: [],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1
+    },
+    review_required_when: [
+      "shared-source edit or promotion",
+      "dataset/checkpoint mutation",
+      "external send",
+      "direct GPU shell execution"
+    ],
+    morning_brief_questions: [
+      "What did watchdog complete autonomously?",
+      "What still needs human approval?"
+    ],
+    tasks: []
+  }, null, 2) + "\n",
+
+  routeCanonicalJson: () => JSON.stringify({
+    schema_version: 1,
+    updated_utc: null,
+    route_id: "bootstrap-route",
+    route_epoch: "bootstrap-000",
+    macro_goal: "Bootstrap a bounded watchdog project before unattended execution.",
+    active_ladder: ["bootstrap"],
+    current_allowed_step: "bootstrap",
+    blocked_downstream_steps: [],
+    current_budget_contract: "one bounded wakeup per cycle",
+    main_provider_contract: "local Codex watchdog",
+    promotion_gates: [
+      "human review for shared-source promotion",
+      "human review for external send"
+    ],
+    owner_mode: "fully_autonomous",
+    requires_review: false,
+    active_task_id: null
+  }, null, 2) + "\n",
+
+  evidenceLedgerJsonl: () => "",
 
   queueStatus: () => `# Queue Status
 
@@ -4833,7 +4937,14 @@ This generated protocol keeps runner watchdogs and supervisor watchdogs compatib
 
 Both roles use the same Codex runtime and generated scripts. The supervisor is not a privileged fourth runner.
 
-## Canonical Handoff Files
+## Canonical Route And Handoff Files
+
+Canonical route truth now starts with:
+
+- \`agent/ROUTE_CANONICAL.json\`: route_id, route_epoch, owner_mode, active step, and downstream gates.
+- \`agent/TASK_BOX.json\`: machine-readable bounded assignment, allowed actions, allowed write paths, queue policy, and concrete tasks.
+
+Derived/project-local watchdog files should be reconciled against the canonical route/task box when they drift:
 
 Each wakeup should leave these files coherent:
 
@@ -4844,6 +4955,7 @@ Each wakeup should leave these files coherent:
 - \`agent/REVIEW_PENDING.md\`: reviewer bundle state, sanitization state, send state, and response state.
 - \`agent/ANTI_SNOWBALL.md\`: stopped routes, stale facts to avoid repeating, and compaction notes.
 - \`agent/EXPERIMENT_LEDGER.md\`: durable experimental hypotheses, model/loss/data protocol, provenance, results, and conclusions.
+- \`agent/EVIDENCE_LEDGER.jsonl\`: durable machine-readable evidence objects for later agents.
 
 ## Supervisor Modes
 
@@ -4853,17 +4965,28 @@ Each wakeup should leave these files coherent:
 
 The runtime writes the chosen mode to \`agent/status/SUPERVISOR_MODE.json\` and \`agent/RUN_STATE.json\`. Do not override it inside the prompt; report a runtime blocker if it appears wrong.
 
+## Runner Rules
+
+- Runner is not just an observer. Runner is the default executor for bounded planned work and the default repairer for low-risk local blockers.
+- If \`requires_review=false\`, treat the project as fully autonomous for bounded local work inside the task box and route contract.
+- Prefer \`agent/TASK_BOX.json\` first, then \`agent/STATE.json\`, then markdown files.
+- If \`agent/ROUTE_CANONICAL.json\` disagrees with derived state files, repair the derived files locally instead of waiting for a supervisor essay.
+- Queue draft authoring, local profile/package authoring, local workspace copy preparation, stale state cleanup, and bounded CPU eval are autonomy-preserving actions; do them when the task box and safety policy allow them.
+- Sandbox-local GPU visibility failures are advisory only. Do not conclude that the host has no GPU unless queue/host evidence agrees.
+- Direct GPU shell execution remains forbidden; convert it into a queue path or queue draft.
+
 ## Supervisor Rules
 
 - Prefer canonical handoff files over old reports.
 - If a runner is active, do not wait on or interrupt it.
 - Fix only stale state, stale pause markers, stale queue metadata, reviewer-pending bookkeeping, and anti-snowball summaries.
 - You may resolve runner report-only/bookkeeping blockers when the evidence is explicit and no shared-state side effect is being approved.
-- You may approve only the capability classes explicitly allowed by \`agent/supervisor_capabilities.json\`; public defaults allow report-only, local workspace copy work, and bounded CPU eval.
+- You may approve only the capability classes explicitly allowed by \`agent/supervisor_capabilities.json\`; public defaults allow report-only, state reconcile, stale-marker cleanup, local workspace copy work, local profile/package authorship, local queue-draft authorship, and bounded CPU eval.
 - You must not approve disabled capability classes such as GPU probes, training canaries, queue enqueue, promotion, external reviewer sending, data/checkpoint mutation, package installation, service mutation, or new high-risk allowlist permissions. Write a review-required handoff instead.
 - If \`queue_enqueue\` is enabled, it only permits writing a bounded taskbox/request into the monitored queue; it never permits the runner to execute GPU commands directly or bypass the queue runner.
 - If a deterministic project-local reconciliation helper has already repaired stale state, trust its compact report and do not launch a second broad reasoning pass for the same wakeup.
 - Passive waiting is a supervisor failure when a blocker is stale/repeated, the evidence is local, and the repair is bookkeeping/report-only or an explicitly supervisor-approved bounded non-mutating task.
+- For stale_state, stale_route_text, missing_profile, queue-draft authorship, and sandbox-visibility-only blockers, repair locally when the change stays inside the project-local watchdog boundary.
 - For environment or external reviewer blockers, write the exact needed action and evidence path.
 - For model/data/loss decisions, prepare a concise reviewer or Deep Research evidence bundle; do not invent a new model line.
 `,
@@ -4890,6 +5013,9 @@ Updated: never
     updated_utc: null,
     role: "runner",
     supervisor_mode: "runner",
+    route_id: "bootstrap-route",
+    route_epoch: "bootstrap-000",
+    task_box_id: "bootstrap-taskbox",
     runner_run_count: null,
     runner_started_count: null,
     supervisor_audit_every_runner_runs: null,
@@ -5298,18 +5424,19 @@ watchdog-permission-guardian is a mandatory gate before any action that writes, 
 ## Routing Order
 
 1. If agent/control/PAUSE exists: primary_skill = watchdog-handoff-writer; write paused status; stop.
-2. If supervisor light/audit finds a target runner with a delegable report-only/bookkeeping or bounded non-mutating blocker: primary_skill = watchdog-orchestrator; write exactly one approval/reconciliation or explain why it is not safe; stop.
+2. If supervisor light/audit finds a target runner with a delegable stale_state, missing_profile, queue-draft, local-workspace-copy, report-only, or bounded non-mutating blocker: primary_skill = watchdog-orchestrator; write exactly one approval/reconciliation or explain why it is not safe; stop.
 3. If gpu_running/, cpu_running/, or agent/queue/running/ contains a job: primary_skill = watchdog-job-queue; monitor exactly one running job; stop.
 4. If gpu_done/, cpu_done/, or agent/queue/done/ contains fresh unprocessed output within WATCHDOG_QUEUE_RESULT_FRESH_MINUTES: primary_skill = watchdog-gate-evaluator; evaluate exactly one result; stop.
 5. If a queued job exists: primary_skill = watchdog-job-queue; inspect queue state; stop.
-6. If one structured report-only pending task exists: primary_skill = watchdog-orchestrator; choose exactly one report-only next action, even if old handoff text mentions review_required. Do not execute code or mutate datasets.
-7. If one pending task has explicit supervisor approval and passes \`agent/supervisor_capabilities.json\`: primary_skill = watchdog-orchestrator; execute or prepare exactly one task within that approval scope; stop.
-8. If active structured review markers exist and the pending task would write, queue, execute, or approve external review: primary_skill = watchdog-handoff-writer; write one review item; stop.
-9. If one legal pending task exists: primary_skill = watchdog-orchestrator; choose exactly one next action. If it writes, queues, or executes, apply watchdog-permission-guardian first.
-10. If TODO has pending/unchecked work but no runnable structured task exists: primary_skill = watchdog-orchestrator; choose one report-only next step or ask daily mode to structure STATE.json; stop.
-11. If agent/status/current.md says Compaction due this cycle and no higher-priority active work exists: primary_skill = watchdog-report-curator; compact active outputs; stop.
-12. If only active review markers remain: primary_skill = watchdog-handoff-writer; write review-required handoff; stop.
-13. If no runnable task exists: primary_skill = watchdog-handoff-writer; write idle/blocked status; stop.
+6. If ROUTE_CANONICAL/TASK_BOX say the project is autonomous and route_epoch or compact state markers are stale: primary_skill = watchdog-orchestrator; reconcile local derived state and stop.
+7. If one structured pending task exists in TASK_BOX.json or STATE.json and it is report-only, local workspace copy, local profile authorship, local queue-draft authorship, stale-state repair, state reconcile, or bounded CPU eval: primary_skill = watchdog-orchestrator; continue exactly one bounded action instead of waiting on stale review text.
+8. If one pending task has explicit supervisor approval and passes \`agent/supervisor_capabilities.json\`: primary_skill = watchdog-orchestrator; execute or prepare exactly one task within that approval scope; stop.
+9. If active structured review markers remain and the next step would change shared facts, enqueue controlled GPU work, run direct GPU commands, send externally, mutate data/checkpoints, or promote shared source: primary_skill = watchdog-handoff-writer; write one review item; stop.
+10. If one legal pending task exists: primary_skill = watchdog-orchestrator; choose exactly one next action. Apply watchdog-permission-guardian only when the action truly writes shared state, enqueues controlled work, executes risky commands, or changes mechanism configuration.
+11. If TODO has pending/unchecked work but no runnable structured task exists: primary_skill = watchdog-orchestrator; choose one bounded next step or ask daily mode to structure TASK_BOX.json/STATE.json; stop.
+12. If agent/status/current.md says Compaction due this cycle and no higher-priority active work exists: primary_skill = watchdog-report-curator; compact active outputs; stop.
+13. If only active review markers remain: primary_skill = watchdog-handoff-writer; write review-required handoff; stop.
+14. If no runnable task exists: primary_skill = watchdog-handoff-writer; write idle/blocked status; stop.
 
 The generated agent/bin/route_skill.py applies this route before Codex starts and writes agent/status/SKILL_ROUTE.json. Codex output must match that route.
 
@@ -5320,6 +5447,7 @@ The generated agent/bin/route_skill.py applies this route before Codex starts an
 - Do not paste raw logs into core state.
 - Do not queue duplicate jobs.
 - Do not execute GPU work directly; use a queue/runner.
+- Treat queue draft authoring and queue enqueue as different actions.
 - Always finish with report-curator discipline: concise state, no duplicated history, evidence by path.
 `,
 
@@ -5330,7 +5458,7 @@ description: Select the next legal watchdog action from compact project state wi
 
 # watchdog-orchestrator
 
-Use when no job is running, no completed job needs gate evaluation, no pause file exists, and there may be one pending task.
+Use when no job is running, no completed job needs gate evaluation, no pause file exists, and there may be one bounded task or local unblock action to advance.
 
 Inputs:
 - agent/STATE.md
@@ -5341,17 +5469,19 @@ Inputs:
 
 Allowed:
 - Identify exactly one next safe action.
+- Execute exactly one bounded local action when the route/task box allows it.
+- Repair stale local watchdog state, missing task profiles, queue drafts, and route drift inside the project-local boundary.
 - Mark missing evidence or blocked dependencies.
 - Propose review when safety is unclear.
 
 Forbidden:
-- Start jobs directly.
+- Start jobs directly from shell when the route requires queue execution.
 - Edit project code.
 - Change daily-mode files.
 - Expand into multiple branches.
 
 Stop after:
-- Selecting one next action or declaring no runnable task.
+- Finishing one bounded local action, selecting one next action, or declaring no runnable task.
 `,
 
   skillJobQueue: () => `---
@@ -5544,6 +5674,8 @@ You are being awakened by a timer. Treat this as a fresh handoff. Do not assume 
 - agent/PLAN.md
 - agent/STATE.md
 - agent/STATE.json
+- agent/TASK_BOX.json
+- agent/ROUTE_CANONICAL.json
 - agent/PROGRESS_STATE.json
 - agent/SAFETY.md
 - agent/TODO.md
@@ -5556,6 +5688,7 @@ You are being awakened by a timer. Treat this as a fresh handoff. Do not assume 
 - agent/REVIEW_PENDING.md
 - agent/ANTI_SNOWBALL.md
 - agent/EXPERIMENT_LEDGER.md
+- agent/EVIDENCE_LEDGER.jsonl
 - agent/RUNTIME_STATE.md
 - agent/MORNING_BRIEF.md
 - agent/SKILL_ROUTER.md
@@ -5568,8 +5701,10 @@ You are being awakened by a timer. Treat this as a fresh handoff. Do not assume 
 
 Mode boundary:
 
-- Daily mode owns agent/PLAN.md, agent/TODO.md, agent/STATE.md, agent/SAFETY.md, and agent/DAILY_HANDOFF.md.
+- Daily mode owns the intent and long-horizon policy in agent/PLAN.md, agent/TODO.md, agent/STATE.md, agent/SAFETY.md, and agent/DAILY_HANDOFF.md.
 - Watchdog mode owns agent/CURRENT_STATE.md, agent/RUN_STATE.json, agent/NEXT_ACTION.md, agent/BLOCKERS.md, agent/REVIEW_PENDING.md, agent/ANTI_SNOWBALL.md, agent/EXPERIMENT_LEDGER.md, agent/RUNTIME_STATE.md, agent/MORNING_BRIEF.md, agent/status/, agent/reports/, agent/logs/, and agent/pending/.
+- agent/TASK_BOX.json and agent/ROUTE_CANONICAL.json are the machine-readable route contract. When they drift from derived watchdog files, prefer reconciling the derived files instead of freezing.
+- Project-local autonomous artifacts may also be written under agent/task_profiles/, workspace/, and runs/ when TASK_BOX/SAFETY explicitly allow that bounded action.
 - Do not rewrite daily-mode files. Propose changes through state_update_markdown or review-required pending records.
 
 Runner / supervisor cooperation:
@@ -5581,7 +5716,7 @@ Runner / supervisor cooperation:
   - \`standby\`: write a short heartbeat and stop.
 - Supervisor mode is chosen deterministically by the runtime from runner cycle counts and marker files; do not silently change it. If the selected mode looks wrong, report it as a runtime blocker.
 - If it is \`supervisor\`, do not launch training, change model code, delete files, interrupt active runner work, or bypass external-service approval.
-- Prefer agent/CURRENT_STATE.md, agent/RUN_STATE.json, agent/NEXT_ACTION.md, agent/BLOCKERS.md, and agent/REVIEW_PENDING.md over old reports when deciding what is currently true.
+- Prefer agent/TASK_BOX.json and agent/ROUTE_CANONICAL.json first, then agent/CURRENT_STATE.md, agent/RUN_STATE.json, agent/NEXT_ACTION.md, agent/BLOCKERS.md, and agent/REVIEW_PENDING.md over old reports when deciding what is currently true.
 - Blockers must be classified as env, queue, permission, reviewer, model, data, stale_state, or none.
 
 Runtime curation:
@@ -5596,7 +5731,7 @@ Watchdog skills layer:
 - Start by reading agent/status/SKILL_ROUTE.json, which is produced deterministically by agent/bin/route_skill.py before Codex starts.
 - Select exactly one primary_skill for this wakeup, and it must match agent/status/SKILL_ROUTE.json. If the deterministic route appears wrong, explain that as a blocker; do not silently choose a different primary skill.
 - Read the selected skill's agent/skills/<primary_skill>/SKILL.md when the route is not obvious from the snapshot.
-- If the action writes, queues, executes, archives, or changes mechanism configuration, watchdog-permission-guardian must pass first. If it does not pass, the primary skill should normally be watchdog-handoff-writer or watchdog-permission-guardian, and no execution should occur.
+- If the action writes shared state, enqueues controlled work, executes risky commands, archives, or changes mechanism configuration, watchdog-permission-guardian must pass first. Local state reconcile, local queue-draft authorship, local profile authorship, local workspace copy preparation, stale-marker cleanup, and bounded CPU eval do not need to stop for review when they remain inside the project-local watchdog boundary and match TASK_BOX/SAFETY.
 - Do not chain multiple operational skills in one wakeup. Run one bounded action and stop.
 
 Your job:
@@ -5607,10 +5742,10 @@ Your job:
 4. Decide what has completed, what is still running, and what is blocked.
 5. Compare the current state against the approved plan.
 6. Choose the next safe action.
-7. In Level 1 mode, do not execute operational actions. Only inspect, reason, and report.
-8. A workspace-write coding probe is allowed only when all of these are true: agent/workspace_write_policy.json exists, is valid JSON, sets enabled to true, lists exact relative writable paths and exact allowed commands; agent/SAFETY.md documents the same probe; agent/PLAN.md or agent/TODO.md requests the probe; and the project is an isolated demo or explicitly approved workspace. If any condition is missing, create a review-required proposal instead of writing files.
+7. In autonomous mode, do not stop just because a stale marker exists. Continue with one bounded local action when TASK_BOX/ROUTE_CANONICAL say requires_review=false and the work stays inside the allowed local boundary.
+8. A workspace-write coding probe is allowed only when all of these are true: agent/workspace_write_policy.json exists, is valid JSON, sets enabled to true, lists exact relative writable paths and exact allowed commands; agent/SAFETY.md documents the same probe; agent/PLAN.md, agent/TODO.md, or agent/TASK_BOX.json requests the probe; and the project is an isolated demo or explicitly approved workspace. If any condition is missing, create a review-required proposal instead of writing files.
 9. If an explicit workspace-write coding probe is active, edit only the allowlisted paths, run only the allowlisted commands, and summarize every command and file change in the final structured output.
-10. If the next action is safe and allowed by agent/SAFETY.md, perform it only if it is read-only inspection, report generation through the final structured output, or an explicitly allowlisted workspace-write coding probe. For any other action that writes files outside agent/reports, agent/status, agent/logs, or agent/pending, create a review-required proposal instead of executing it.
+10. If the next action is safe and allowed by agent/SAFETY.md, perform it when it is read-only inspection, report generation through the final structured output, project-local state reconcile, local queue/profile/taskbox authoring, bounded CPU eval, or an explicitly allowlisted workspace-write coding probe. For actions that write shared files, enqueue controlled GPU work, send externally, or promote results, create a review-required proposal instead of executing them.
 11. Produce a concise but useful phase report.
 12. Produce a proposed update to agent/STATE.md.
 13. Produce a compact runtime state update for agent/RUNTIME_STATE.md. Keep it shorter than the proposed state and focused on last wakeup time, active experiments, latest observed metrics, blockers, and the next safe watch task.
@@ -5620,14 +5755,14 @@ Your job:
 17. Classify the report_type as progress, blocked, heartbeat, error, or recommend_pause.
 18. Track no_progress_cycles conservatively: increment only when there is no new evidence, no blocker change, and no completed action; reset to 0 when meaningful progress occurs.
 19. If no_progress_cycles is high or the same blocker repeats, set recommend_pause=true and explain the human decision needed.
-20. Mark any critical decision as requires_human_review.
+20. Mark only truly dangerous or shared-side-effect decisions as requires_human_review. Do not escalate purely local unblockers into human review.
 
 Hard restrictions:
 
 - Do not kill, suspend, restart, or interfere with running training.
 - Do not delete files.
 - Do not launch new training.
-- Do not use GPUs.
+- Do not execute GPUs directly from the sandbox shell. GPU queue/host evidence may still exist; treat sandbox visibility failures as advisory unless host-side evidence confirms a real outage.
 - Do not modify code unless an explicit workspace-write coding probe is enabled by agent/workspace_write_policy.json and documented in agent/SAFETY.md with the exact file paths and allowed commands. Otherwise, do not modify code.
 - Do not make git changes.
 - Do not use network.
@@ -5829,6 +5964,71 @@ The final output must follow the JSON schema.
       allowed_next_action: { type: "string" },
       blocked_actions: { type: "array", items: { type: "string" } },
       important_paths: { type: "array", items: { type: "string" } }
+    },
+    additionalProperties: true
+  }, null, 2) + "\n",
+
+  taskBoxSchema: () => JSON.stringify({
+    type: "object",
+    required: [
+      "schema_version",
+      "task_box_id",
+      "route_id",
+      "route_epoch",
+      "requires_review",
+      "allowed_actions",
+      "blocked_actions",
+      "allowed_write_paths",
+      "queue_policy",
+      "tasks"
+    ],
+    properties: {
+      schema_version: { type: "integer" },
+      updated_utc: { type: ["string", "null"] },
+      owner: { type: "string" },
+      task_box_id: { type: "string" },
+      route_id: { type: "string" },
+      route_epoch: { type: "string" },
+      active_target: { type: "string" },
+      requires_review: { type: "boolean" },
+      allowed_actions: { type: "array", items: { type: "string" } },
+      blocked_actions: { type: "array", items: { type: "string" } },
+      success_gates: { type: "array", items: { type: "string" } },
+      stop_conditions: { type: "array", items: { type: "string" } },
+      allowed_write_paths: { type: "array", items: { type: "string" } },
+      allowed_commands: { type: "array", items: { type: "string" } },
+      queue_policy: { type: "object" },
+      review_required_when: { type: "array", items: { type: "string" } },
+      morning_brief_questions: { type: "array", items: { type: "string" } },
+      tasks: { type: "array", items: { type: "object" } }
+    },
+    additionalProperties: true
+  }, null, 2) + "\n",
+
+  routeCanonicalSchema: () => JSON.stringify({
+    type: "object",
+    required: [
+      "schema_version",
+      "route_id",
+      "route_epoch",
+      "owner_mode",
+      "requires_review"
+    ],
+    properties: {
+      schema_version: { type: "integer" },
+      updated_utc: { type: ["string", "null"] },
+      route_id: { type: "string" },
+      route_epoch: { type: "string" },
+      macro_goal: { type: "string" },
+      active_ladder: { type: ["array", "string"] },
+      current_allowed_step: { type: ["string", "null"] },
+      blocked_downstream_steps: { type: "array", items: { type: "string" } },
+      current_budget_contract: { type: "string" },
+      main_provider_contract: { type: "string" },
+      promotion_gates: { type: "array", items: { type: "string" } },
+      owner_mode: { type: "string" },
+      requires_review: { type: "boolean" },
+      active_task_id: { type: ["string", "null"] }
     },
     additionalProperties: true
   }, null, 2) + "\n",
@@ -7734,6 +7934,14 @@ def load_json(path, default=None):
     except Exception:
         return default
 
+def load_task_box(root=ROOT):
+    data = load_json(root / "agent" / "TASK_BOX.json", {})
+    return data if isinstance(data, dict) else {}
+
+def load_route_canonical(root=ROOT):
+    data = load_json(root / "agent" / "ROUTE_CANONICAL.json", {})
+    return data if isinstance(data, dict) else {}
+
 def has_files(*dirs, freshness_minutes=None):
     cutoff = None
     if freshness_minutes is not None:
@@ -7756,14 +7964,16 @@ TRUE_VALUES = {"1", "true", "yes", "on", "required"}
 REVIEW_STATES = {"pending_send", "review_required_no_bundle"}
 BLOCKER_TYPES = {"permission", "reviewer", "allowlist", "stale_state"}
 
-def read_text(rel):
-    p = ROOT / rel
+def read_text_path(p):
     if not p.exists():
         return ""
     try:
         return p.read_text(errors="ignore")
     except Exception:
         return ""
+
+def read_text(rel):
+    return read_text_path(ROOT / rel)
 
 def field_value(raw_text, key):
     key = key.lower()
@@ -7821,6 +8031,60 @@ def pending_tasks(state):
         return []
     return [t for t in tasks if isinstance(t, dict) and t.get("status") == "pending"]
 
+def autonomous_mode(state, task_box, route_canonical):
+    for source in (task_box, route_canonical, state):
+        if isinstance(source, dict) and isinstance(source.get("requires_review"), bool):
+            return source.get("requires_review") is False
+    return False
+
+def task_box_pending_tasks(task_box):
+    tasks = task_box.get("tasks") if isinstance(task_box, dict) else []
+    if not isinstance(tasks, list):
+        return []
+    pending = []
+    for raw in tasks:
+        if not isinstance(raw, dict):
+            continue
+        task = dict(raw)
+        if not task.get("status"):
+            task["status"] = "pending"
+        if task.get("status") != "pending":
+            continue
+        if not task.get("task_id"):
+            task["task_id"] = task_box.get("task_box_id") or "task-box-pending-task"
+        pending.append(task)
+    return pending
+
+def preferred_pending_tasks(state, task_box):
+    state_tasks = pending_tasks(state)
+    if state_tasks:
+        return state_tasks, "STATE.json"
+    task_box_tasks = task_box_pending_tasks(task_box)
+    if task_box_tasks:
+        return task_box_tasks, "TASK_BOX.json"
+    return [], ""
+
+def route_epoch_mismatch(route_canonical, state, progress, run_state):
+    if not isinstance(route_canonical, dict):
+        return ""
+    canonical_epoch = str(route_canonical.get("route_epoch") or "").strip()
+    if not canonical_epoch:
+        return ""
+    mismatches = []
+    for label, record in (
+        ("STATE.json", state),
+        ("PROGRESS_STATE.json", progress),
+        ("RUN_STATE.json", run_state),
+    ):
+        if not isinstance(record, dict):
+            continue
+        record_epoch = str(record.get("route_epoch") or "").strip()
+        if record_epoch and record_epoch != canonical_epoch:
+            mismatches.append(f"{label} route_epoch={record_epoch}")
+    if mismatches:
+        return f"Canonical route_epoch={canonical_epoch} differs from " + ", ".join(mismatches) + "."
+    return ""
+
 def task_is_report_only(task):
     runner = str(task.get("allowed_runner") or "").strip().lower()
     kind = str(task.get("kind") or "").strip().lower()
@@ -7830,9 +8094,11 @@ def task_is_report_only(task):
 
 DEFAULT_SUPERVISOR_CAPABILITIES = {
     "report_only": True,
-    "state_reconcile": False,
-    "stale_marker_cleanup": False,
+    "state_reconcile": True,
+    "stale_marker_cleanup": True,
     "local_workspace_copy": True,
+    "local_profile_authoring": True,
+    "local_queue_draft_authoring": True,
     "bounded_cpu_eval": True,
     "bounded_gpu_probe": False,
     "bounded_training_canary": False,
@@ -7854,6 +8120,14 @@ CAPABILITY_ALIASES = {
     "local_workspace_copy": "local_workspace_copy",
     "project-local-copy": "local_workspace_copy",
     "project_local_copy": "local_workspace_copy",
+    "local-profile-authoring": "local_profile_authoring",
+    "local_profile_authoring": "local_profile_authoring",
+    "missing-profile": "local_profile_authoring",
+    "missing_profile": "local_profile_authoring",
+    "local-queue-draft-authoring": "local_queue_draft_authoring",
+    "local_queue_draft_authoring": "local_queue_draft_authoring",
+    "queue-draft": "local_queue_draft_authoring",
+    "queue_draft": "local_queue_draft_authoring",
     "bounded-cpu": "bounded_cpu_eval",
     "bounded_cpu": "bounded_cpu_eval",
     "bounded-cpu-eval": "bounded_cpu_eval",
@@ -7956,6 +8230,24 @@ def classify_supervisor_capability(task, approval=None):
     ):
         return "local_workspace_copy"
     if (
+        "missing_profile" in text
+        or "missing profile" in text
+        or "task profile" in text
+        or "profile package" in text
+        or "package object" in text
+        or "local profile" in text
+    ):
+        return "local_profile_authoring"
+    if (
+        "queue draft" in text
+        or "draft queue" in text
+        or "queue taskbox draft" in text
+        or "prepare queue request" in text
+        or "prepare taskbox" in text
+        or "author queue request" in text
+    ):
+        return "local_queue_draft_authoring"
+    if (
         "queue_enqueue" in text
         or "queue enqueue" in text
         or "enqueue" in text
@@ -8051,10 +8343,26 @@ def supervisor_policy_rejection(policy, capability, text):
             return "queue_enqueue cannot approve direct GPU execution or queue bypass"
         return ""
 
+    if capability in {"local_queue_draft_authoring", "local_profile_authoring"}:
+        direct_execution_terms = (
+            "direct gpu",
+            "direct_gpu",
+            "execute gpu directly",
+            "run gpu directly",
+            "launch gpu directly",
+            "manual gpu execution",
+            "bypass queue",
+            "without queue",
+            "promotion",
+            "external send",
+        )
+        if text_has_any(normalized_text, direct_execution_terms):
+            return f"{capability} cannot approve direct execution, promotion, or external send"
+        return ""
+
     dangerous_by_capability = {
         "bounded_gpu_probe": ("gpu", "gpu0", "gpu1", "run gpu", "execute gpu"),
         "bounded_training_canary": ("training", "train ", "launch training", "start training"),
-        "queue_enqueue": ("queue", "enqueue"),
         "promotion_apply": ("promotion", "promote", "shared_model", "deployment", "public docs"),
         "external_send": ("external send", "deep research send", "reviewer send"),
     }
@@ -8092,6 +8400,115 @@ def task_is_supervisor_approved(task):
         return False
     return capability in DEFAULT_SUPERVISOR_CAPABILITIES
 
+def classify_task_capability(task):
+    capability = classify_supervisor_capability(task, task.get("supervisor_approval") if isinstance(task, dict) else None)
+    if capability:
+        return capability
+    if task_is_report_only(task):
+        return "report_only"
+    runner = str(task.get("allowed_runner") or "").strip().lower()
+    if runner == "cpu":
+        return "bounded_cpu_eval"
+    if runner == "gpu":
+        return "bounded_gpu_probe"
+    return ""
+
+def permission_guardian_needed(task):
+    if task_is_supervisor_approved(task):
+        return False
+    capability = classify_task_capability(task)
+    if capability in {
+        "report_only",
+        "state_reconcile",
+        "stale_marker_cleanup",
+        "local_workspace_copy",
+        "local_profile_authoring",
+        "local_queue_draft_authoring",
+        "bounded_cpu_eval",
+    }:
+        return False
+    if capability in {
+        "bounded_gpu_probe",
+        "bounded_training_canary",
+        "queue_enqueue",
+        "promotion_prepare",
+        "promotion_apply",
+        "external_send",
+    }:
+        return True
+    return str(task.get("allowed_runner") or "").strip().lower() in {"cpu", "gpu"}
+
+def safe_autonomous_capability(capability):
+    return capability in {
+        "report_only",
+        "state_reconcile",
+        "stale_marker_cleanup",
+        "local_workspace_copy",
+        "local_profile_authoring",
+        "local_queue_draft_authoring",
+        "bounded_cpu_eval",
+    }
+
+def local_unblock_reason(state, task_box, route_canonical, run_state=None, progress=None):
+    review_text = read_text("agent/REVIEW_PENDING.md")
+    blockers_text = read_text("agent/BLOCKERS.md")
+    combined = "\\n".join([
+        review_text,
+        blockers_text,
+        json.dumps(run_state or {}, sort_keys=True),
+        json.dumps(progress or {}, sort_keys=True),
+    ]).lower()
+    scope = field_value(review_text, "scope")
+    resolver = field_value(review_text, "resolver")
+    autonomous = autonomous_mode(state, task_box, route_canonical)
+
+    mismatch = route_epoch_mismatch(route_canonical, state, progress or {}, run_state or {})
+    if mismatch:
+        return "state_reconcile", mismatch
+
+    if autonomous and isinstance(state, dict) and state.get("requires_review") is True:
+        return "state_reconcile", "Canonical autonomy says requires_review=false but STATE.json still says requires_review=true; reconcile the stale derived state locally."
+
+    if autonomous and (
+        field_value(blockers_text, "blocker type") in {"stale_state", "stale_route_text"}
+        or str((run_state or {}).get("blocker_type") or "").strip().lower() in {"stale_state", "stale_route_text"}
+    ):
+        return "state_reconcile", "Autonomous route is blocked only by stale local watchdog state; reconcile derived files locally."
+
+    if autonomous and field_value(review_text, "state") in REVIEW_STATES:
+        if scope in {"", "none", "report_only", "bookkeeping"} and resolver in {"", "none", "supervisor"}:
+            return "stale_marker_cleanup", "Autonomous route is blocked by a stale bookkeeping review marker; clear the stale marker and continue."
+
+    if autonomous and (
+        "missing_profile" in combined
+        or "missing profile" in combined
+        or "profile package" in combined
+        or "task profile" in combined
+    ):
+        return "local_profile_authoring", "Autonomous route is blocked only by a missing local task/profile package; author it locally and continue."
+
+    if autonomous and (
+        "queue draft" in combined
+        or "draft queue" in combined
+        or "prepare queue request" in combined
+        or "prepare taskbox" in combined
+    ):
+        return "local_queue_draft_authoring", "Autonomous route can prepare a local queue draft/taskbox without performing a controlled enqueue yet."
+
+    if autonomous and (
+        "nvidia-smi" in combined
+        or "sandbox visibility" in combined
+        or "unknown_in_current_environment" in combined
+        or "sandbox_visibility_limited" in combined
+    ) and not (
+        "host_has_no_gpu" in combined
+        or "real gpu outage" in combined
+        or "queue runner failed" in combined
+    ):
+        return "state_reconcile", "Only sandbox-local GPU visibility is failing; treat it as advisory and continue via queue-aware local reconciliation."
+
+    return "", ""
+
 def supervisor_targets():
     targets = []
     raw_targets = os.environ.get("WATCHDOG_SUPERVISOR_TARGETS", "")
@@ -8124,6 +8541,10 @@ def classify_delegable_next_action(next_action):
         or "copy into workspace" in text
     ):
         return "local_workspace_copy", text
+    if "missing_profile" in text or "missing profile" in text or "task profile" in text or "profile package" in text:
+        return "local_profile_authoring", text
+    if "queue draft" in text or "draft queue" in text or "prepare taskbox" in text or "prepare queue request" in text:
+        return "local_queue_draft_authoring", text
     if ("cpu-only" in text or "cpu32" in text or "bounded cpu" in text or "32-sample" in text or "sample_count=32" in text) and (
         "eval" in text or "smoke" in text or "helper" in text or "probe" in text
     ):
@@ -8137,8 +8558,34 @@ def classify_delegable_next_action(next_action):
     return "", text
 
 def supervisor_delegable_blocker():
-    safe_terms = ("report-only", "report_only", "static audit", "proposal", "inventory")
     for target in supervisor_targets():
+        target_policy = load_supervisor_capability_policy(target)
+        target_state = load_json(target / "agent" / "STATE.json", {})
+        target_task_box = load_task_box(target)
+        target_route = load_route_canonical(target)
+        target_run_state = load_json(target / "agent" / "RUN_STATE.json", {})
+        target_progress = load_json(target / "agent" / "PROGRESS_STATE.json", {})
+        target_review_text = read_text_path(target / "agent" / "REVIEW_PENDING.md").lower()
+        target_blockers_text = read_text_path(target / "agent" / "BLOCKERS.md").lower()
+        combined = "\\n".join([
+            target_review_text,
+            target_blockers_text,
+            json.dumps(target_run_state or {}, sort_keys=True),
+            json.dumps(target_progress or {}, sort_keys=True),
+        ])
+        if "missing_profile" in combined or "missing profile" in combined or "task profile" in combined:
+            if capability_enabled(target_policy, "local_profile_authoring"):
+                return {"target": str(target), "capability": "local_profile_authoring"}
+        if field_value(target_blockers_text, "blocker type") in {"stale_state", "stale_route_text"} or str((target_run_state or {}).get("blocker_type") or "").strip().lower() in {"stale_state", "stale_route_text"}:
+            if capability_enabled(target_policy, "state_reconcile"):
+                return {"target": str(target), "capability": "state_reconcile"}
+        if field_value(target_review_text, "state") in REVIEW_STATES and field_value(target_review_text, "scope") in {"", "none", "report_only", "bookkeeping"}:
+            if capability_enabled(target_policy, "stale_marker_cleanup"):
+                return {"target": str(target), "capability": "stale_marker_cleanup"}
+        if "queue draft" in combined or "draft queue" in combined or "prepare queue request" in combined or "prepare taskbox" in combined:
+            if capability_enabled(target_policy, "local_queue_draft_authoring"):
+                return {"target": str(target), "capability": "local_queue_draft_authoring"}
+
         progress = load_json(target / "agent" / "PROGRESS_STATE.json", {})
         if not isinstance(progress, dict) or progress.get("requires_human_review") is not True:
             continue
@@ -8148,7 +8595,6 @@ def supervisor_delegable_blocker():
         capability, text = classify_delegable_next_action(next_action)
         if not capability:
             continue
-        target_policy = load_supervisor_capability_policy(target)
         if not capability_enabled(target_policy, capability):
             continue
         if supervisor_policy_rejection(target_policy, capability, text):
@@ -8158,6 +8604,10 @@ def supervisor_delegable_blocker():
 
 def route():
     state = load_json(ROOT / "agent" / "STATE.json", {})
+    task_box = load_task_box(ROOT)
+    route_canonical = load_route_canonical(ROOT)
+    progress = load_json(ROOT / "agent" / "PROGRESS_STATE.json", {})
+    run_state = load_json(ROOT / "agent" / "RUN_STATE.json", {})
     paused = (ROOT / "agent" / "control" / "PAUSE").exists()
     compaction_due = os.environ.get("WATCHDOG_COMPACTION_DUE") == "1"
     role = os.environ.get("WATCHDOG_ROLE", "runner")
@@ -8179,7 +8629,7 @@ def route():
             return {
                 "primary_skill": "watchdog-orchestrator",
                 "reason": f"Supervisor delegated runner blocker found in {delegable.get('target')} with capability={delegable.get('capability')}.",
-                "stop_condition": "Resolve one safe report-only or bounded runner blocker by writing compact approval/status notes, or explain why the blocker is not safe to delegate.",
+                "stop_condition": "Resolve one safe local runner blocker by writing compact approval/status notes, a reconciliation patch, or a bounded local package/draft, then stop.",
                 "permission_guardian_required": False,
                 "permission_guardian_result": "not_required",
                 "route_locked": True,
@@ -8196,9 +8646,9 @@ def route():
             }
         if supervisor_mode == "light":
             return {
-                "primary_skill": "watchdog-handoff-writer",
+                "primary_skill": "watchdog-orchestrator",
                 "reason": "Supervisor lightweight follow-up is due after a runner cycle or reviewer/blocker marker.",
-                "stop_condition": "Repair only reviewer-pending/stale-marker/blocker bookkeeping that is safe; write compact handoff outputs and stop.",
+                "stop_condition": "Repair only safe stale-state, stale-marker, missing-profile, queue-draft, or blocker-bookkeeping issues and stop.",
                 "permission_guardian_required": False,
                 "permission_guardian_result": "not_required",
                 "route_locked": True
@@ -8242,14 +8692,26 @@ def route():
             "route_locked": True
         }
 
-    pending = pending_tasks(state)
+    pending, pending_source = preferred_pending_tasks(state, task_box)
     if pending:
+        local_capability, local_reason = local_unblock_reason(state, task_box, route_canonical, run_state, progress)
+        if local_capability:
+            task = pending[0]
+            return {
+                "primary_skill": "watchdog-orchestrator",
+                "reason": local_reason,
+                "stop_condition": "Perform exactly one safe local unblock or derived-state reconcile, refresh compact state, and stop.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True,
+                "task_id": task.get("task_id")
+            }
         report_only_pending = [t for t in pending if task_is_report_only(t)]
         if report_only_pending:
             task = report_only_pending[0]
             return {
                 "primary_skill": "watchdog-orchestrator",
-                "reason": f"{len(pending)} pending task(s) exist in STATE.json; selected report-only task can proceed without human-review handoff.",
+                "reason": f"{len(pending)} pending task(s) exist in {pending_source}; selected report-only task can proceed without human-review handoff.",
                 "stop_condition": "Choose one report-only next safe action or write a blocker, then stop.",
                 "permission_guardian_required": False,
                 "permission_guardian_result": "not_required",
@@ -8261,13 +8723,26 @@ def route():
             task = supervisor_approved_pending[0]
             return {
                 "primary_skill": "watchdog-orchestrator",
-                "reason": f"{len(pending)} pending task(s) exist in STATE.json; selected bounded task has explicit supervisor approval.",
+                "reason": f"{len(pending)} pending task(s) exist in {pending_source}; selected bounded task has explicit supervisor approval.",
                 "stop_condition": "Execute or prepare exactly one supervisor-approved bounded task within its approval scope; write outputs/provenance or a blocker, then stop.",
                 "permission_guardian_required": False,
                 "permission_guardian_result": "not_required",
                 "route_locked": True,
                 "task_id": task.get("task_id")
             }
+        if autonomous_mode(state, task_box, route_canonical):
+            for task in pending:
+                capability = classify_task_capability(task)
+                if safe_autonomous_capability(capability):
+                    return {
+                        "primary_skill": "watchdog-orchestrator",
+                        "reason": f"{len(pending)} pending task(s) exist in {pending_source}; autonomous mode allows one bounded {capability} step without waiting on unrelated review markers.",
+                        "stop_condition": "Execute or prepare exactly one bounded local autonomous task, refresh compact state, and stop.",
+                        "permission_guardian_required": False,
+                        "permission_guardian_result": "not_required",
+                        "route_locked": True,
+                        "task_id": task.get("task_id")
+                    }
         review_blocked, review_reason = active_review_marker(state)
         if review_blocked:
             return {
@@ -8278,22 +8753,33 @@ def route():
                 "permission_guardian_result": "not_required",
                 "route_locked": True
             }
-        writes_or_executes = any(t.get("allowed_runner") in ("cpu", "gpu") for t in pending)
+        selected = pending[0]
+        guardian_needed = permission_guardian_needed(selected)
         return {
             "primary_skill": "watchdog-orchestrator",
-            "reason": f"{len(pending)} pending task(s) exist in STATE.json.",
+            "reason": f"{len(pending)} pending task(s) exist in {pending_source}.",
             "stop_condition": "Choose one next safe bounded action or write a blocker, then stop.",
-            "permission_guardian_required": bool(writes_or_executes),
-            "permission_guardian_result": "not_required" if not writes_or_executes else "pending",
+            "permission_guardian_required": guardian_needed,
+            "permission_guardian_result": "not_required" if not guardian_needed else "pending",
             "route_locked": True,
-            "task_id": pending[0].get("task_id")
+            "task_id": selected.get("task_id")
         }
 
     if todo_has_pending():
+        local_capability, local_reason = local_unblock_reason(state, task_box, route_canonical, run_state, progress)
+        if local_capability:
+            return {
+                "primary_skill": "watchdog-orchestrator",
+                "reason": local_reason,
+                "stop_condition": "Perform one safe local unblock, refresh compact state, and stop.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True
+            }
         return {
             "primary_skill": "watchdog-orchestrator",
-            "reason": "agent/TODO.md contains a pending or unchecked task but STATE.json has no runnable structured task; continue with one report-only step while approvals remain pending.",
-            "stop_condition": "Choose one report-only next step or write a blocker asking daily mode to structure STATE.json tasks, then stop.",
+            "reason": "agent/TODO.md contains a pending or unchecked task but STATE/TASK_BOX has no runnable structured task; continue with one bounded next step while asking daily mode to structure the task box if needed.",
+            "stop_condition": "Choose one bounded next step or write a blocker asking daily mode to structure TASK_BOX.json/STATE.json, then stop.",
             "permission_guardian_required": False,
             "permission_guardian_result": "not_required",
             "route_locked": True
@@ -8310,6 +8796,16 @@ def route():
         }
 
     review_blocked, review_reason = active_review_marker(state)
+    local_capability, local_reason = local_unblock_reason(state, task_box, route_canonical, run_state, progress)
+    if local_capability:
+        return {
+            "primary_skill": "watchdog-orchestrator",
+            "reason": local_reason,
+            "stop_condition": "Perform one safe local unblock or state reconcile and stop.",
+            "permission_guardian_required": False,
+            "permission_guardian_result": "not_required",
+            "route_locked": True
+        }
     if review_blocked:
         return {
             "primary_skill": "watchdog-handoff-writer",
@@ -8322,7 +8818,7 @@ def route():
 
     return {
         "primary_skill": "watchdog-handoff-writer",
-        "reason": "No paused state, running job, completed result, review request, queued job, or pending STATE.json task was found.",
+        "reason": "No paused state, running job, completed result, review request, queued job, or pending STATE/TASK_BOX task was found.",
         "stop_condition": "Write idle/blocked status and stop.",
         "permission_guardian_required": False,
         "permission_guardian_result": "not_required",
@@ -8432,6 +8928,34 @@ def validate_progress():
         errors.append("agent/PROGRESS_STATE.json no_progress_cycles must be integer")
     if "recommend_pause" in progress and not isinstance(progress.get("recommend_pause"), bool):
         errors.append("agent/PROGRESS_STATE.json recommend_pause must be boolean")
+    if "route_epoch" in progress and progress.get("route_epoch") is not None and not isinstance(progress.get("route_epoch"), str):
+        errors.append("agent/PROGRESS_STATE.json route_epoch must be string or null")
+
+def validate_task_box():
+    task_box = load_json("agent/TASK_BOX.json", required=False)
+    if task_box is None:
+        return
+    if not isinstance(task_box, dict):
+        errors.append("agent/TASK_BOX.json must be an object")
+        return
+    tasks = task_box.get("tasks")
+    if tasks is not None and not isinstance(tasks, list):
+        errors.append("agent/TASK_BOX.json tasks must be an array")
+    queue_policy = task_box.get("queue_policy")
+    if queue_policy is not None and not isinstance(queue_policy, dict):
+        errors.append("agent/TASK_BOX.json queue_policy must be an object")
+
+def validate_route_canonical():
+    route = load_json("agent/ROUTE_CANONICAL.json", required=False)
+    if route is None:
+        return
+    if not isinstance(route, dict):
+        errors.append("agent/ROUTE_CANONICAL.json must be an object")
+        return
+    if "route_epoch" in route and route.get("route_epoch") is not None and not isinstance(route.get("route_epoch"), str):
+        errors.append("agent/ROUTE_CANONICAL.json route_epoch must be string or null")
+    if "owner_mode" in route and route.get("owner_mode") is not None and not isinstance(route.get("owner_mode"), str):
+        errors.append("agent/ROUTE_CANONICAL.json owner_mode must be string or null")
 
 def validate_schema_files():
     for rel in (
@@ -8439,6 +8963,8 @@ def validate_schema_files():
         "agent/schemas/bootstrap_conversation_turn.schema.json",
         "agent/schemas/bootstrap_instantiation.schema.json",
         "agent/schemas/state.schema.json",
+        "agent/schemas/task_box.schema.json",
+        "agent/schemas/route_canonical.schema.json",
         "agent/schemas/job.schema.json",
         "agent/schemas/gate.schema.json",
     ):
@@ -8524,6 +9050,8 @@ def validate_skill_route():
 
 validate_state()
 validate_progress()
+validate_task_box()
+validate_route_canonical()
 validate_schema_files()
 validate_jobs()
 validate_gates()
@@ -8565,6 +9093,17 @@ if route_path.exists():
         raise SystemExit(f"primary_skill mismatch: expected {expected_skill!r} from SKILL_ROUTE.json, got {actual_skill!r}")
 else:
     route = {}
+
+task_box_path = Path("agent/TASK_BOX.json")
+try:
+    task_box = json.loads(task_box_path.read_text()) if task_box_path.exists() else {}
+except Exception:
+    task_box = {}
+route_canonical_path = Path("agent/ROUTE_CANONICAL.json")
+try:
+    route_canonical = json.loads(route_canonical_path.read_text()) if route_canonical_path.exists() else {}
+except Exception:
+    route_canonical = {}
 
 def atomic_write_text(path, text):
     target = Path(path)
@@ -8612,6 +9151,9 @@ progress_state = {
     "primary_skill": data.get("primary_skill"),
     "expected_primary_skill": route.get("primary_skill"),
     "skill_route_reason": route.get("reason"),
+    "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
+    "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
+    "task_box_id": task_box.get("task_box_id"),
     "recommend_pause": bool(data.get("recommend_pause")),
     "requires_human_review": bool(data.get("requires_human_review")),
     "current_blocker": data.get("human_review_reason") or "; ".join(data.get("blocked_items") or [])[:1000],
@@ -8665,6 +9207,9 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Status: {data.get('overall_status', 'uncertain')}",
     f"Report type: {data.get('report_type', 'heartbeat')}",
     f"Primary skill: {data.get('primary_skill', '')}",
+    f"Route ID: {route_canonical.get('route_id') or task_box.get('route_id') or 'unknown'}",
+    f"Route epoch: {route_canonical.get('route_epoch') or task_box.get('route_epoch') or 'unknown'}",
+    f"Task box: {task_box.get('task_box_id') or 'none'}",
     "",
     "## Current Facts",
     "",
@@ -8705,6 +9250,9 @@ atomic_write_json("agent/RUN_STATE.json", {
     "report_type": data.get("report_type"),
     "progress_changed": bool(data.get("progress_changed")),
     "active_task_id": route.get("task_id"),
+    "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
+    "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
+    "task_box_id": task_box.get("task_box_id"),
     "blocker_type": blocker,
     "requires_human_review": requires_review,
     "next_action": next_action,
@@ -8812,6 +9360,23 @@ if ledger_update:
         with Path("research/LEDGER_NOTES.md").open("a") as fh:
             fh.write("\\n\\n## Proposed Ledger Fragment\\n\\n")
             fh.write(ledger_update + "\\n")
+
+append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
+    "timestamp_utc": updated,
+    "task_id": route.get("task_id"),
+    "artifact_type": data.get("report_type", "heartbeat"),
+    "status": data.get("overall_status", "uncertain"),
+    "primary_skill": data.get("primary_skill"),
+    "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
+    "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
+    "task_box_id": task_box.get("task_box_id"),
+    "input_paths": [],
+    "output_paths": ["agent/reports/latest.md", "agent/CURRENT_STATE.md", "agent/RUN_STATE.json"],
+    "metrics": {},
+    "caveats": data.get("blocked_items") or [],
+    "next_safe_action": next_action.get("description", ""),
+    "requires_review": requires_review
+})
 
 proposal = data.get("proposal_markdown", "").strip()
 if proposal:
