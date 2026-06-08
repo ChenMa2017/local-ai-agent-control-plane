@@ -118,6 +118,15 @@ function runRoute(projectRoot, env = {}) {
   return JSON.parse(output);
 }
 
+function runRender(projectRoot, payload, env = {}) {
+  const inputPath = path.join(projectRoot, "agent", "status", "render-input.json");
+  writeJson(projectRoot, "agent/status/render-input.json", payload);
+  run("python3", [path.join(projectRoot, "agent", "bin", "render_report.py"), inputPath], {
+    cwd: projectRoot,
+    env: { ...process.env, ...env }
+  });
+}
+
 async function main() {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-generated-"));
   const api = loadExtensionTestApi(projectRoot);
@@ -164,6 +173,10 @@ async function main() {
   assert.ok(watchSchema.required.includes("supervisor_mode"));
   assert.ok(watchSchema.required.includes("review_scope"));
   assert.ok(watchSchema.required.includes("review_resolver"));
+  assert.ok(watchSchema.required.includes("successor_task_draft"));
+  assert.ok(watchSchema.required.includes("task_profile_draft"));
+  assert.ok(watchSchema.required.includes("queue_request_draft"));
+  assert.ok(watchSchema.required.includes("route_canonical_update"));
 
   const bootstrapSchema = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "schemas", "bootstrap_instantiation.schema.json"), "utf8"));
   assert.deepStrictEqual(
@@ -621,6 +634,99 @@ async function main() {
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "prepare_local_queue_draft");
 
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "queue-enqueue-box",
+    route_id: "route-queue-enqueue",
+    route_epoch: "route-queue-enqueue-001",
+    requires_review: false,
+    allowed_actions: ["queue_enqueue"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/queue/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: true
+    },
+    tasks: [
+      {
+        task_id: "controlled_queue_enqueue",
+        status: "pending",
+        allowed_runner: "gpu",
+        title: "Enqueue exactly one bounded GPU task into the controlled queue.",
+        queue_target: "gpu_queue",
+        command_profile: "stage06_g1_profile",
+        budget_contract: "one bounded queue job",
+        expected_outputs: ["runs/stage06_g1/metrics.json"],
+        max_runtime_minutes: 30
+      }
+    ]
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-queue-enqueue",
+    route_epoch: "route-queue-enqueue-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-queue-enqueue-001"
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "controlled_queue_enqueue");
+  assert.match(route.reason, /Autonomous queue policy allows one controlled queue enqueue/);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "queue-draft-fallback-box",
+    route_id: "route-queue-draft-fallback",
+    route_epoch: "route-queue-draft-fallback-001",
+    requires_review: false,
+    allowed_actions: ["queue_enqueue"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/queue/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: [
+      {
+        task_id: "controlled_queue_draft_only",
+        status: "pending",
+        allowed_runner: "gpu",
+        title: "Enqueue one bounded GPU task into the controlled queue once the contract is complete.",
+        queue_target: "gpu_queue",
+        command_profile: "stage06_g2_profile",
+        budget_contract: "one bounded queue job",
+        expected_outputs: ["runs/stage06_g2/metrics.json"],
+        max_runtime_minutes: 25
+      }
+    ]
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-queue-draft-fallback",
+    route_epoch: "route-queue-draft-fallback-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-queue-draft-fallback-001"
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "controlled_queue_draft_only");
+  assert.match(route.reason, /prepare the exact queue\/profile draft locally/i);
+  assert.match(route.stop_condition, /do not enqueue yet/i);
+
   writeJson(projectRoot, "agent/STATE.json", {
     schema_version: 1,
     mode: "observer",
@@ -699,6 +805,147 @@ async function main() {
   assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
   assert.match(route.reason, /REVIEW_PENDING\.md state=pending_send/);
 
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "route-old-box",
+    route_id: "route-old",
+    route_epoch: "route-001",
+    requires_review: false,
+    tasks: []
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-old",
+    route_epoch: "route-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
+  writeJson(projectRoot, "agent/status/SKILL_ROUTE.json", {
+    primary_skill: "watchdog-orchestrator",
+    reason: "Test render path for successor contract generation.",
+    stop_condition: "Prepare one successor contract and stop.",
+    permission_guardian_required: false,
+    permission_guardian_result: "not_required",
+    route_locked: true,
+    task_id: "stage06_g1_followup"
+  });
+  runRender(projectRoot, {
+    timestamp_utc: "2026-06-08T12:00:00Z",
+    report_markdown: "# Report\n\nAccepted successor route and prepared the next exact contract.",
+    overall_status: "active",
+    report_type: "decision",
+    primary_skill: "watchdog-orchestrator",
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "Accepted the successor route and materialized the next runnable object.",
+    blocked_items: [],
+    completed_items: ["Accepted successor route"],
+    running_items: [],
+    evidence: ["agent/ROUTE_CANONICAL.json"],
+    progress_changed: true,
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "execute_exact_successor",
+      description: "Use the exact queue draft path for the next bounded task.",
+      can_execute_automatically: true,
+      reason: "The successor contract now has exact task, profile, and queue draft objects."
+    },
+    skill_stop_condition: "Prepare exactly one successor contract and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "Runtime state updated for successor route.",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    successor_task_draft: {
+      task_id: "stage06_g1_followup",
+      status: "pending",
+      allowed_runner: "gpu",
+      title: "Enqueue the next bounded GPU follow-up task."
+    },
+    task_profile_draft: {
+      task_id: "stage06_g1_followup",
+      profile_kind: "gpu_eval",
+      entrypoint: "python scripts/run_stage06_g1.py"
+    },
+    queue_request_draft: {
+      task_id: "stage06_g1_followup",
+      queue_target: "gpu_queue",
+      command_profile: "stage06_g1_followup",
+      expected_outputs: ["runs/stage06_g1_followup/metrics.json"],
+      max_runtime_minutes: 45,
+      budget_contract: "one bounded queue job"
+    },
+    route_canonical_update: {
+      route_id: "route-new",
+      route_epoch: "route-002",
+      owner_mode: "fully_autonomous",
+      requires_review: false,
+      active_carrier: "g1"
+    }
+  });
+  const nextTaskDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "NEXT_TASK_DRAFT.json"), "utf8"));
+  assert.strictEqual(nextTaskDraft.task_id, "stage06_g1_followup");
+  const taskProfileDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "task_profiles", "stage06_g1_followup.json"), "utf8"));
+  assert.strictEqual(taskProfileDraft.profile_kind, "gpu_eval");
+  const queueDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "queue", "drafts", "stage06_g1_followup.json"), "utf8"));
+  assert.strictEqual(queueDraft.queue_target, "gpu_queue");
+  assert.strictEqual(queueDraft.status, "draft");
+  const routeCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
+  assert.strictEqual(routeCanonical.route_id, "route-new");
+  assert.strictEqual(routeCanonical.route_epoch, "route-002");
+  assert.strictEqual(routeCanonical.exact_next_task_id, "stage06_g1_followup");
+  assert.strictEqual(routeCanonical.exact_profile_path, "agent/task_profiles/stage06_g1_followup.json");
+  assert.strictEqual(routeCanonical.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
+  const taskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
+  assert.strictEqual(taskBox.route_id, "route-new");
+  assert.strictEqual(taskBox.route_epoch, "route-002");
+  assert.ok(taskBox.tasks.some((task) => task.task_id === "stage06_g1_followup"));
+  const nextActionText = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
+  assert.match(nextActionText, /Exact next task: stage06_g1_followup/);
+  assert.match(nextActionText, /Exact object path: agent\/queue\/drafts\/stage06_g1_followup\.json/);
+  const currentStateText = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
+  assert.match(currentStateText, /Route ID: route-new/);
+  assert.match(currentStateText, /Exact next object: agent\/queue\/drafts\/stage06_g1_followup\.json/);
+  const evidenceLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
+  const latestLedgerEntry = JSON.parse(evidenceLedgerLines[evidenceLedgerLines.length - 1]);
+  assert.ok(latestLedgerEntry.output_paths.includes("agent/status/NEXT_TASK_DRAFT.json"));
+  assert.ok(latestLedgerEntry.output_paths.includes("agent/task_profiles/stage06_g1_followup.json"));
+  assert.ok(latestLedgerEntry.output_paths.includes("agent/queue/drafts/stage06_g1_followup.json"));
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: null,
+    next_safe_action: { kind: "none", description: "", reason: "" }
+  });
+  writeJson(projectRoot, "agent/RUN_STATE.json", {
+    schema_version: 1,
+    blocker_type: "none",
+    requires_human_review: false,
+    next_action: { kind: "none", description: "", reason: "" }
+  });
+  writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
+    "# Review Pending",
+    "",
+    "- state: none",
+    "- pending_send: no",
+    "- requires_human_review: false",
+    "- scope: none",
+    "- resolver: none",
+    ""
+  ].join("\n"));
+  writeFile(projectRoot, "agent/BLOCKERS.md", [
+    "# Blockers",
+    "",
+    "Blocker type: none",
+    "- Required: false",
+    ""
+  ].join("\n"));
+
   writeJson(projectRoot, "agent/STATE.json", {
     schema_version: 1,
     mode: "project-local-worker",
@@ -769,7 +1016,9 @@ async function main() {
     ]
   });
   route = runRoute(projectRoot);
-  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, true);
+  assert.strictEqual(route.task_id, "bounded_gpu_after_supervisor_approval");
   assert.doesNotMatch(route.reason, /explicit supervisor approval/);
 
   writeJson(projectRoot, "agent/STATE.json", {
@@ -854,7 +1103,9 @@ async function main() {
     ]
   });
   route = runRoute(projectRoot);
-  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, true);
+  assert.strictEqual(route.task_id, "external_send_after_supervisor_approval");
   assert.doesNotMatch(route.reason, /explicit supervisor approval/);
 
   writeJson(projectRoot, "agent/STATE.json", {
@@ -877,7 +1128,9 @@ async function main() {
     ]
   });
   route = runRoute(projectRoot);
-  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "gpu_queue_enqueue_after_supervisor_approval");
   assert.doesNotMatch(route.reason, /explicit supervisor approval/);
 
   writeJson(projectRoot, "agent/supervisor_capabilities.json", {
@@ -916,7 +1169,9 @@ async function main() {
     ]
   });
   route = runRoute(projectRoot);
-  assert.strictEqual(route.primary_skill, "watchdog-handoff-writer");
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, true);
+  assert.strictEqual(route.task_id, "direct_gpu_execution_after_supervisor_approval");
   assert.doesNotMatch(route.reason, /explicit supervisor approval/);
   fs.unlinkSync(path.join(projectRoot, "agent", "supervisor_capabilities.json"));
 

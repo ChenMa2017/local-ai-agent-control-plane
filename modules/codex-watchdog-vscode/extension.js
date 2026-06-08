@@ -4838,7 +4838,8 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     allowed_commands: [],
     queue_policy: {
       gpu: "queue_only",
-      max_new_jobs_per_wakeup: 1
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
     },
     review_required_when: [
       "shared-source edit or promotion",
@@ -4870,7 +4871,10 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     ],
     owner_mode: "fully_autonomous",
     requires_review: false,
-    active_task_id: null
+    active_task_id: null,
+    exact_next_task_id: null,
+    exact_profile_path: null,
+    exact_queue_draft_path: null
   }, null, 2) + "\n",
 
   evidenceLedgerJsonl: () => "",
@@ -5756,6 +5760,9 @@ Your job:
 18. Track no_progress_cycles conservatively: increment only when there is no new evidence, no blocker change, and no completed action; reset to 0 when meaningful progress occurs.
 19. If no_progress_cycles is high or the same blocker repeats, set recommend_pause=true and explain the human decision needed.
 20. Mark only truly dangerous or shared-side-effect decisions as requires_human_review. Do not escalate purely local unblockers into human review.
+21. If this wakeup identifies an exact successor route, exact successor task, or exact next queue/profile object, emit it structurally instead of leaving the next step broad.
+22. Use successor_task_draft for the next runnable task, task_profile_draft for exact local profile/package content, queue_request_draft for exact queue draft content, and route_canonical_update when the canonical route itself changed.
+23. Separate queue draft from queue enqueue. A local queue draft may be prepared autonomously; queue enqueue should only be emitted as automatically executable when the queue contract is exact and TASK_BOX queue_policy sets allow_conditional_enqueue=true.
 
 Hard restrictions:
 
@@ -5804,7 +5811,11 @@ The final output must follow the JSON schema.
       "morning_brief_markdown",
       "ledger_update_markdown",
       "proposal_markdown",
-      "report_markdown"
+      "report_markdown",
+      "successor_task_draft",
+      "task_profile_draft",
+      "queue_request_draft",
+      "route_canonical_update"
     ],
     properties: {
       timestamp_utc: { type: "string" },
@@ -5877,7 +5888,11 @@ The final output must follow the JSON schema.
       morning_brief_markdown: { type: "string" },
       ledger_update_markdown: { type: "string" },
       proposal_markdown: { type: "string" },
-      report_markdown: { type: "string" }
+      report_markdown: { type: "string" },
+      successor_task_draft: { type: ["object", "null"], additionalProperties: true },
+      task_profile_draft: { type: ["object", "null"], additionalProperties: true },
+      queue_request_draft: { type: ["object", "null"], additionalProperties: true },
+      route_canonical_update: { type: ["object", "null"], additionalProperties: true }
     },
     additionalProperties: false
   }, null, 2) + "\n",
@@ -6028,7 +6043,10 @@ The final output must follow the JSON schema.
       promotion_gates: { type: "array", items: { type: "string" } },
       owner_mode: { type: "string" },
       requires_review: { type: "boolean" },
-      active_task_id: { type: ["string", "null"] }
+      active_task_id: { type: ["string", "null"] },
+      exact_next_task_id: { type: ["string", "null"] },
+      exact_profile_path: { type: ["string", "null"] },
+      exact_queue_draft_path: { type: ["string", "null"] }
     },
     additionalProperties: true
   }, null, 2) + "\n",
@@ -7942,6 +7960,10 @@ def load_route_canonical(root=ROOT):
     data = load_json(root / "agent" / "ROUTE_CANONICAL.json", {})
     return data if isinstance(data, dict) else {}
 
+def load_next_task_draft(root=ROOT):
+    data = load_json(root / "agent" / "status" / "NEXT_TASK_DRAFT.json", {})
+    return data if isinstance(data, dict) else {}
+
 def has_files(*dirs, freshness_minutes=None):
     cutoff = None
     if freshness_minutes is not None:
@@ -8055,13 +8077,32 @@ def task_box_pending_tasks(task_box):
         pending.append(task)
     return pending
 
-def preferred_pending_tasks(state, task_box):
+def next_task_draft_pending_task(next_task_draft, route_canonical):
+    if not isinstance(next_task_draft, dict):
+        return []
+    task_id = str(next_task_draft.get("task_id") or "").strip()
+    if not task_id:
+        return []
+    expected_task_id = str(route_canonical.get("exact_next_task_id") or "").strip() if isinstance(route_canonical, dict) else ""
+    if expected_task_id and task_id != expected_task_id:
+        return []
+    task = dict(next_task_draft)
+    if not task.get("status"):
+        task["status"] = "pending"
+    if task.get("status") != "pending":
+        return []
+    return [task]
+
+def preferred_pending_tasks(state, task_box, next_task_draft, route_canonical):
     state_tasks = pending_tasks(state)
     if state_tasks:
         return state_tasks, "STATE.json"
     task_box_tasks = task_box_pending_tasks(task_box)
     if task_box_tasks:
         return task_box_tasks, "TASK_BOX.json"
+    draft_tasks = next_task_draft_pending_task(next_task_draft, route_canonical)
+    if draft_tasks:
+        return draft_tasks, "NEXT_TASK_DRAFT.json"
     return [], ""
 
 def route_epoch_mismatch(route_canonical, state, progress, run_state):
@@ -8449,6 +8490,31 @@ def safe_autonomous_capability(capability):
         "bounded_cpu_eval",
     }
 
+def conditional_queue_enqueue_allowed(task, task_box, route_canonical):
+    if classify_task_capability(task) != "queue_enqueue":
+        return False, ""
+    policy = task_box.get("queue_policy") if isinstance(task_box, dict) else {}
+    if not isinstance(policy, dict) or policy.get("allow_conditional_enqueue") is not True:
+        return False, ""
+
+    queue_target = str(task.get("queue_target") or task.get("queue_name") or task.get("queue") or "").strip()
+    command_profile = str(task.get("command_profile") or task.get("task_profile") or task.get("profile_path") or "").strip()
+    budget_contract = str(task.get("budget_contract") or policy.get("budget_contract") or (route_canonical.get("current_budget_contract") if isinstance(route_canonical, dict) else "") or "").strip()
+    expected_outputs = task.get("expected_outputs") if isinstance(task.get("expected_outputs"), list) else task.get("outputs")
+    timeout_value = task.get("max_runtime_minutes") or task.get("timeout_minutes")
+
+    if not queue_target or not command_profile or not budget_contract or not expected_outputs or not timeout_value:
+        return False, ""
+    if not isinstance(expected_outputs, list) or not any(str(item or "").strip() for item in expected_outputs):
+        return False, ""
+
+    text = task_policy_text(task, task.get("supervisor_approval") if isinstance(task, dict) else None)
+    queue_only_policy = {"capabilities": {"queue_enqueue": True}}
+    rejection = supervisor_policy_rejection(queue_only_policy, "queue_enqueue", text)
+    if rejection:
+        return False, ""
+    return True, "Autonomous queue policy allows one controlled queue enqueue because exact queue target, profile, budget, timeout, and expected outputs are all defined."
+
 def local_unblock_reason(state, task_box, route_canonical, run_state=None, progress=None):
     review_text = read_text("agent/REVIEW_PENDING.md")
     blockers_text = read_text("agent/BLOCKERS.md")
@@ -8606,6 +8672,7 @@ def route():
     state = load_json(ROOT / "agent" / "STATE.json", {})
     task_box = load_task_box(ROOT)
     route_canonical = load_route_canonical(ROOT)
+    next_task_draft = load_next_task_draft(ROOT)
     progress = load_json(ROOT / "agent" / "PROGRESS_STATE.json", {})
     run_state = load_json(ROOT / "agent" / "RUN_STATE.json", {})
     paused = (ROOT / "agent" / "control" / "PAUSE").exists()
@@ -8692,7 +8759,7 @@ def route():
             "route_locked": True
         }
 
-    pending, pending_source = preferred_pending_tasks(state, task_box)
+    pending, pending_source = preferred_pending_tasks(state, task_box, next_task_draft, route_canonical)
     if pending:
         local_capability, local_reason = local_unblock_reason(state, task_box, route_canonical, run_state, progress)
         if local_capability:
@@ -8733,6 +8800,30 @@ def route():
         if autonomous_mode(state, task_box, route_canonical):
             for task in pending:
                 capability = classify_task_capability(task)
+                if capability == "queue_enqueue":
+                    queue_allowed, queue_reason = conditional_queue_enqueue_allowed(task, task_box, route_canonical)
+                    if queue_allowed:
+                        return {
+                            "primary_skill": "watchdog-orchestrator",
+                            "reason": f"{len(pending)} pending task(s) exist in {pending_source}; {queue_reason}",
+                            "stop_condition": "Perform exactly one controlled queue enqueue inside the declared queue boundary, refresh compact state, and stop.",
+                            "permission_guardian_required": False,
+                            "permission_guardian_result": "not_required",
+                            "route_locked": True,
+                            "task_id": task.get("task_id")
+                        }
+                    queue_text = task_policy_text(task, task.get("supervisor_approval") if isinstance(task, dict) else None)
+                    queue_only_policy = {"capabilities": {"queue_enqueue": True}}
+                    if not supervisor_policy_rejection(queue_only_policy, "queue_enqueue", queue_text):
+                        return {
+                            "primary_skill": "watchdog-orchestrator",
+                            "reason": f"{len(pending)} pending task(s) exist in {pending_source}; queue enqueue is not yet executable, so prepare the exact queue/profile draft locally and refresh NEXT_ACTION instead of stalling.",
+                            "stop_condition": "Author or repair exactly one local queue draft/profile package, do not enqueue yet, refresh compact state, and stop.",
+                            "permission_guardian_required": False,
+                            "permission_guardian_result": "not_required",
+                            "route_locked": True,
+                            "task_id": task.get("task_id")
+                        }
                 if safe_autonomous_capability(capability):
                     return {
                         "primary_skill": "watchdog-orchestrator",
@@ -8957,6 +9048,20 @@ def validate_route_canonical():
     if "owner_mode" in route and route.get("owner_mode") is not None and not isinstance(route.get("owner_mode"), str):
         errors.append("agent/ROUTE_CANONICAL.json owner_mode must be string or null")
 
+def validate_next_task_draft():
+    draft = load_json("agent/status/NEXT_TASK_DRAFT.json", required=False)
+    if draft is None:
+        return
+    if not isinstance(draft, dict):
+        errors.append("agent/status/NEXT_TASK_DRAFT.json must be an object")
+        return
+    if not isinstance(draft.get("task_id"), str) or not str(draft.get("task_id") or "").strip():
+        errors.append("agent/status/NEXT_TASK_DRAFT.json task_id must be a nonempty string")
+    if "status" in draft and draft.get("status") not in VALID_TASK_STATUS:
+        errors.append("agent/status/NEXT_TASK_DRAFT.json status is invalid")
+    if "allowed_runner" in draft and draft.get("allowed_runner") not in VALID_RUNNERS:
+        errors.append("agent/status/NEXT_TASK_DRAFT.json allowed_runner is invalid")
+
 def validate_schema_files():
     for rel in (
         "agent/schemas/watch_decision.schema.json",
@@ -9052,6 +9157,7 @@ validate_state()
 validate_progress()
 validate_task_box()
 validate_route_canonical()
+validate_next_task_draft()
 validate_schema_files()
 validate_jobs()
 validate_gates()
@@ -9128,7 +9234,171 @@ def int_env(name, fallback=0):
         return fallback
     return value if value >= 0 else fallback
 
+def clean_object(value):
+    return value if isinstance(value, dict) else {}
+
+def normalize_successor_task(value):
+    if not isinstance(value, dict):
+        return {}
+    task_id = str(value.get("task_id") or "").strip()
+    if not task_id:
+        return {}
+    task = dict(value)
+    task["task_id"] = task_id
+    if not task.get("status"):
+        task["status"] = "pending"
+    return task
+
+def merge_route_canonical(existing, update, updated_utc):
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    if isinstance(update, dict):
+        for key, value in update.items():
+            if value is None:
+                continue
+            merged[key] = value
+    if merged:
+        merged.setdefault("schema_version", 1)
+        merged["updated_utc"] = updated_utc
+    return merged
+
+def ensure_task_box(existing, route_canonical):
+    if isinstance(existing, dict) and existing:
+        box = dict(existing)
+    else:
+        box = {
+            "schema_version": 1,
+            "task_box_id": str((route_canonical or {}).get("route_id") or "runtime-task-box"),
+            "route_id": str((route_canonical or {}).get("route_id") or "runtime-route"),
+            "route_epoch": str((route_canonical or {}).get("route_epoch") or "runtime-000"),
+            "requires_review": bool((route_canonical or {}).get("requires_review", False)),
+            "allowed_actions": [],
+            "blocked_actions": [],
+            "allowed_write_paths": [
+                "agent/status/",
+                "agent/reports/",
+                "agent/pending/",
+                "agent/task_profiles/",
+                "workspace/",
+                "runs/"
+            ],
+            "queue_policy": {
+                "gpu": "queue_only",
+                "max_new_jobs_per_wakeup": 1,
+                "allow_conditional_enqueue": False
+            },
+            "tasks": []
+        }
+    if isinstance(route_canonical, dict) and route_canonical:
+        if route_canonical.get("route_id"):
+            box["route_id"] = route_canonical.get("route_id")
+        if route_canonical.get("route_epoch"):
+            box["route_epoch"] = route_canonical.get("route_epoch")
+        if isinstance(route_canonical.get("requires_review"), bool):
+            box["requires_review"] = route_canonical.get("requires_review")
+    box.setdefault("schema_version", 1)
+    if not isinstance(box.get("tasks"), list):
+        box["tasks"] = []
+    if not isinstance(box.get("queue_policy"), dict):
+        box["queue_policy"] = {}
+    box["queue_policy"].setdefault("allow_conditional_enqueue", False)
+    return box
+
+def upsert_task_box_task(task_box, task):
+    if not task:
+        return task_box
+    tasks = []
+    replaced = False
+    for existing in task_box.get("tasks", []):
+        if not isinstance(existing, dict):
+            continue
+        if str(existing.get("task_id") or "") == task["task_id"]:
+            merged = dict(existing)
+            merged.update(task)
+            tasks.append(merged)
+            replaced = True
+        else:
+            tasks.append(existing)
+    if not replaced:
+        tasks.append(task)
+    task_box["tasks"] = tasks
+    return task_box
+
+def write_task_profile_draft(draft, fallback_task_id):
+    if not isinstance(draft, dict):
+        return ""
+    task_id = str(draft.get("task_id") or fallback_task_id or "").strip()
+    if not task_id:
+        return ""
+    payload = dict(draft)
+    payload["task_id"] = task_id
+    target = Path("agent/task_profiles") / f"{safe_name(task_id)}.json"
+    atomic_write_json(target, payload)
+    return str(target)
+
+def write_queue_request_draft(draft, fallback_task_id):
+    if not isinstance(draft, dict):
+        return ""
+    task_id = str(draft.get("task_id") or fallback_task_id or "").strip()
+    if not task_id:
+        return ""
+    payload = dict(draft)
+    payload["task_id"] = task_id
+    payload.setdefault("status", "draft")
+    target = Path("agent/queue/drafts") / f"{safe_name(task_id)}.json"
+    atomic_write_json(target, payload)
+    return str(target)
+
 print(data["report_markdown"])
+
+updated = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+successor_task_draft = normalize_successor_task(data.get("successor_task_draft"))
+task_profile_draft = clean_object(data.get("task_profile_draft"))
+queue_request_draft = clean_object(data.get("queue_request_draft"))
+route_canonical_update = clean_object(data.get("route_canonical_update"))
+
+route_canonical_changed = False
+task_box_changed = False
+
+if route_canonical_update:
+    route_canonical = merge_route_canonical(route_canonical, route_canonical_update, updated)
+    route_canonical_changed = True
+    if task_box:
+        task_box = ensure_task_box(task_box, route_canonical)
+        task_box["updated_utc"] = updated
+        task_box_changed = True
+
+next_task_draft_path = ""
+if successor_task_draft:
+    next_task_draft_path = "agent/status/NEXT_TASK_DRAFT.json"
+    atomic_write_json(next_task_draft_path, successor_task_draft)
+    task_box = ensure_task_box(task_box, route_canonical)
+    task_box = upsert_task_box_task(task_box, successor_task_draft)
+    task_box["updated_utc"] = updated
+    task_box_changed = True
+    route_canonical = merge_route_canonical(route_canonical, {
+        "exact_next_task_id": successor_task_draft.get("task_id"),
+    }, updated)
+    route_canonical_changed = True
+
+task_profile_path = write_task_profile_draft(task_profile_draft, successor_task_draft.get("task_id") if successor_task_draft else "")
+if task_profile_path:
+    route_canonical = merge_route_canonical(route_canonical, {
+        "exact_profile_path": task_profile_path,
+    }, updated)
+    route_canonical_changed = True
+
+queue_request_draft_path = write_queue_request_draft(queue_request_draft, successor_task_draft.get("task_id") if successor_task_draft else "")
+if queue_request_draft_path:
+    route_canonical = merge_route_canonical(route_canonical, {
+        "exact_queue_draft_path": queue_request_draft_path,
+    }, updated)
+    route_canonical_changed = True
+
+if route_canonical_changed and route_canonical:
+    atomic_write_json(route_canonical_path, route_canonical)
+if task_box_changed and task_box:
+    atomic_write_json(task_box_path, task_box)
 
 state_update = data.get("state_update_markdown", "").strip()
 if state_update:
@@ -9142,8 +9412,11 @@ morning_brief = data.get("morning_brief_markdown", "").strip()
 if morning_brief:
     atomic_write_text("agent/MORNING_BRIEF.md", morning_brief + "\\n")
 
+next_action = data.get("next_safe_action") or {}
+exact_next_object_path = queue_request_draft_path or task_profile_path or next_task_draft_path
+
 progress_state = {
-    "updated_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    "updated_utc": updated,
     "last_model_timestamp_utc": data.get("timestamp_utc"),
     "progress_changed": bool(data.get("progress_changed")),
     "no_progress_cycles": int(data.get("no_progress_cycles") or 0),
@@ -9157,7 +9430,9 @@ progress_state = {
     "recommend_pause": bool(data.get("recommend_pause")),
     "requires_human_review": bool(data.get("requires_human_review")),
     "current_blocker": data.get("human_review_reason") or "; ".join(data.get("blocked_items") or [])[:1000],
-    "next_safe_action": data.get("next_safe_action", {})
+    "next_safe_action": next_action,
+    "exact_next_task_id": route_canonical.get("exact_next_task_id") or successor_task_draft.get("task_id"),
+    "exact_next_object_path": exact_next_object_path,
 }
 atomic_write_json("agent/PROGRESS_STATE.json", progress_state)
 
@@ -9186,9 +9461,6 @@ def blocker_type(blocked_items, requires_review, human_reason):
 
 def write_lines(path, lines):
     atomic_write_text(path, "\\n".join(lines).rstrip() + "\\n")
-
-updated = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-next_action = data.get("next_safe_action") or {}
 blocked_items = data.get("blocked_items") or []
 completed_items = data.get("completed_items") or []
 running_items = data.get("running_items") or []
@@ -9210,6 +9482,8 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Route ID: {route_canonical.get('route_id') or task_box.get('route_id') or 'unknown'}",
     f"Route epoch: {route_canonical.get('route_epoch') or task_box.get('route_epoch') or 'unknown'}",
     f"Task box: {task_box.get('task_box_id') or 'none'}",
+    f"Exact next task: {route_canonical.get('exact_next_task_id') or successor_task_draft.get('task_id') or 'none'}",
+    f"Exact next object: {exact_next_object_path or 'none'}",
     "",
     "## Current Facts",
     "",
@@ -9256,6 +9530,8 @@ atomic_write_json("agent/RUN_STATE.json", {
     "blocker_type": blocker,
     "requires_human_review": requires_review,
     "next_action": next_action,
+    "exact_next_task_id": route_canonical.get("exact_next_task_id") or successor_task_draft.get("task_id"),
+    "exact_next_object_path": exact_next_object_path,
     "evidence": evidence,
 })
 
@@ -9285,6 +9561,8 @@ write_lines("agent/NEXT_ACTION.md", [
     f"- Description: {next_action.get('description', '') or 'None.'}",
     f"- Automatic: {next_action.get('can_execute_automatically', False)}",
     f"- Reason: {next_action.get('reason', '') or 'No reason provided.'}",
+    f"- Exact next task: {route_canonical.get('exact_next_task_id') or successor_task_draft.get('task_id') or 'none'}",
+    f"- Exact object path: {exact_next_object_path or 'none'}",
     "",
     "## Stop Condition",
     "",
@@ -9371,7 +9649,17 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
     "task_box_id": task_box.get("task_box_id"),
     "input_paths": [],
-    "output_paths": ["agent/reports/latest.md", "agent/CURRENT_STATE.md", "agent/RUN_STATE.json"],
+    "output_paths": [
+        "agent/reports/latest.md",
+        "agent/CURRENT_STATE.md",
+        "agent/RUN_STATE.json",
+        "agent/PROGRESS_STATE.json",
+        "agent/NEXT_ACTION.md",
+        "agent/ROUTE_CANONICAL.json",
+        *( [next_task_draft_path] if next_task_draft_path else [] ),
+        *( [task_profile_path] if task_profile_path else [] ),
+        *( [queue_request_draft_path] if queue_request_draft_path else [] ),
+    ],
     "metrics": {},
     "caveats": data.get("blocked_items") or [],
     "next_safe_action": next_action.get("description", ""),
