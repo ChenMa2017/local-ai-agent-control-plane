@@ -200,6 +200,86 @@ def sanitize_discord_text(text: str) -> str:
     return value
 
 
+def split_discord_text(text: str, max_chars: int = 1900) -> list[str]:
+    value = sanitize_discord_text(text).strip() or "(empty message)"
+    if len(value) <= max_chars:
+        return [value]
+
+    def split_unit(unit: str, limit: int) -> list[str]:
+        piece = unit.strip()
+        if not piece:
+            return []
+        if len(piece) <= limit:
+            return [piece]
+
+        chunks: list[str] = []
+        current = ""
+        for line in piece.splitlines():
+            candidate = line if not current else f"{current}\n{line}"
+            if len(candidate) <= limit:
+                current = candidate
+                continue
+            if current:
+                chunks.append(current)
+                current = ""
+            if len(line) <= limit:
+                current = line
+                continue
+            words = line.split(" ")
+            word_current = ""
+            for word in words:
+                word_candidate = word if not word_current else f"{word_current} {word}"
+                if len(word_candidate) <= limit:
+                    word_current = word_candidate
+                    continue
+                if word_current:
+                    chunks.append(word_current)
+                    word_current = ""
+                if len(word) <= limit:
+                    word_current = word
+                    continue
+                start = 0
+                while start < len(word):
+                    chunks.append(word[start:start + limit])
+                    start += limit
+            if word_current:
+                current = word_current
+        if current:
+            chunks.append(current)
+        return chunks
+
+    paragraphs = value.split("\n\n")
+    chunks: list[str] = []
+    current = ""
+    for paragraph in paragraphs:
+        parts = split_unit(paragraph, max_chars)
+        if not parts:
+            continue
+        for part in parts:
+            candidate = part if not current else f"{current}\n\n{part}"
+            if len(candidate) <= max_chars:
+                current = candidate
+            else:
+                if current:
+                    chunks.append(current)
+                current = part
+    if current:
+        chunks.append(current)
+
+    if len(chunks) <= 1:
+        return chunks or [value[:max_chars]]
+
+    labeled: list[str] = []
+    total = len(chunks)
+    for index, chunk in enumerate(chunks, start=1):
+        label = f"[{index}/{total}] "
+        if len(label) + len(chunk) <= max_chars:
+            labeled.append(f"{label}{chunk}")
+        else:
+            labeled.append(f"{label}{chunk[: max_chars - len(label)]}".rstrip())
+    return labeled
+
+
 def json_safe_redactions(text: str) -> str:
     import re
 
@@ -448,11 +528,9 @@ def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any
             "",
             status_text.strip() or "(no status text)",
         ])
-    summary, truncated = truncate_text(result_text.strip() or "(empty result)", max_chars)
-    summary = sanitize_discord_text(summary)
-    suffix = "\n\nResult truncated. Open Web UI for full result." if truncated else ""
+    summary = sanitize_discord_text(result_text.strip() or "(empty result)")
     title = "Task done." if status == "done" else "Task finished with policy violation."
-    return f"{title}\n\nResult:\n{summary}{suffix}"
+    return f"{title}\n\nResult:\n{summary}"
 
 
 def format_task_page_response(data: dict[str, Any], max_chars: int) -> str:
@@ -476,10 +554,9 @@ def format_completion_message(task_id: str, status_data: dict[str, Any], result_
     status = parse_status_text(status_text)
     if status in {"done", "policy_violation"} and result_data is not None:
         result_text = str(result_data.get("text", "") or "")
-        summary, truncated = truncate_text(result_text.strip() or "(empty result)", max_chars)
-        suffix = "\n\nResult truncated. Open local Web UI for the full safe result." if truncated else ""
         title = "任务完成。" if status == "done" else "任务触碰了 protected path policy，已结束。"
-        return f"**🤖 AI 回答**\n\n{title}\n\nTask: {task_id}\n\nResult:\n{sanitize_discord_text(summary)}{suffix}"
+        summary = sanitize_discord_text(result_text.strip() or "(empty result)")
+        return f"**🤖 AI 回答**\n\n{title}\n\nTask: {task_id}\n\nResult:\n{summary}"
     short_status, _truncated = truncate_text(status_text.strip() or status, min(max_chars, 1000))
     return f"**🤖 AI 回答**\n\n任务已结束：{status}\n\nTask: {task_id}\n\n{sanitize_discord_text(short_status)}"
 
@@ -653,7 +730,7 @@ async def process_completion_notifications(
         if status not in FINAL_TASK_STATUSES:
             continue
         repaired = previous_status in FINAL_TASK_STATUSES
-        result_data = agent.result(task_id, max_chars=max_result_chars) if status in {"done", "policy_violation"} else None
+        result_data = agent.result(task_id, max_chars=None) if status in {"done", "policy_violation"} else None
         message = format_completion_message(task_id, status_data, result_data, max_result_chars)
         await notifier.send(record, message)
         store.mark_notified(task_id, status, repaired=repaired)
@@ -823,9 +900,28 @@ def run_bot(config: AdapterConfig) -> None:
         async def reply_error(self, interaction: Any, error: Exception) -> None:
             text = format_error(error)
             if interaction.response.is_done():
-                await interaction.followup.send(text, ephemeral=True)
+                await self.send_followup_text(interaction, text, ephemeral=True)
             else:
-                await interaction.response.send_message(text, ephemeral=True)
+                await self.send_response_text(interaction, text, ephemeral=True)
+
+        async def send_response_text(self, interaction: Any, text: str, *, ephemeral: bool) -> None:
+            chunks = split_discord_text(text, 1900)
+            if not chunks:
+                return
+            await interaction.response.send_message(chunks[0], ephemeral=ephemeral)
+            for chunk in chunks[1:]:
+                await interaction.followup.send(chunk, ephemeral=ephemeral)
+
+        async def send_followup_text(self, interaction: Any, text: str, *, ephemeral: bool) -> None:
+            chunks = split_discord_text(text, 1900)
+            for chunk in chunks:
+                await interaction.followup.send(chunk, ephemeral=ephemeral)
+
+        async def send_target_text(self, target: Any, text: str) -> list[Any]:
+            sent_messages: list[Any] = []
+            for chunk in split_discord_text(text, 1900):
+                sent_messages.append(await target.send(chunk))
+            return sent_messages
 
         async def completion_watcher(self) -> None:
             await self.wait_until_ready()
@@ -850,15 +946,15 @@ def run_bot(config: AdapterConfig) -> None:
             target = self.get_channel(int(thread_id))
             if target is None:
                 target = await self.fetch_channel(int(thread_id))
-            text, _truncated = truncate_text(sanitize_discord_text(message), 1900)
-            sent = await target.send(text)
-            self.thread_store.remember_message(
-                message_id=str(getattr(sent, "id", "") or ""),
-                task_id=str(record.get("task_id") or ""),
-                thread_id=thread_id,
-                workspace=str(record.get("workspace") or ""),
-                kind="completion",
-            )
+            sent_messages = await self.send_target_text(target, message)
+            for sent in sent_messages:
+                self.thread_store.remember_message(
+                    message_id=str(getattr(sent, "id", "") or ""),
+                    task_id=str(record.get("task_id") or ""),
+                    thread_id=thread_id,
+                    workspace=str(record.get("workspace") or ""),
+                    kind="completion",
+                )
 
         async def attach_task_to_thread(
             self,
@@ -874,7 +970,10 @@ def run_bot(config: AdapterConfig) -> None:
             status: str,
             reference_task_id: str = "",
         ) -> None:
-            intro = await thread.send(format_thread_intro(task_id, workspace, mode, prompt, reference_task_id))
+            intro_messages = await self.send_target_text(
+                thread,
+                format_thread_intro(task_id, workspace, mode, prompt, reference_task_id),
+            )
             self.thread_store.upsert_thread(
                 task_id=task_id,
                 guild_id=guild_id,
@@ -885,13 +984,14 @@ def run_bot(config: AdapterConfig) -> None:
                 status=status,
                 reference_task_id=reference_task_id,
             )
-            self.thread_store.remember_message(
-                message_id=str(getattr(intro, "id", "") or ""),
-                task_id=task_id,
-                thread_id=str(thread.id),
-                workspace=workspace,
-                kind="thread_intro",
-            )
+            for intro in intro_messages:
+                self.thread_store.remember_message(
+                    message_id=str(getattr(intro, "id", "") or ""),
+                    task_id=task_id,
+                    thread_id=str(thread.id),
+                    workspace=workspace,
+                    kind="thread_intro",
+                )
 
         async def create_task_thread(
             self,
@@ -1017,7 +1117,7 @@ def run_bot(config: AdapterConfig) -> None:
             except Exception as error:
                 text = sanitize_discord_text(format_error(error))
                 if text:
-                    await message.channel.send(f"无法创建 follow-up task：{text}")
+                    await self.send_target_text(message.channel, f"无法创建 follow-up task：{text}")
 
         def register_commands(self) -> None:
             @self.tree.command(name=slash_command_name(config.command_prefix, "status"), description="Check the local Agent Host status")
@@ -1029,7 +1129,11 @@ def run_bot(config: AdapterConfig) -> None:
                     capabilities = self.agent.capabilities()
                     tasks = self.agent.tasks(limit=5)
                     workspaces = self.agent.workspaces()
-                    await interaction.followup.send(format_status(capabilities, tasks, workspaces, config.command_prefix), ephemeral=True)
+                    await self.send_followup_text(
+                        interaction,
+                        format_status(capabilities, tasks, workspaces, config.command_prefix),
+                        ephemeral=True,
+                    )
                 except Exception as error:
                     await self.reply_error(interaction, error)
 
@@ -1038,7 +1142,8 @@ def run_bot(config: AdapterConfig) -> None:
                 try:
                     self.require_user(interaction)
                     await interaction.response.defer(ephemeral=True, thinking=True)
-                    await interaction.followup.send(
+                    await self.send_followup_text(
+                        interaction,
                         format_health_summary(self.agent.health_summary(), config.command_prefix),
                         ephemeral=True,
                     )
@@ -1050,7 +1155,7 @@ def run_bot(config: AdapterConfig) -> None:
                 try:
                     self.require_user(interaction)
                     await interaction.response.defer(ephemeral=True, thinking=True)
-                    await interaction.followup.send(format_workspaces(self.agent.workspaces()), ephemeral=True)
+                    await self.send_followup_text(interaction, format_workspaces(self.agent.workspaces()), ephemeral=True)
                 except Exception as error:
                     await self.reply_error(interaction, error)
 
@@ -1095,7 +1200,8 @@ def run_bot(config: AdapterConfig) -> None:
                         reference_task_id=selected_reference_task_id or None,
                         command_name=f"/{slash_command_name(config.command_prefix, 'prepare')}",
                     )
-                    await interaction.followup.send(
+                    await self.send_followup_text(
+                        interaction,
                         format_prepare_response(data, selected_workspace, config.command_prefix),
                         ephemeral=True,
                     )
@@ -1144,7 +1250,8 @@ def run_bot(config: AdapterConfig) -> None:
                                 thread_ref = getattr(thread, "mention", "") or f"thread {thread.id}"
                         except Exception as error:
                             print(f"task thread creation failed: {safe_check_error(error)}", file=sys.stderr, flush=True)
-                    await interaction.followup.send(
+                    await self.send_followup_text(
+                        interaction,
                         format_run_response(data, selected_workspace, thread_ref, selected_reference_task_id, config.command_prefix),
                         ephemeral=True,
                     )
@@ -1157,8 +1264,9 @@ def run_bot(config: AdapterConfig) -> None:
                     self.require_user(interaction)
                     await interaction.response.defer(ephemeral=True, thinking=True)
                     status_data = self.agent.status(task_id)
-                    result_data = self.agent.result(task_id, max_chars=config.max_result_chars)
-                    await interaction.followup.send(
+                    result_data = self.agent.result(task_id, max_chars=None)
+                    await self.send_followup_text(
+                        interaction,
                         format_task_response(status_data, result_data, config.max_result_chars),
                         ephemeral=True,
                     )
@@ -1171,7 +1279,8 @@ def run_bot(config: AdapterConfig) -> None:
                     self.require_user(interaction)
                     await interaction.response.defer(ephemeral=True, thinking=True)
                     data = self.agent.result_page(task_id, page=page, page_size=config.max_result_chars)
-                    await interaction.followup.send(
+                    await self.send_followup_text(
+                        interaction,
                         format_task_page_response(data, config.max_result_chars),
                         ephemeral=True,
                     )
@@ -1184,7 +1293,7 @@ def run_bot(config: AdapterConfig) -> None:
                     self.require_user(interaction)
                     await interaction.response.defer(ephemeral=True, thinking=True)
                     data = self.agent.cancel(task_id)
-                    await interaction.followup.send(data.get("text") or "Task cancelled.", ephemeral=True)
+                    await self.send_followup_text(interaction, data.get("text") or "Task cancelled.", ephemeral=True)
                 except Exception as error:
                     await self.reply_error(interaction, error)
 

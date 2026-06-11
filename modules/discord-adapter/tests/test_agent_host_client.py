@@ -257,6 +257,25 @@ class BotHelperTests(unittest.TestCase):
         self.assertTrue(truncated)
         self.assertLessEqual(len(text), len("\n\n[truncated]") + 1)
 
+    def test_split_discord_text_chunks_long_messages(self):
+        text = "段落一 " + ("alpha " * 120) + "\n\n" + "段落二 " + ("beta " * 120)
+        chunks = bot.split_discord_text(text, 200)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(chunks[0].startswith("[1/"))
+        for chunk in chunks:
+            self.assertLessEqual(len(chunk), 200)
+
+    def test_split_discord_text_redacts_before_chunking(self):
+        text = "/home/example/project Authorization: Bearer demo-token " + ("x" * 300)
+        chunks = bot.split_discord_text(text, 120)
+
+        self.assertGreater(len(chunks), 1)
+        combined = "\n".join(chunks)
+        self.assertNotIn("/home/example", combined)
+        self.assertNotIn("demo-token", combined)
+        self.assertIn("Authorization: Bearer [REDACTED]", combined)
+
     def test_format_task_response_uses_safe_result_summary(self):
         response = bot.format_task_response(
             {"text": "task_id: task_123\nstatus: done\n"},
@@ -264,7 +283,8 @@ class BotHelperTests(unittest.TestCase):
             40,
         )
         self.assertIn("Task done.", response)
-        self.assertIn("Result truncated", response)
+        self.assertIn("safe result safe result", response)
+        self.assertNotIn("Result truncated", response)
         self.assertNotIn("/home/chenma", response)
 
     def test_policy_violation_task_response_uses_safe_result_summary(self):
@@ -427,10 +447,14 @@ class BotHelperTests(unittest.TestCase):
 
     def test_completion_watcher_notifies_done_once(self):
         class FakeAgent:
+            def __init__(self):
+                self.result_max_chars = []
+
             def status(self, task_id):
                 return {"ok": True, "text": f"task_id: {task_id}\nstatus: done\n"}
 
             def result(self, task_id, max_chars=None):
+                self.result_max_chars.append(max_chars)
                 return {"ok": True, "text": "safe result", "raw": False}
 
         class FakeNotifier:
@@ -452,16 +476,17 @@ class BotHelperTests(unittest.TestCase):
                 status="running",
             )
             notifier = FakeNotifier()
+            agent = FakeAgent()
 
             sent = asyncio.run(bot.process_completion_notifications(
                 store=store,
-                agent=FakeAgent(),
+                agent=agent,
                 notifier=notifier,
                 max_result_chars=100,
             ))
             sent_again = asyncio.run(bot.process_completion_notifications(
                 store=store,
-                agent=FakeAgent(),
+                agent=agent,
                 notifier=notifier,
                 max_result_chars=100,
             ))
@@ -470,6 +495,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertEqual(sent_again, 0)
         self.assertEqual(len(notifier.messages), 1)
         self.assertIn("任务完成", notifier.messages[0][1])
+        self.assertEqual(agent.result_max_chars, [None])
 
     def test_completion_watcher_marks_stale_terminal_thread_repaired(self):
         class FakeAgent:
@@ -519,6 +545,17 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("/home/example", response)
         self.assertNotIn("Bearer demo", response)
         self.assertIn("Authorization: Bearer [REDACTED]", response)
+
+    def test_completion_message_keeps_full_safe_result_for_chunking(self):
+        response = bot.format_completion_message(
+            "task_123",
+            {"text": "task_id: task_123\nstatus: done\n"},
+            {"text": "safe result " * 20},
+            40,
+        )
+
+        self.assertIn("safe result safe result", response)
+        self.assertNotIn("Result truncated", response)
 
     def test_completion_message_uses_result_for_policy_violation(self):
         response = bot.format_completion_message(
