@@ -177,6 +177,7 @@ async function main() {
   assert.ok(watchSchema.required.includes("task_profile_draft"));
   assert.ok(watchSchema.required.includes("queue_request_draft"));
   assert.ok(watchSchema.required.includes("route_canonical_update"));
+  assert.ok(watchSchema.required.includes("task_box_update"));
 
   const bootstrapSchema = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "schemas", "bootstrap_instantiation.schema.json"), "utf8"));
   assert.deepStrictEqual(
@@ -198,6 +199,19 @@ async function main() {
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "TASK_BOX.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl")));
+  const initialTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
+  assert.ok(initialTaskBox.project_question);
+  assert.ok(initialTaskBox.decision_relevance);
+  assert.ok(initialTaskBox.claim_scope);
+  assert.ok(Array.isArray(initialTaskBox.forbidden_conclusions));
+  assert.strictEqual(initialTaskBox.gate_policy.topic_alignment_check, true);
+  assert.strictEqual(initialTaskBox.gate_policy.claim_scope_gate, true);
+  assert.strictEqual(initialTaskBox.gate_policy.fair_comparability_gate, true);
+  assert.strictEqual(initialTaskBox.gate_policy.value_of_information_gate, true);
+  assert.strictEqual(initialTaskBox.gate_policy.successor_contract_gate, true);
+  const initialRouteCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
+  assert.strictEqual(initialRouteCanonical.successor_contract_required, false);
+  assert.strictEqual(initialRouteCanonical.exact_next_object_path, null);
 
   await api.writeBootstrapConversation(projectRoot, {
     updated_at: "2026-06-04T12:00:00Z",
@@ -636,6 +650,110 @@ async function main() {
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
+    task_box_id: "research-gate-box",
+    route_id: "route-research-gate",
+    route_epoch: "route-research-gate-001",
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: [
+      {
+        task_id: "bounded_cpu_missing_research_contract",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Run one bounded CPU probe for the new route."
+      }
+    ]
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-research-gate",
+    route_epoch: "route-research-gate-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-research-gate-001"
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "bounded_cpu_missing_research_contract");
+  assert.match(route.reason, /missing research-contract fields/i);
+  assert.match(route.stop_condition, /structured task contract/i);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "research-gate-box",
+    route_id: "route-research-gate",
+    route_epoch: "route-research-gate-001",
+    project_question: "Does the current CPU probe reduce uncertainty about the next route decision?",
+    decision_relevance: "A positive result decides whether the route can proceed to the next bounded follow-up.",
+    claim_scope: "bounded_cpu_diagnostic",
+    forbidden_conclusions: ["Do not treat this CPU probe as a project-level superiority claim."],
+    diagnosis_target: "carrier behavior",
+    fair_comparability: {
+      same_family_or_not: "same_family",
+      same_budget_or_not: "same_budget",
+      same_training_contract_or_not: "same_training_contract",
+      same_eval_contract_or_not: "same_eval_contract"
+    },
+    value_of_information: {
+      expected_information_gain: "medium",
+      decision_change_if_positive: "Proceed to the next bounded follow-up.",
+      decision_change_if_negative: "Pause this branch and re-evaluate the route.",
+      cheaper_alternative_exists: false
+    },
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: [
+      {
+        task_id: "bounded_cpu_missing_research_contract",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Run one bounded CPU probe for the new route."
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "bounded_cpu_missing_research_contract");
+  assert.match(route.reason, /autonomous mode allows one bounded bounded_cpu_eval step/i);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
     task_box_id: "queue-enqueue-box",
     route_id: "route-queue-enqueue",
     route_epoch: "route-queue-enqueue-001",
@@ -916,6 +1034,129 @@ async function main() {
   assert.ok(latestLedgerEntry.output_paths.includes("agent/status/NEXT_TASK_DRAFT.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/task_profiles/stage06_g1_followup.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/queue/drafts/stage06_g1_followup.json"));
+  assert.strictEqual(latestLedgerEntry.claim_scope, null);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "fallback-successor-box",
+    route_id: "route-fallback",
+    route_epoch: "route-fallback-001",
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: []
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-fallback",
+    route_epoch: "route-fallback-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
+  writeJson(projectRoot, "agent/status/SKILL_ROUTE.json", {
+    primary_skill: "watchdog-orchestrator",
+    reason: "Test successor fallback synthesis.",
+    stop_condition: "Prepare one fallback successor contract and stop.",
+    permission_guardian_required: false,
+    permission_guardian_result: "not_required",
+    route_locked: true,
+    task_id: "route_fallback_cpu_followup"
+  });
+  runRender(projectRoot, {
+    timestamp_utc: "2026-06-11T12:00:00Z",
+    report_markdown: "# Report\n\nThe route changed and now needs one exact successor object.",
+    overall_status: "active",
+    report_type: "progress",
+    primary_skill: "watchdog-orchestrator",
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "A route-level decision was made and the fallback successor contract should now exist.",
+    blocked_items: [],
+    completed_items: ["Accepted a route-level successor decision"],
+    running_items: [],
+    evidence: ["agent/ROUTE_CANONICAL.json"],
+    progress_changed: true,
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "safe_script_candidate",
+      description: "Run one bounded CPU follow-up probe for the new route.",
+      can_execute_automatically: true,
+      reason: "The route now needs an exact bounded follow-up task."
+    },
+    skill_stop_condition: "Create the successor contract and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "Runtime state updated for fallback successor synthesis.",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {
+      route_id: "route-fallback",
+      route_epoch: "route-fallback-002",
+      owner_mode: "fully_autonomous",
+      requires_review: false,
+      current_allowed_step: "cpu_followup",
+      exact_next_task_id: "route_fallback_cpu_followup",
+      successor_contract_required: true
+    },
+    task_box_update: {
+      project_question: "Does the CPU follow-up reduce uncertainty about whether this route should continue?",
+      decision_relevance: "A positive result keeps the route alive; a negative one demotes it.",
+      claim_scope: "bounded_cpu_diagnostic",
+      forbidden_conclusions: ["Do not treat this follow-up as a project-level win."],
+      diagnosis_target: "successor route viability",
+      fair_comparability: {
+        same_family_or_not: "same_family",
+        same_budget_or_not: "same_budget",
+        same_training_contract_or_not: "same_training_contract",
+        same_eval_contract_or_not: "same_eval_contract"
+      },
+      value_of_information: {
+        expected_information_gain: "medium",
+        decision_change_if_positive: "Keep the route alive for one more bounded cycle.",
+        decision_change_if_negative: "Demote this route and draft a replacement.",
+        cheaper_alternative_exists: false
+      }
+    }
+  });
+  const fallbackDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "NEXT_TASK_DRAFT.json"), "utf8"));
+  assert.strictEqual(fallbackDraft.task_id, "route_fallback_cpu_followup");
+  assert.strictEqual(fallbackDraft.allowed_runner, "cpu");
+  assert.strictEqual(fallbackDraft.successor_contract_inferred, true);
+  const fallbackRouteCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
+  assert.strictEqual(fallbackRouteCanonical.route_epoch, "route-fallback-002");
+  assert.strictEqual(fallbackRouteCanonical.successor_contract_required, false);
+  assert.strictEqual(fallbackRouteCanonical.exact_next_object_path, "agent/status/NEXT_TASK_DRAFT.json");
+  const fallbackTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
+  assert.strictEqual(fallbackTaskBox.project_question, "Does the CPU follow-up reduce uncertainty about whether this route should continue?");
+  assert.ok(fallbackTaskBox.tasks.some((task) => task.task_id === "route_fallback_cpu_followup"));
+  const fallbackCurrentState = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
+  assert.match(fallbackCurrentState, /Project question: Does the CPU follow-up reduce uncertainty/i);
+  assert.match(fallbackCurrentState, /Exact next object: agent\/status\/NEXT_TASK_DRAFT\.json/);
+  const fallbackNextAction = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
+  assert.match(fallbackNextAction, /Decision relevance: A positive result keeps the route alive/i);
+  assert.match(fallbackNextAction, /Claim scope: bounded_cpu_diagnostic/);
   writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
     no_progress_cycles: 0,
     recommend_pause: false,

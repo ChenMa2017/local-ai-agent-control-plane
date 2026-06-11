@@ -4800,6 +4800,37 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     route_id: "bootstrap-route",
     route_epoch: "bootstrap-000",
     active_target: "Define the first concrete watchdog mission before unattended runs.",
+    project_question: "What bounded watchdog setup or research question is this task box directly helping answer?",
+    decision_relevance: "This task box should reduce one concrete uncertainty that changes the next route decision.",
+    uncertainty_reduced_if_success: "A successful bounded cycle should make the next route decision narrower and more concrete.",
+    uncertainty_reduced_if_failure: "A failed bounded cycle should still clarify whether the current route should continue, pause, or switch.",
+    claim_scope: "bootstrap_setup",
+    forbidden_conclusions: [
+      "Do not treat setup-only work as a project-level research conclusion.",
+      "Do not promote local draft preparation into a shared-source or final quality claim."
+    ],
+    diagnosis_target: "watchdog bootstrap readiness",
+    fair_comparability: {
+      same_family_or_not: "not_applicable",
+      same_budget_or_not: "not_applicable",
+      same_training_contract_or_not: "not_applicable",
+      same_eval_contract_or_not: "not_applicable"
+    },
+    value_of_information: {
+      expected_information_gain: "high",
+      decision_change_if_positive: "The watchdog project can move from setup into one bounded autonomous cycle.",
+      decision_change_if_negative: "The watchdog project should remain in draft/setup mode until the missing contract is repaired.",
+      cheaper_alternative_exists: false
+    },
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      successor_contract_gate: true,
+      causal_path_verification: "advisory",
+      enforcement: "repair_locally"
+    },
     requires_review: false,
     allowed_actions: [
       "report_only",
@@ -4870,11 +4901,13 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
       "human review for external send"
     ],
     owner_mode: "fully_autonomous",
+    successor_contract_required: false,
     requires_review: false,
     active_task_id: null,
     exact_next_task_id: null,
     exact_profile_path: null,
-    exact_queue_draft_path: null
+    exact_queue_draft_path: null,
+    exact_next_object_path: null
   }, null, 2) + "\n",
 
   evidenceLedgerJsonl: () => "",
@@ -5763,6 +5796,9 @@ Your job:
 21. If this wakeup identifies an exact successor route, exact successor task, or exact next queue/profile object, emit it structurally instead of leaving the next step broad.
 22. Use successor_task_draft for the next runnable task, task_profile_draft for exact local profile/package content, queue_request_draft for exact queue draft content, and route_canonical_update when the canonical route itself changed.
 23. Separate queue draft from queue enqueue. A local queue draft may be prepared autonomously; queue enqueue should only be emitted as automatically executable when the queue contract is exact and TASK_BOX queue_policy sets allow_conditional_enqueue=true.
+24. If the current TASK_BOX contract is missing topic alignment, claim scope, fair comparability, or value-of-information details, repair it structurally through task_box_update instead of only mentioning the gap in prose.
+25. For bounded research or queue tasks, prefer adding or refining project_question, decision_relevance, claim_scope, forbidden_conclusions, diagnosis_target, fair_comparability, and value_of_information before asking humans for help.
+26. If a decision-bearing result changes the route but no explicit successor task was written yet, set route_canonical_update.successor_contract_required=true and either emit successor_task_draft yourself or emit task_box_update that makes the next exact object unambiguous.
 
 Hard restrictions:
 
@@ -5815,7 +5851,8 @@ The final output must follow the JSON schema.
       "successor_task_draft",
       "task_profile_draft",
       "queue_request_draft",
-      "route_canonical_update"
+      "route_canonical_update",
+      "task_box_update"
     ],
     properties: {
       timestamp_utc: { type: "string" },
@@ -5892,7 +5929,8 @@ The final output must follow the JSON schema.
       successor_task_draft: { type: ["object", "null"], additionalProperties: true },
       task_profile_draft: { type: ["object", "null"], additionalProperties: true },
       queue_request_draft: { type: ["object", "null"], additionalProperties: true },
-      route_canonical_update: { type: ["object", "null"], additionalProperties: true }
+      route_canonical_update: { type: ["object", "null"], additionalProperties: true },
+      task_box_update: { type: ["object", "null"], additionalProperties: true }
     },
     additionalProperties: false
   }, null, 2) + "\n",
@@ -6005,6 +6043,16 @@ The final output must follow the JSON schema.
       route_id: { type: "string" },
       route_epoch: { type: "string" },
       active_target: { type: "string" },
+      project_question: { type: "string" },
+      decision_relevance: { type: "string" },
+      uncertainty_reduced_if_success: { type: "string" },
+      uncertainty_reduced_if_failure: { type: "string" },
+      claim_scope: { type: "string" },
+      forbidden_conclusions: { type: "array", items: { type: "string" } },
+      diagnosis_target: { type: "string" },
+      fair_comparability: { type: "object" },
+      value_of_information: { type: "object" },
+      gate_policy: { type: "object" },
       requires_review: { type: "boolean" },
       allowed_actions: { type: "array", items: { type: "string" } },
       blocked_actions: { type: "array", items: { type: "string" } },
@@ -6042,11 +6090,13 @@ The final output must follow the JSON schema.
       main_provider_contract: { type: "string" },
       promotion_gates: { type: "array", items: { type: "string" } },
       owner_mode: { type: "string" },
+      successor_contract_required: { type: "boolean" },
       requires_review: { type: "boolean" },
       active_task_id: { type: ["string", "null"] },
       exact_next_task_id: { type: ["string", "null"] },
       exact_profile_path: { type: ["string", "null"] },
-      exact_queue_draft_path: { type: ["string", "null"] }
+      exact_queue_draft_path: { type: ["string", "null"] },
+      exact_next_object_path: { type: ["string", "null"] }
     },
     additionalProperties: true
   }, null, 2) + "\n",
@@ -8490,11 +8540,127 @@ def safe_autonomous_capability(capability):
         "bounded_cpu_eval",
     }
 
+def research_gate_policy(task_box):
+    policy = task_box.get("gate_policy") if isinstance(task_box, dict) else {}
+    if not isinstance(policy, dict):
+        policy = {}
+    return {
+        "topic_alignment_check": policy.get("topic_alignment_check") is True,
+        "claim_scope_gate": policy.get("claim_scope_gate") is True,
+        "fair_comparability_gate": policy.get("fair_comparability_gate") is True,
+        "value_of_information_gate": policy.get("value_of_information_gate") is True,
+        "successor_contract_gate": policy.get("successor_contract_gate") is True,
+        "causal_path_verification": str(policy.get("causal_path_verification") or "disabled"),
+        "enforcement": str(policy.get("enforcement") or "disabled"),
+    }
+
+def task_contract_value(task, task_box, key):
+    if isinstance(task, dict):
+        value = task.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    if isinstance(task_box, dict):
+        value = task_box.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+def task_contract_list(task, task_box, key):
+    if isinstance(task, dict):
+        value = task.get(key)
+        if isinstance(value, list) and value:
+            return value
+    if isinstance(task_box, dict):
+        value = task_box.get(key)
+        if isinstance(value, list) and value:
+            return value
+    return []
+
+def task_contract_object(task, task_box, key):
+    if isinstance(task, dict):
+        value = task.get(key)
+        if isinstance(value, dict) and value:
+            return value
+    if isinstance(task_box, dict):
+        value = task_box.get(key)
+        if isinstance(value, dict) and value:
+            return value
+    return {}
+
+def research_gate_applicable(capability):
+    return capability in {
+        "bounded_cpu_eval",
+        "bounded_gpu_probe",
+        "queue_enqueue",
+        "local_workspace_copy",
+        "bounded_training_canary",
+    }
+
+def task_research_gate_gaps(task, task_box, route_canonical=None):
+    capability = classify_task_capability(task)
+    policy = research_gate_policy(task_box)
+    if policy.get("enforcement") == "disabled" or not research_gate_applicable(capability):
+        return []
+
+    gaps = []
+    if policy.get("topic_alignment_check"):
+        if not task_contract_value(task, task_box, "project_question"):
+            gaps.append("project_question")
+        if not task_contract_value(task, task_box, "decision_relevance"):
+            gaps.append("decision_relevance")
+
+    if policy.get("claim_scope_gate"):
+        if not task_contract_value(task, task_box, "claim_scope"):
+            gaps.append("claim_scope")
+        if not task_contract_value(task, task_box, "diagnosis_target"):
+            gaps.append("diagnosis_target")
+        if not task_contract_list(task, task_box, "forbidden_conclusions"):
+            gaps.append("forbidden_conclusions")
+
+    if policy.get("fair_comparability_gate"):
+        fair = task_contract_object(task, task_box, "fair_comparability")
+        for key in (
+            "same_family_or_not",
+            "same_budget_or_not",
+            "same_training_contract_or_not",
+            "same_eval_contract_or_not",
+        ):
+            if not isinstance(fair.get(key), str) or not str(fair.get(key) or "").strip():
+                gaps.append(key)
+
+    if policy.get("value_of_information_gate"):
+        voi = task_contract_object(task, task_box, "value_of_information")
+        for key in (
+            "expected_information_gain",
+            "decision_change_if_positive",
+            "decision_change_if_negative",
+        ):
+            if not isinstance(voi.get(key), str) or not str(voi.get(key) or "").strip():
+                gaps.append(key)
+        if "cheaper_alternative_exists" not in voi or not isinstance(voi.get("cheaper_alternative_exists"), bool):
+            gaps.append("cheaper_alternative_exists")
+
+    return sorted(set(gaps))
+
+def successor_contract_gap(route_canonical, next_task_draft):
+    if not isinstance(route_canonical, dict):
+        return False
+    if route_canonical.get("successor_contract_required") is not True:
+        return False
+    exact_task = str(route_canonical.get("exact_next_task_id") or "").strip()
+    exact_profile = str(route_canonical.get("exact_profile_path") or "").strip()
+    exact_queue = str(route_canonical.get("exact_queue_draft_path") or "").strip()
+    exact_object = str(route_canonical.get("exact_next_object_path") or "").strip()
+    draft_task = str((next_task_draft or {}).get("task_id") or "").strip() if isinstance(next_task_draft, dict) else ""
+    return not any((exact_task, exact_profile, exact_queue, exact_object, draft_task))
+
 def conditional_queue_enqueue_allowed(task, task_box, route_canonical):
     if classify_task_capability(task) != "queue_enqueue":
         return False, ""
     policy = task_box.get("queue_policy") if isinstance(task_box, dict) else {}
     if not isinstance(policy, dict) or policy.get("allow_conditional_enqueue") is not True:
+        return False, ""
+    if task_research_gate_gaps(task, task_box, route_canonical):
         return False, ""
 
     queue_target = str(task.get("queue_target") or task.get("queue_name") or task.get("queue") or "").strip()
@@ -8560,6 +8726,10 @@ def local_unblock_reason(state, task_box, route_canonical, run_state=None, progr
         or "prepare taskbox" in combined
     ):
         return "local_queue_draft_authoring", "Autonomous route can prepare a local queue draft/taskbox without performing a controlled enqueue yet."
+
+    next_task_draft = load_next_task_draft(ROOT)
+    if autonomous and successor_contract_gap(route_canonical, next_task_draft):
+        return "state_reconcile", "Canonical route says a successor contract is required, but no exact next task/profile/queue object exists yet; repair the successor contract locally before continuing."
 
     if autonomous and (
         "nvidia-smi" in combined
@@ -8768,6 +8938,22 @@ def route():
                 "primary_skill": "watchdog-orchestrator",
                 "reason": local_reason,
                 "stop_condition": "Perform exactly one safe local unblock or derived-state reconcile, refresh compact state, and stop.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True,
+                "task_id": task.get("task_id")
+            }
+        research_gap_pending = []
+        for task in pending:
+            gaps = task_research_gate_gaps(task, task_box, route_canonical)
+            if gaps:
+                research_gap_pending.append((task, gaps))
+        if research_gap_pending:
+            task, gaps = research_gap_pending[0]
+            return {
+                "primary_skill": "watchdog-orchestrator",
+                "reason": f"{len(pending)} pending task(s) exist in {pending_source}; selected task is missing research-contract fields: {', '.join(gaps)}. Repair TASK_BOX/task metadata locally before executing the bounded step.",
+                "stop_condition": "Add the missing topic/claim/fairness/value-of-information fields to the structured task contract, refresh compact state, and stop.",
                 "permission_guardian_required": False,
                 "permission_guardian_result": "not_required",
                 "route_locked": True,
@@ -9035,6 +9221,21 @@ def validate_task_box():
     queue_policy = task_box.get("queue_policy")
     if queue_policy is not None and not isinstance(queue_policy, dict):
         errors.append("agent/TASK_BOX.json queue_policy must be an object")
+    for key in ("project_question", "decision_relevance", "uncertainty_reduced_if_success", "uncertainty_reduced_if_failure", "claim_scope", "diagnosis_target"):
+        if key in task_box and task_box.get(key) is not None and not isinstance(task_box.get(key), str):
+            errors.append(f"agent/TASK_BOX.json {key} must be string or null")
+    forbidden = task_box.get("forbidden_conclusions")
+    if forbidden is not None and not isinstance(forbidden, list):
+        errors.append("agent/TASK_BOX.json forbidden_conclusions must be an array")
+    fair = task_box.get("fair_comparability")
+    if fair is not None and not isinstance(fair, dict):
+        errors.append("agent/TASK_BOX.json fair_comparability must be an object")
+    voi = task_box.get("value_of_information")
+    if voi is not None and not isinstance(voi, dict):
+        errors.append("agent/TASK_BOX.json value_of_information must be an object")
+    gate_policy = task_box.get("gate_policy")
+    if gate_policy is not None and not isinstance(gate_policy, dict):
+        errors.append("agent/TASK_BOX.json gate_policy must be an object")
 
 def validate_route_canonical():
     route = load_json("agent/ROUTE_CANONICAL.json", required=False)
@@ -9047,6 +9248,10 @@ def validate_route_canonical():
         errors.append("agent/ROUTE_CANONICAL.json route_epoch must be string or null")
     if "owner_mode" in route and route.get("owner_mode") is not None and not isinstance(route.get("owner_mode"), str):
         errors.append("agent/ROUTE_CANONICAL.json owner_mode must be string or null")
+    if "successor_contract_required" in route and not isinstance(route.get("successor_contract_required"), bool):
+        errors.append("agent/ROUTE_CANONICAL.json successor_contract_required must be boolean")
+    if "exact_next_object_path" in route and route.get("exact_next_object_path") is not None and not isinstance(route.get("exact_next_object_path"), str):
+        errors.append("agent/ROUTE_CANONICAL.json exact_next_object_path must be string or null")
 
 def validate_next_task_draft():
     draft = load_json("agent/status/NEXT_TASK_DRAFT.json", required=False)
@@ -9323,8 +9528,72 @@ def upsert_task_box_task(task_box, task):
     task_box["tasks"] = tasks
     return task_box
 
+def merge_task_box(existing, update):
+    box = ensure_task_box(existing, route_canonical)
+    if not isinstance(update, dict):
+        return box
+    for key, value in update.items():
+        if key == "tasks":
+            continue
+        if value is None:
+            continue
+        box[key] = value
+    for task in update.get("tasks", []) if isinstance(update.get("tasks"), list) else []:
+        if isinstance(task, dict) and str(task.get("task_id") or "").strip():
+            box = upsert_task_box_task(box, task)
+    return box
+
+def infer_successor_allowed_runner(next_action, route_canonical, queue_request_draft, task_profile_draft):
+    candidates = []
+    if isinstance(queue_request_draft, dict):
+        candidates.extend([
+            queue_request_draft.get("allowed_runner"),
+            queue_request_draft.get("runner"),
+            "gpu" if str(queue_request_draft.get("queue_target") or "").strip() else "",
+        ])
+    if isinstance(task_profile_draft, dict):
+        candidates.extend([
+            task_profile_draft.get("allowed_runner"),
+            task_profile_draft.get("runner"),
+        ])
+    if isinstance(route_canonical, dict):
+        candidates.append(route_canonical.get("preferred_runner"))
+        candidates.append("gpu" if str(route_canonical.get("exact_queue_draft_path") or "").strip() else "")
+    if isinstance(next_action, dict):
+        text = " ".join(str(next_action.get(key) or "") for key in ("kind", "description", "reason")).lower()
+        if "gpu" in text or "queue" in text:
+            candidates.append("gpu")
+        elif "cpu" in text or "smoke" in text or "eval" in text or "probe" in text:
+            candidates.append("cpu")
+    for candidate in candidates:
+        value = str(candidate or "").strip().lower()
+        if value in {"cpu", "gpu", "report_only"}:
+            return value
+    return "report_only"
+
+def synthesize_successor_task(route_canonical, next_action, queue_request_draft, task_profile_draft):
+    if not isinstance(route_canonical, dict):
+        return {}
+    task_id = str(route_canonical.get("exact_next_task_id") or "").strip()
+    if not task_id:
+        route_hint = safe_name(route_canonical.get("route_id") or "successor-route")
+        step_hint = safe_name(route_canonical.get("current_allowed_step") or "next")
+        task_id = f"{route_hint}_{step_hint}"
+    title = ""
+    if isinstance(next_action, dict):
+        title = str(next_action.get("description") or "").strip()
+    if not title:
+        title = f"Continue with exact successor route {route_canonical.get('route_id') or 'next-step'}."
+    return {
+        "task_id": task_id,
+        "status": "pending",
+        "allowed_runner": infer_successor_allowed_runner(next_action, route_canonical, queue_request_draft, task_profile_draft),
+        "title": title,
+        "successor_contract_inferred": True,
+    }
+
 def write_task_profile_draft(draft, fallback_task_id):
-    if not isinstance(draft, dict):
+    if not isinstance(draft, dict) or not draft:
         return ""
     task_id = str(draft.get("task_id") or fallback_task_id or "").strip()
     if not task_id:
@@ -9336,7 +9605,7 @@ def write_task_profile_draft(draft, fallback_task_id):
     return str(target)
 
 def write_queue_request_draft(draft, fallback_task_id):
-    if not isinstance(draft, dict):
+    if not isinstance(draft, dict) or not draft:
         return ""
     task_id = str(draft.get("task_id") or fallback_task_id or "").strip()
     if not task_id:
@@ -9356,6 +9625,7 @@ successor_task_draft = normalize_successor_task(data.get("successor_task_draft")
 task_profile_draft = clean_object(data.get("task_profile_draft"))
 queue_request_draft = clean_object(data.get("queue_request_draft"))
 route_canonical_update = clean_object(data.get("route_canonical_update"))
+task_box_update = clean_object(data.get("task_box_update"))
 
 route_canonical_changed = False
 task_box_changed = False
@@ -9367,6 +9637,16 @@ if route_canonical_update:
         task_box = ensure_task_box(task_box, route_canonical)
         task_box["updated_utc"] = updated
         task_box_changed = True
+
+if task_box_update:
+    task_box = merge_task_box(task_box, task_box_update)
+    task_box["updated_utc"] = updated
+    task_box_changed = True
+
+next_action = data.get("next_safe_action") or {}
+
+if not successor_task_draft and route_canonical.get("successor_contract_required") is True:
+    successor_task_draft = synthesize_successor_task(route_canonical, next_action, queue_request_draft, task_profile_draft)
 
 next_task_draft_path = ""
 if successor_task_draft:
@@ -9395,6 +9675,14 @@ if queue_request_draft_path:
     }, updated)
     route_canonical_changed = True
 
+exact_next_object_path = queue_request_draft_path or task_profile_path or next_task_draft_path or str(route_canonical.get("exact_next_object_path") or "").strip()
+if exact_next_object_path:
+    route_canonical = merge_route_canonical(route_canonical, {
+        "exact_next_object_path": exact_next_object_path,
+        "successor_contract_required": False,
+    }, updated)
+    route_canonical_changed = True
+
 if route_canonical_changed and route_canonical:
     atomic_write_json(route_canonical_path, route_canonical)
 if task_box_changed and task_box:
@@ -9411,9 +9699,6 @@ if runtime_update:
 morning_brief = data.get("morning_brief_markdown", "").strip()
 if morning_brief:
     atomic_write_text("agent/MORNING_BRIEF.md", morning_brief + "\\n")
-
-next_action = data.get("next_safe_action") or {}
-exact_next_object_path = queue_request_draft_path or task_profile_path or next_task_draft_path
 
 progress_state = {
     "updated_utc": updated,
@@ -9433,6 +9718,10 @@ progress_state = {
     "next_safe_action": next_action,
     "exact_next_task_id": route_canonical.get("exact_next_task_id") or successor_task_draft.get("task_id"),
     "exact_next_object_path": exact_next_object_path,
+    "project_question": task_box.get("project_question"),
+    "decision_relevance": task_box.get("decision_relevance"),
+    "claim_scope": task_box.get("claim_scope"),
+    "diagnosis_target": task_box.get("diagnosis_target"),
 }
 atomic_write_json("agent/PROGRESS_STATE.json", progress_state)
 
@@ -9484,6 +9773,10 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Task box: {task_box.get('task_box_id') or 'none'}",
     f"Exact next task: {route_canonical.get('exact_next_task_id') or successor_task_draft.get('task_id') or 'none'}",
     f"Exact next object: {exact_next_object_path or 'none'}",
+    f"Project question: {task_box.get('project_question') or 'none'}",
+    f"Decision relevance: {task_box.get('decision_relevance') or 'none'}",
+    f"Claim scope: {task_box.get('claim_scope') or 'none'}",
+    f"Diagnosis target: {task_box.get('diagnosis_target') or 'none'}",
     "",
     "## Current Facts",
     "",
@@ -9532,6 +9825,10 @@ atomic_write_json("agent/RUN_STATE.json", {
     "next_action": next_action,
     "exact_next_task_id": route_canonical.get("exact_next_task_id") or successor_task_draft.get("task_id"),
     "exact_next_object_path": exact_next_object_path,
+    "project_question": task_box.get("project_question"),
+    "decision_relevance": task_box.get("decision_relevance"),
+    "claim_scope": task_box.get("claim_scope"),
+    "diagnosis_target": task_box.get("diagnosis_target"),
     "evidence": evidence,
 })
 
@@ -9563,6 +9860,8 @@ write_lines("agent/NEXT_ACTION.md", [
     f"- Reason: {next_action.get('reason', '') or 'No reason provided.'}",
     f"- Exact next task: {route_canonical.get('exact_next_task_id') or successor_task_draft.get('task_id') or 'none'}",
     f"- Exact object path: {exact_next_object_path or 'none'}",
+    f"- Decision relevance: {task_box.get('decision_relevance') or 'none'}",
+    f"- Claim scope: {task_box.get('claim_scope') or 'none'}",
     "",
     "## Stop Condition",
     "",
@@ -9663,7 +9962,13 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "metrics": {},
     "caveats": data.get("blocked_items") or [],
     "next_safe_action": next_action.get("description", ""),
-    "requires_review": requires_review
+    "requires_review": requires_review,
+    "project_question": task_box.get("project_question"),
+    "decision_relevance": task_box.get("decision_relevance"),
+    "claim_scope": task_box.get("claim_scope"),
+    "diagnosis_target": task_box.get("diagnosis_target"),
+    "fair_comparability": task_box.get("fair_comparability"),
+    "value_of_information": task_box.get("value_of_information"),
 })
 
 proposal = data.get("proposal_markdown", "").strip()
