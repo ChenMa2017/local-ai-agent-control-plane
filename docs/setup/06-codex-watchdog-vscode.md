@@ -12,6 +12,42 @@ Purpose:
 VSCode/project watchdog prototype.
 ```
 
+Current runtime direction:
+
+```text
+runner should act like a bounded autonomous executor,
+not only a report writer.
+```
+
+The current watchdog runtime now leans on two structured contracts:
+
+```text
+agent/TASK_BOX.json
+agent/ROUTE_CANONICAL.json
+```
+
+`TASK_BOX.json` can now carry research-contract fields such as:
+
+```text
+project_question
+decision_relevance
+claim_scope
+forbidden_conclusions
+fair_comparability
+value_of_information
+gate_policy
+```
+
+`ROUTE_CANONICAL.json` can now carry exact-successor fields such as:
+
+```text
+successor_contract_required
+exact_next_task_id
+exact_profile_path
+exact_queue_draft_path
+exact_next_object_path
+```
+
 Install/check:
 
 ```bash
@@ -52,6 +88,15 @@ Generated watchdog scripts also write:
 agent/status/generated_manifest.json
 ```
 
+The generated runtime also uses these compact route/state artifacts:
+
+```text
+agent/TASK_BOX.json
+agent/ROUTE_CANONICAL.json
+agent/EVIDENCE_LEDGER.jsonl
+agent/status/NEXT_TASK_DRAFT.json
+```
+
 Run this inside a watchdog project after bootstrap or refresh:
 
 ```bash
@@ -90,3 +135,21 @@ Reset Conversation      archive current setup transcript/artifacts and clear the
 ```
 
 That makes the setup intent visible to later Codex sessions and to teammates who inherit the project.
+
+The generated route/runtime layer can now do more than write broad reports:
+
+- if a bounded task is missing research-contract structure, it can repair the task box locally instead of only complaining in prose;
+- if a route decision requires an exact next task/profile/queue object, it can mark that through the canonical route contract;
+- if the route says an exact successor is required but no explicit next object exists yet, the generated runtime can repair that gap locally and, in the narrow fallback case, synthesize a bounded successor draft.
+
+This is the main shift from:
+
+```text
+observer / report writer
+```
+
+toward:
+
+```text
+bounded autonomous research executor
+```

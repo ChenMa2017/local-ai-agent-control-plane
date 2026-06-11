@@ -69,6 +69,8 @@ server_agent
 laptop_agent
 ```
 
+If you want plain Discord replies inside bot-created task threads to create follow-up tasks automatically, also enable the bot's Message Content intent in the Discord Developer Portal. Slash commands work without it, but direct thread-reply follow-up does not.
+
 Check config:
 
 ```bash
@@ -89,10 +91,23 @@ Discord commands:
 
 ```text
 /agent_status
+/agent_health
 /agent_workspaces
+/agent_prepare
 /agent_run
 /agent_task
+/agent_task_page
 /agent_cancel
 ```
 
 `/agent_run` creates a task thread and sends completion notification with safe result.
+
+Long safe replies are no longer adapter-truncated before sending. If a safe result is too long for one Discord message, the adapter splits it into ordered chunks such as:
+
+```text
+[1/N] ...
+[2/N] ...
+[3/N] ...
+```
+
+This chunking is used for slash-command replies, task-thread intro messages, completion notifications, and adapter-side error replies.

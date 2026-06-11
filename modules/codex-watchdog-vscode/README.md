@@ -192,6 +192,79 @@ It surfaces:
 
 The goal is not to hide these states. It is to explain them so a paused supervisor, a stale blocker record, and a missing login each point to the right next action instead of collapsing into one vague failure.
 
+## Research Contract And Exact Successor Contract
+
+The generated watchdog runtime now treats two files as structured route contracts:
+
+```text
+agent/TASK_BOX.json
+agent/ROUTE_CANONICAL.json
+```
+
+`TASK_BOX.json` is no longer only a loose task list. It can now carry bounded research-contract fields such as:
+
+```text
+project_question
+decision_relevance
+uncertainty_reduced_if_success
+uncertainty_reduced_if_failure
+claim_scope
+forbidden_conclusions
+diagnosis_target
+fair_comparability
+value_of_information
+gate_policy
+```
+
+Those fields are meant to answer:
+
+```text
+what exact uncertainty this bounded task reduces,
+what route decision it changes,
+what kind of claim it is allowed to support,
+and what conclusions it must not overclaim.
+```
+
+`ROUTE_CANONICAL.json` can now also express when a route is not complete until the next exact runnable object exists. Important fields include:
+
+```text
+successor_contract_required
+exact_next_task_id
+exact_profile_path
+exact_queue_draft_path
+exact_next_object_path
+```
+
+This changes the runtime behavior in a useful way:
+
+- if a pending bounded task is missing key research-contract fields, the route can repair the task contract locally instead of only writing a broad blocker report;
+- if a route-level decision requires an exact successor object, the runtime can mark that explicitly in the canonical route;
+- if the route says an exact successor is required but the model forgot to emit one, the generated runtime can repair that gap locally and, in the narrow fallback case, synthesize a bounded successor draft.
+
+In practice, this is part of the shift from:
+
+```text
+watchdog as observer / report writer
+```
+
+to:
+
+```text
+watchdog as bounded autonomous executor with explicit route contracts
+```
+
+The generated state surfaces now also echo those route-contract fields into compact runtime files such as:
+
+```text
+agent/PROGRESS_STATE.json
+agent/RUN_STATE.json
+agent/CURRENT_STATE.md
+agent/NEXT_ACTION.md
+agent/EVIDENCE_LEDGER.jsonl
+```
+
+That does not fully eliminate drift by itself, but it makes the current route intent and next exact object visible across the files that later Codex sessions and supervisors actually read.
+
 ## Runner And Supervisor Roles
 
 The watcher can run in two cooperation roles:

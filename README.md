@@ -31,7 +31,8 @@ modules/agent-host
 modules/discord-adapter
   Discord Gateway adapter.
   Owns slash commands, command_prefix, task threads, completion notifications,
-  and Discord-only state mapping. It does not execute Codex directly.
+  Discord reply-to-follow-up mapping, and ordered chunk delivery for long safe
+  results. It does not execute Codex directly.
 
 modules/host-ops
   Read-only host sensor layer.
@@ -40,7 +41,9 @@ modules/host-ops
 
 modules/codex-watchdog-vscode
   Project watchdog / VSCode prototype.
-  Provides project-level watchdog workflow templates and tooling.
+  Provides project-level watchdog workflow templates, panel-local bootstrap
+  conversation, and the bounded-autonomy runtime contract for runner/supervisor
+  watchdogs.
 ```
 
 ## Current Workspace Model
@@ -138,6 +141,13 @@ The VSCode watchdog panel now also contains a `Bootstrap Conversation` setup flo
 - save a latest change preview under `agent/status/bootstrap_change_preview.md`;
 - archive old setup rounds under `agent/status/bootstrap_archive/` when the user resets the conversation;
 - let later Codex sessions and teammates inspect how the watchdog objective was defined.
+
+Generated watchdog projects now also treat the route contract as structured runtime state, not just prose. In practice that means:
+
+- `agent/TASK_BOX.json` can carry research-contract fields such as `project_question`, `decision_relevance`, `claim_scope`, `fair_comparability`, and `value_of_information`;
+- `agent/ROUTE_CANONICAL.json` can require an exact successor contract through fields such as `successor_contract_required` and `exact_next_object_path`;
+- the generated route/runtime layer can repair missing research-contract metadata locally through `task_box_update`;
+- if a route change requires an exact next object but the model forgot to emit one, the generated runtime can synthesize a bounded fallback successor draft instead of stopping at a broad report.
 
 ## Local Config
 
