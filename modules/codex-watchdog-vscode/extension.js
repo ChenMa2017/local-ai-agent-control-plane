@@ -2479,9 +2479,10 @@ async function bootstrapProject(root) {
   await writeIfAbsent(root, path.join(root, "agent", "RUNTIME_STATE.md"), templates.runtimeState(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "DAILY_HANDOFF.md"), templates.dailyHandoff(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "MORNING_BRIEF.md"), templates.morningBrief(), created, skipped);
-	  await writeIfAbsent(root, path.join(root, "agent", "SAFETY.md"), templates.safety(), created, skipped);
-	  await writeIfAbsent(root, path.join(root, "agent", "TODO.md"), templates.todo(), created, skipped);
-	  await writeIfAbsent(root, path.join(root, "agent", "workspace_write_policy.example.json"), templates.workspaceWritePolicyExample(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "SAFETY.md"), templates.safety(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "TODO.md"), templates.todo(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "workspace_write_policy.example.json"), templates.workspaceWritePolicyExample(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "SECONDARY_SKILLS.example.json"), templates.secondarySkillsExample(), created, skipped);
   for (const [rel, content] of generatedSkillFiles()) {
     await writeIfAbsent(root, path.join(root, rel), content, created, skipped);
   }
@@ -2492,6 +2493,7 @@ async function bootstrapProject(root) {
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "state.schema.json"), templates.stateSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "task_box.schema.json"), templates.taskBoxSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "route_canonical.schema.json"), templates.routeCanonicalSchema(), created, skipped);
+  await writeIfAbsent(root, path.join(root, "agent", "schemas", "secondary_skills.schema.json"), templates.secondarySkillsSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "job.schema.json"), templates.jobSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "schemas", "gate.schema.json"), templates.gateSchema(), created, skipped);
   await writeIfAbsent(root, path.join(root, "agent", "status", "QUEUE_STATUS.md"), templates.queueStatus(), created, skipped);
@@ -2648,7 +2650,8 @@ function generatedSkillFiles() {
     ["agent/skills/watchdog-report-curator/SKILL.md", templates.skillReportCurator()],
     ["agent/skills/watchdog-permission-guardian/SKILL.md", templates.skillPermissionGuardian()],
     ["agent/skills/watchdog-handoff-writer/SKILL.md", templates.skillHandoffWriter()],
-    ["agent/skills/watchdog-cleanup-auditor/SKILL.md", templates.skillCleanupAuditor()]
+    ["agent/skills/watchdog-cleanup-auditor/SKILL.md", templates.skillCleanupAuditor()],
+    ["agent/skills/project-secondary-example/SKILL.example.md", templates.projectSecondarySkillExample()]
   ];
 }
 
@@ -2666,11 +2669,13 @@ async function generatedWatcherFileEntries(root) {
     ["agent/schemas/state.schema.json", templates.stateSchema(), 0o644],
     ["agent/schemas/task_box.schema.json", templates.taskBoxSchema(), 0o644],
     ["agent/schemas/route_canonical.schema.json", templates.routeCanonicalSchema(), 0o644],
+    ["agent/schemas/secondary_skills.schema.json", templates.secondarySkillsSchema(), 0o644],
     ["agent/schemas/job.schema.json", templates.jobSchema(), 0o644],
     ["agent/schemas/gate.schema.json", templates.gateSchema(), 0o644],
     ["agent/TASK_BOX.json", templates.taskBoxJson(), 0o644],
     ["agent/ROUTE_CANONICAL.json", templates.routeCanonicalJson(), 0o644],
     ["agent/EVIDENCE_LEDGER.jsonl", templates.evidenceLedgerJsonl(), 0o644],
+    ["agent/SECONDARY_SKILLS.example.json", templates.secondarySkillsExample(), 0o644],
     ["agent/bin/collect_status.sh", templates.collectStatus(root), 0o755],
     ["agent/bin/make_prompt.sh", templates.makePrompt(root), 0o755],
     ["agent/bin/run_watchdog.sh", templates.runWatchdog(root), 0o755],
@@ -2770,13 +2775,18 @@ async function refreshGeneratedWatcherFiles(root) {
 	    await fsp.writeFile(taskRequest, templates.taskRequest());
 	    output.appendLine("Created agent/TASK_REQUEST.md");
 	  }
-	  const workspaceWritePolicyExample = path.join(root, "agent", "workspace_write_policy.example.json");
-	  if (!fs.existsSync(workspaceWritePolicyExample)) {
-	    await fsp.writeFile(workspaceWritePolicyExample, templates.workspaceWritePolicyExample());
-	    output.appendLine("Created agent/workspace_write_policy.example.json");
-	  }
-	  await ensureHandoffFiles(root);
-	}
+  const workspaceWritePolicyExample = path.join(root, "agent", "workspace_write_policy.example.json");
+  if (!fs.existsSync(workspaceWritePolicyExample)) {
+    await fsp.writeFile(workspaceWritePolicyExample, templates.workspaceWritePolicyExample());
+    output.appendLine("Created agent/workspace_write_policy.example.json");
+  }
+  const secondarySkillsExample = path.join(root, "agent", "SECONDARY_SKILLS.example.json");
+  if (!fs.existsSync(secondarySkillsExample)) {
+    await fsp.writeFile(secondarySkillsExample, templates.secondarySkillsExample());
+    output.appendLine("Created agent/SECONDARY_SKILLS.example.json");
+  }
+  await ensureHandoffFiles(root);
+}
 
 async function ensureCollaborationHandoffFiles(root) {
   const files = [
@@ -4346,6 +4356,7 @@ agent/
   STATE.md                 human-approved durable state
   DAILY_HANDOFF.md         evening handoff from daily mode
   SAFETY.md                hard safety rules and allowed scope
+  SECONDARY_SKILLS.example.json optional template for project-local support skills
   CURRENT_STATE.md         current canonical facts for the next actor
   RUN_STATE.json           machine-readable wakeup status
   NEXT_ACTION.md           one next safe action, not a history dump
@@ -4360,7 +4371,7 @@ agent/
   workspace_write_policy.example.json documentation for optional write probes
   SKILL_ROUTER.md          deterministic primary-skill routing contract
   skills/                  narrow watchdog skill manuals
-  status/SKILL_ROUTE.json  deterministic primary skill selected before Codex
+  status/SKILL_ROUTE.json  deterministic primary skill plus optional secondary support skills
   status/RUNTIME_VALIDATION.json runtime validation report
   status/current.md        deterministic status snapshot
   reports/latest.md        symlink to the latest watchdog report
@@ -4370,13 +4381,13 @@ agent/
 
 ## How A Wakeup Works
 
-1. \`agent/bin/route_skill.py\` writes or refreshes \`agent/status/SKILL_ROUTE.json\`, the deterministic primary skill for this wakeup.
+1. \`agent/bin/route_skill.py\` writes or refreshes \`agent/status/SKILL_ROUTE.json\`, the deterministic primary skill for this wakeup plus any optional routed secondary support skills.
 2. \`agent/bin/validate_runtime.py\` checks compact runtime JSON, route JSON, queue job JSON, gate JSON, and generated schemas before Codex starts.
 3. \`agent/bin/collect_status.sh\` gathers deterministic facts: git status, GPU/process snapshot, handoff files, compact runtime state, bounded report previews, recent log paths/sizes, skill router, deterministic route, and runtime curation controls.
 4. \`agent/bin/make_prompt.sh\` combines the wakeup prompt with \`agent/status/current.md\`.
 5. \`agent/bin/run_watchdog.sh\` calls \`codex exec\` with the configured sandbox and schema.
-6. The wakeup must report the same primary watchdog skill as \`agent/status/SKILL_ROUTE.json\`.
-7. \`agent/bin/render_report.py\` rejects mismatched \`primary_skill\` values and writes:
+6. The wakeup must report the same primary watchdog skill as \`agent/status/SKILL_ROUTE.json\`. If the route also attached secondary skills, the wakeup must acknowledge them through \`secondary_skills_consulted\`.
+7. \`agent/bin/render_report.py\` rejects mismatched \`primary_skill\` or \`secondary_skills_consulted\` values and writes:
    - \`agent/reports/<timestamp>.json\`
    - \`agent/reports/<timestamp>.md\`
    - \`agent/reports/latest.md\`
@@ -4394,6 +4405,8 @@ agent/
 Set \`codexWatchdog.role\` to \`runner\` for project-local worker watchdogs and \`supervisor\` for low-frequency audit watchdogs. They use the same runtime and scripts; only the responsibility boundary changes.
 
 Runner watchdogs should execute one bounded project-local cycle and update the canonical handoff files. Supervisor watchdogs should read runner canonical handoff files, classify stale/blocking states, prepare reviewer-pending work, and prevent redundant information snowballing. A supervisor must not become a fourth runner: it should not launch training, change model code, delete files, or bypass external-service approval.
+
+Project-local secondary skills are an optional specialization layer. They are selected deterministically after the primary route is known, and they may refine reasoning discipline, comparability checks, reviewer packaging, or evidence hygiene. They must not replace the primary skill or expand queue/write/execution authority.
 
 Use \`codexWatchdog.phaseOffsetMinutes\` to stagger timers. For example, runners can use offsets 0/10/20 minutes and the supervisor can use 30 minutes, while all runners repeat every 45 minutes and the supervisor repeats every 180 minutes.
 
@@ -5443,9 +5456,29 @@ In Level 2 only, after explicit implementation of a policy gate:
     ]
   }, null, 2) + "\n",
 
+  secondarySkillsExample: () => JSON.stringify({
+    schema_version: 1,
+    skills: [
+      {
+        skill_id: "project-research-support",
+        enabled: true,
+        path: "agent/skills/project-secondary-example/SKILL.example.md",
+        selectors: {
+          primary_skills: ["watchdog-orchestrator", "watchdog-gate-evaluator"],
+          roles: ["runner"],
+          supervisor_modes: [],
+          task_capabilities: ["report_only", "bounded_cpu_eval"]
+        },
+        notes: "Example project-local support skill: refine evidence hygiene, comparability checks, or reviewer packaging without changing runtime authority."
+      }
+    ]
+  }, null, 2) + "\n",
+
   skillRouter: () => `# Watchdog Skill Router
 
 Every watchdog wakeup must select exactly one primary skill, run one bounded action, apply report-curator rules, and stop.
+
+Project-local secondary skills are optional support constraints. They may refine evidence discipline, reviewer triage, comparability checks, or research hygiene, but they never replace the routed primary skill or expand authority.
 
 ## Primary Skills
 
@@ -5480,6 +5513,7 @@ The generated agent/bin/route_skill.py applies this route before Codex starts an
 ## Invariants
 
 - Select at most one primary skill per wakeup.
+- Secondary skills may be attached deterministically, but they remain support-only and cannot override the primary skill.
 - Do not chain multiple operational skills in one wakeup.
 - Do not paste raw logs into core state.
 - Do not queue duplicate jobs.
@@ -5693,6 +5727,30 @@ Stop after:
 - One audit/proposal.
 `,
 
+  projectSecondarySkillExample: () => `# Project Secondary Skill Example
+
+This is a project-owned secondary skill example.
+
+Use it to refine how a routed wakeup thinks, records evidence, packages reviewer material, or checks comparability.
+
+Allowed:
+- tighten evidence discipline;
+- require explicit comparability notes;
+- remind the wakeup to write reviewer-ready summaries;
+- require uncertainty / risk labeling.
+
+Forbidden:
+- changing the routed primary skill;
+- expanding write authority;
+- expanding queue, GPU, training, or promotion authority;
+- overriding TASK_BOX / ROUTE_CANONICAL truth.
+
+When used:
+- read this after the primary skill has already been selected;
+- keep the primary skill authoritative;
+- report this skill in secondary_skills_consulted.
+`,
+
   todo: () => `<!-- CODEX_WATCHDOG_TEMPLATE_FILE: remove this marker after task instantiation -->
 
 # Watcher TODO
@@ -5713,6 +5771,7 @@ You are being awakened by a timer. Treat this as a fresh handoff. Do not assume 
 - agent/STATE.json
 - agent/TASK_BOX.json
 - agent/ROUTE_CANONICAL.json
+- agent/SECONDARY_SKILLS.json when present
 - agent/PROGRESS_STATE.json
 - agent/SAFETY.md
 - agent/TODO.md
@@ -5768,6 +5827,7 @@ Watchdog skills layer:
 - Start by reading agent/status/SKILL_ROUTE.json, which is produced deterministically by agent/bin/route_skill.py before Codex starts.
 - Select exactly one primary_skill for this wakeup, and it must match agent/status/SKILL_ROUTE.json. If the deterministic route appears wrong, explain that as a blocker; do not silently choose a different primary skill.
 - Read the selected skill's agent/skills/<primary_skill>/SKILL.md when the route is not obvious from the snapshot.
+- If agent/status/SKILL_ROUTE.json lists secondary_skills, read those support-skill paths after the primary skill. Use them to tighten evidence discipline, comparability checks, reviewer packaging, or project-specific reasoning hygiene only; do not let them override the primary skill or broaden authority.
 - If the action writes shared state, enqueues controlled work, executes risky commands, archives, or changes mechanism configuration, watchdog-permission-guardian must pass first. Local state reconcile, local queue-draft authorship, local profile authorship, local workspace copy preparation, stale-marker cleanup, and bounded CPU eval do not need to stop for review when they remain inside the project-local watchdog boundary and match TASK_BOX/SAFETY.
 - Do not chain multiple operational skills in one wakeup. Run one bounded action and stop.
 
@@ -5799,6 +5859,7 @@ Your job:
 24. If the current TASK_BOX contract is missing topic alignment, claim scope, fair comparability, or value-of-information details, repair it structurally through task_box_update instead of only mentioning the gap in prose.
 25. For bounded research or queue tasks, prefer adding or refining project_question, decision_relevance, claim_scope, forbidden_conclusions, diagnosis_target, fair_comparability, and value_of_information before asking humans for help.
 26. If a decision-bearing result changes the route but no explicit successor task was written yet, set route_canonical_update.successor_contract_required=true and either emit successor_task_draft yourself or emit task_box_update that makes the next exact object unambiguous.
+27. Always report which routed secondary skills you actually consulted through secondary_skills_consulted. If none were routed, return an empty array.
 
 Hard restrictions:
 
@@ -5823,6 +5884,7 @@ The final output must follow the JSON schema.
       "overall_status",
       "supervisor_mode",
       "primary_skill",
+      "secondary_skills_consulted",
       "skill_route_reason",
       "skill_stop_condition",
       "permission_guardian_result",
@@ -5875,6 +5937,10 @@ The final output must follow the JSON schema.
           "watchdog-handoff-writer",
           "watchdog-cleanup-auditor"
         ]
+      },
+      secondary_skills_consulted: {
+        type: "array",
+        items: { type: "string" }
       },
       skill_route_reason: { type: "string" },
       skill_stop_condition: { type: "string" },
@@ -6099,6 +6165,39 @@ The final output must follow the JSON schema.
       exact_next_object_path: { type: ["string", "null"] }
     },
     additionalProperties: true
+  }, null, 2) + "\n",
+
+  secondarySkillsSchema: () => JSON.stringify({
+    type: "object",
+    required: ["schema_version", "skills"],
+    properties: {
+      schema_version: { type: "integer" },
+      skills: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["skill_id", "path", "selectors"],
+          properties: {
+            skill_id: { type: "string" },
+            enabled: { type: "boolean" },
+            path: { type: "string" },
+            notes: { type: "string" },
+            selectors: {
+              type: "object",
+              properties: {
+                primary_skills: { type: "array", items: { type: "string" } },
+                roles: { type: "array", items: { type: "string" } },
+                supervisor_modes: { type: "array", items: { type: "string" } },
+                task_capabilities: { type: "array", items: { type: "string" } }
+              },
+              additionalProperties: false
+            }
+          },
+          additionalProperties: false
+        }
+      }
+    },
+    additionalProperties: false
   }, null, 2) + "\n",
 
   jobSchema: () => JSON.stringify({
@@ -8014,6 +8113,51 @@ def load_next_task_draft(root=ROOT):
     data = load_json(root / "agent" / "status" / "NEXT_TASK_DRAFT.json", {})
     return data if isinstance(data, dict) else {}
 
+def normalize_string_list(values):
+    if not isinstance(values, list):
+        return []
+    result = []
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            result.append(text)
+    return result
+
+def load_secondary_skills_config(root=ROOT):
+    data = load_json(root / "agent" / "SECONDARY_SKILLS.json", {})
+    if not isinstance(data, dict):
+        return {"skills": []}
+    skills = data.get("skills")
+    if not isinstance(skills, list):
+        return {"skills": []}
+    normalized = []
+    for raw in skills:
+        if not isinstance(raw, dict):
+            continue
+        skill_id = str(raw.get("skill_id") or "").strip()
+        rel_path = str(raw.get("path") or "").strip()
+        if not skill_id or not rel_path or Path(rel_path).is_absolute():
+            continue
+        target_path = root / rel_path
+        if not target_path.exists() or not target_path.is_file():
+            continue
+        selectors = raw.get("selectors") if isinstance(raw.get("selectors"), dict) else {}
+        normalized.append({
+            "skill_id": skill_id,
+            "path": rel_path,
+            "enabled": raw.get("enabled") is not False,
+            "selectors": {
+                "primary_skills": normalize_string_list(selectors.get("primary_skills")),
+                "roles": normalize_string_list(selectors.get("roles")),
+                "supervisor_modes": normalize_string_list(selectors.get("supervisor_modes")),
+                "task_capabilities": normalize_string_list(selectors.get("task_capabilities")),
+            }
+        })
+    return {
+        "schema_version": data.get("schema_version"),
+        "skills": normalized,
+    }
+
 def has_files(*dirs, freshness_minutes=None):
     cutoff = None
     if freshness_minutes is not None:
@@ -8539,6 +8683,89 @@ def safe_autonomous_capability(capability):
         "local_queue_draft_authoring",
         "bounded_cpu_eval",
     }
+
+def route_task_lookup(state, task_box, next_task_draft):
+    candidates = []
+    state_tasks = state.get("tasks") if isinstance(state, dict) else []
+    if isinstance(state_tasks, list):
+        candidates.extend(task for task in state_tasks if isinstance(task, dict))
+    task_box_tasks = task_box.get("tasks") if isinstance(task_box, dict) else []
+    if isinstance(task_box_tasks, list):
+        for raw in task_box_tasks:
+            if not isinstance(raw, dict):
+                continue
+            task = dict(raw)
+            if not task.get("task_id"):
+                task["task_id"] = task_box.get("task_box_id") or "task-box-pending-task"
+            candidates.append(task)
+    if isinstance(next_task_draft, dict) and str(next_task_draft.get("task_id") or "").strip():
+        candidates.append(dict(next_task_draft))
+    by_id = {}
+    for task in candidates:
+        task_id = str(task.get("task_id") or "").strip()
+        if task_id and task_id not in by_id:
+            by_id[task_id] = task
+    return by_id
+
+def route_capability_from_result(result, role, supervisor_mode, state, task_box, next_task_draft, route_canonical, run_state, progress):
+    if not isinstance(result, dict):
+        return ""
+    if role == "supervisor" and str(result.get("task_id") or "") == "supervisor-delegated-runner-blocker-approval":
+        reason = str(result.get("reason") or "")
+        marker = "capability="
+        if marker in reason:
+            capability = reason.split(marker, 1)[1].split(".", 1)[0].strip().strip(" ,)")
+            return normalize_capability(capability)
+    lookup = route_task_lookup(state, task_box, next_task_draft)
+    task_id = str(result.get("task_id") or "").strip()
+    if task_id and task_id in lookup:
+        return classify_task_capability(lookup[task_id])
+    local_capability, _ = local_unblock_reason(state, task_box, route_canonical, run_state, progress)
+    if local_capability:
+        return local_capability
+    return ""
+
+def selector_matches(selectors, key, actual, normalizer=None):
+    values = selectors.get(key) if isinstance(selectors, dict) else None
+    if not values:
+        return True
+    normalized = []
+    for value in values:
+        candidate = normalizer(value) if normalizer else str(value or "").strip().lower()
+        if candidate:
+            normalized.append(candidate)
+    if not normalized:
+        return True
+    actual_value = normalizer(actual) if normalizer else str(actual or "").strip().lower()
+    if not actual_value:
+        return False
+    return actual_value in normalized
+
+def selected_secondary_skills(result, role, supervisor_mode, capability):
+    config = load_secondary_skills_config(ROOT)
+    selected = []
+    seen = set()
+    for skill in config.get("skills", []):
+        if not isinstance(skill, dict) or skill.get("enabled") is not True:
+            continue
+        selectors = skill.get("selectors") if isinstance(skill.get("selectors"), dict) else {}
+        if not selector_matches(selectors, "primary_skills", result.get("primary_skill")):
+            continue
+        if not selector_matches(selectors, "roles", role):
+            continue
+        if not selector_matches(selectors, "supervisor_modes", supervisor_mode):
+            continue
+        if not selector_matches(selectors, "task_capabilities", capability, normalize_capability):
+            continue
+        skill_id = str(skill.get("skill_id") or "").strip()
+        if not skill_id or skill_id in seen:
+            continue
+        seen.add(skill_id)
+        selected.append({
+            "skill_id": skill_id,
+            "path": str(skill.get("path") or "").strip(),
+        })
+    return selected
 
 def research_gate_policy(task_box):
     policy = task_box.get("gate_policy") if isinstance(task_box, dict) else {}
@@ -9102,7 +9329,19 @@ def route():
         "route_locked": True
     }
 
+state = load_json(ROOT / "agent" / "STATE.json", {})
+task_box = load_task_box(ROOT)
+route_canonical = load_route_canonical(ROOT)
+next_task_draft = load_next_task_draft(ROOT)
+progress = load_json(ROOT / "agent" / "PROGRESS_STATE.json", {})
+run_state = load_json(ROOT / "agent" / "RUN_STATE.json", {})
+role = os.environ.get("WATCHDOG_ROLE", "runner")
+supervisor_mode = os.environ.get("WATCHDOG_SUPERVISOR_MODE", "standby")
+
 result = route()
+route_capability = route_capability_from_result(result, role, supervisor_mode, state, task_box, next_task_draft, route_canonical, run_state, progress)
+result["secondary_skills"] = selected_secondary_skills(result, role, supervisor_mode, route_capability)
+result["route_capability"] = route_capability or None
 payload = {
     "route_version": 1,
     "updated_utc": now_utc(),
@@ -9275,6 +9514,7 @@ def validate_schema_files():
         "agent/schemas/state.schema.json",
         "agent/schemas/task_box.schema.json",
         "agent/schemas/route_canonical.schema.json",
+        "agent/schemas/secondary_skills.schema.json",
         "agent/schemas/job.schema.json",
         "agent/schemas/gate.schema.json",
     ):
@@ -9348,6 +9588,52 @@ def validate_gates():
             if "job_id" not in data and "gates" not in data:
                 warnings.append(f"gate file has no job_id/gates key: {item}")
 
+def validate_secondary_skills_config():
+    config = load_json("agent/SECONDARY_SKILLS.json", required=False)
+    if config is None:
+        return
+    if not isinstance(config, dict):
+        errors.append("agent/SECONDARY_SKILLS.json must be an object")
+        return
+    if not isinstance(config.get("schema_version"), int):
+        errors.append("agent/SECONDARY_SKILLS.json schema_version must be an integer")
+    skills = config.get("skills")
+    if not isinstance(skills, list):
+        errors.append("agent/SECONDARY_SKILLS.json skills must be an array")
+        return
+    seen = set()
+    for idx, item in enumerate(skills):
+        label = f"agent/SECONDARY_SKILLS.json skills[{idx}]"
+        if not isinstance(item, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        skill_id = item.get("skill_id")
+        if not isinstance(skill_id, str) or not skill_id.strip():
+            errors.append(f"{label}.skill_id must be a nonempty string")
+        elif skill_id in seen:
+            errors.append(f"duplicate secondary skill_id: {skill_id}")
+        else:
+            seen.add(skill_id)
+        rel_path = item.get("path")
+        if not isinstance(rel_path, str) or not rel_path.strip():
+            errors.append(f"{label}.path must be a nonempty string")
+        else:
+            skill_path = ROOT / rel_path
+            if Path(rel_path).is_absolute():
+                errors.append(f"{label}.path must stay project-relative")
+            elif not skill_path.exists():
+                errors.append(f"{label}.path does not exist: {rel_path}")
+        if "enabled" in item and not isinstance(item.get("enabled"), bool):
+            errors.append(f"{label}.enabled must be boolean when present")
+        selectors = item.get("selectors")
+        if not isinstance(selectors, dict):
+            errors.append(f"{label}.selectors must be an object")
+            continue
+        for key in ("primary_skills", "roles", "supervisor_modes", "task_capabilities"):
+            value = selectors.get(key, [])
+            if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
+                errors.append(f"{label}.selectors.{key} must be an array of strings")
+
 def validate_skill_route():
     route = load_json("agent/status/SKILL_ROUTE.json", required=False)
     if route is None:
@@ -9357,6 +9643,34 @@ def validate_skill_route():
         return
     if route.get("primary_skill") not in VALID_SKILLS:
         errors.append("agent/status/SKILL_ROUTE.json primary_skill is invalid")
+    secondary = route.get("secondary_skills", [])
+    if not isinstance(secondary, list):
+        errors.append("agent/status/SKILL_ROUTE.json secondary_skills must be an array")
+    else:
+        seen = set()
+        for idx, item in enumerate(secondary):
+            label = f"agent/status/SKILL_ROUTE.json secondary_skills[{idx}]"
+            if not isinstance(item, dict):
+                errors.append(f"{label} must be an object")
+                continue
+            skill_id = item.get("skill_id")
+            if not isinstance(skill_id, str) or not skill_id.strip():
+                errors.append(f"{label}.skill_id must be a nonempty string")
+            elif skill_id in seen:
+                errors.append(f"duplicate routed secondary skill_id: {skill_id}")
+            else:
+                seen.add(skill_id)
+            rel_path = item.get("path")
+            if not isinstance(rel_path, str) or not rel_path.strip():
+                errors.append(f"{label}.path must be a nonempty string")
+            else:
+                skill_path = ROOT / rel_path
+                if Path(rel_path).is_absolute():
+                    errors.append(f"{label}.path must stay project-relative")
+                elif not skill_path.exists():
+                    errors.append(f"{label}.path does not exist: {rel_path}")
+    if "route_capability" in route and route.get("route_capability") is not None and not isinstance(route.get("route_capability"), str):
+        errors.append("agent/status/SKILL_ROUTE.json route_capability must be string or null")
 
 validate_state()
 validate_progress()
@@ -9366,6 +9680,7 @@ validate_next_task_draft()
 validate_schema_files()
 validate_jobs()
 validate_gates()
+validate_secondary_skills_config()
 validate_skill_route()
 
 payload = {
@@ -9404,6 +9719,24 @@ if route_path.exists():
         raise SystemExit(f"primary_skill mismatch: expected {expected_skill!r} from SKILL_ROUTE.json, got {actual_skill!r}")
 else:
     route = {}
+
+def normalized_secondary_skill_ids(items):
+    result = []
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict):
+            value = str(item.get("skill_id") or "").strip()
+        else:
+            value = str(item or "").strip()
+        if value and value not in result:
+            result.append(value)
+    return result
+
+expected_secondary_skills = normalized_secondary_skill_ids(route.get("secondary_skills", []))
+actual_secondary_skills = normalized_secondary_skill_ids(data.get("secondary_skills_consulted", []))
+if expected_secondary_skills != actual_secondary_skills:
+    raise SystemExit(
+        f"secondary_skills_consulted mismatch: expected {expected_secondary_skills!r} from SKILL_ROUTE.json, got {actual_secondary_skills!r}"
+    )
 
 task_box_path = Path("agent/TASK_BOX.json")
 try:
@@ -9708,6 +10041,9 @@ progress_state = {
     "last_report_type": data.get("report_type", "heartbeat"),
     "primary_skill": data.get("primary_skill"),
     "expected_primary_skill": route.get("primary_skill"),
+    "secondary_skills_expected": expected_secondary_skills,
+    "secondary_skills_consulted": actual_secondary_skills,
+    "route_capability": route.get("route_capability"),
     "skill_route_reason": route.get("reason"),
     "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
     "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
@@ -9768,6 +10104,7 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Status: {data.get('overall_status', 'uncertain')}",
     f"Report type: {data.get('report_type', 'heartbeat')}",
     f"Primary skill: {data.get('primary_skill', '')}",
+    f"Secondary skills: {', '.join(actual_secondary_skills) if actual_secondary_skills else 'none'}",
     f"Route ID: {route_canonical.get('route_id') or task_box.get('route_id') or 'unknown'}",
     f"Route epoch: {route_canonical.get('route_epoch') or task_box.get('route_epoch') or 'unknown'}",
     f"Task box: {task_box.get('task_box_id') or 'none'}",
@@ -9814,6 +10151,9 @@ atomic_write_json("agent/RUN_STATE.json", {
     "supervisor_audit_every_runner_runs": os.environ.get("WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS"),
     "status": data.get("overall_status", "uncertain"),
     "primary_skill": data.get("primary_skill"),
+    "secondary_skills_expected": expected_secondary_skills,
+    "secondary_skills_consulted": actual_secondary_skills,
+    "route_capability": route.get("route_capability"),
     "report_type": data.get("report_type"),
     "progress_changed": bool(data.get("progress_changed")),
     "active_task_id": route.get("task_id"),
@@ -9944,6 +10284,8 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "artifact_type": data.get("report_type", "heartbeat"),
     "status": data.get("overall_status", "uncertain"),
     "primary_skill": data.get("primary_skill"),
+    "secondary_skills_consulted": actual_secondary_skills,
+    "route_capability": route.get("route_capability"),
     "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
     "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
     "task_box_id": task_box.get("task_box_id"),

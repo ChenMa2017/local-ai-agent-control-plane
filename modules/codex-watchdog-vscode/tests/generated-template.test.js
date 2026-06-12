@@ -142,6 +142,7 @@ async function main() {
   assert.match(manifest.template_hashes["agent/bin/run_watchdog.sh"], /^sha256:[a-f0-9]{64}$/);
   assert.match(manifest.template_hashes["agent/schemas/bootstrap_conversation_turn.schema.json"], /^sha256:[a-f0-9]{64}$/);
   assert.match(manifest.template_hashes["agent/schemas/bootstrap_instantiation.schema.json"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["agent/schemas/secondary_skills.schema.json"], /^sha256:[a-f0-9]{64}$/);
   assert.match(manifest.template_hashes["agent/TASK_BOX.json"], /^sha256:[a-f0-9]{64}$/);
   assert.match(manifest.template_hashes["agent/ROUTE_CANONICAL.json"], /^sha256:[a-f0-9]{64}$/);
   assert.match(manifest.template_hashes["agent/EVIDENCE_LEDGER.jsonl"], /^sha256:[a-f0-9]{64}$/);
@@ -173,6 +174,7 @@ async function main() {
   assert.ok(watchSchema.required.includes("supervisor_mode"));
   assert.ok(watchSchema.required.includes("review_scope"));
   assert.ok(watchSchema.required.includes("review_resolver"));
+  assert.ok(watchSchema.required.includes("secondary_skills_consulted"));
   assert.ok(watchSchema.required.includes("successor_task_draft"));
   assert.ok(watchSchema.required.includes("task_profile_draft"));
   assert.ok(watchSchema.required.includes("queue_request_draft"));
@@ -199,6 +201,8 @@ async function main() {
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "TASK_BOX.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "agent", "SECONDARY_SKILLS.example.json")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "agent", "skills", "project-secondary-example", "SKILL.example.md")));
   const initialTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
   assert.ok(initialTaskBox.project_question);
   assert.ok(initialTaskBox.decision_relevance);
@@ -602,6 +606,36 @@ async function main() {
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "task_box_cpu_probe");
   assert.match(route.reason, /autonomous mode allows one bounded bounded_cpu_eval step/);
+  writeFile(projectRoot, "agent/skills/project-local-discipline/SKILL.md", [
+    "# Project Local Discipline",
+    "",
+    "Require comparability notes and explicit evidence hygiene for bounded CPU probes.",
+    ""
+  ].join("\n"));
+  writeJson(projectRoot, "agent/SECONDARY_SKILLS.json", {
+    schema_version: 1,
+    skills: [
+      {
+        skill_id: "project-local-discipline",
+        path: "agent/skills/project-local-discipline/SKILL.md",
+        selectors: {
+          primary_skills: ["watchdog-orchestrator"],
+          roles: ["runner"],
+          supervisor_modes: [],
+          task_capabilities: ["bounded_cpu_eval"]
+        }
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.deepStrictEqual(route.secondary_skills, [
+    {
+      skill_id: "project-local-discipline",
+      path: "agent/skills/project-local-discipline/SKILL.md"
+    }
+  ]);
+  assert.strictEqual(route.route_capability, "bounded_cpu_eval");
   writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
     "# Review Pending",
     "",
@@ -612,6 +646,36 @@ async function main() {
     "- resolver: none",
     ""
   ].join("\n"));
+  fs.unlinkSync(path.join(projectRoot, "agent", "SECONDARY_SKILLS.json"));
+  writeJson(projectRoot, "agent/SECONDARY_SKILLS.json", {
+    schema_version: 1,
+    skills: [
+      {
+        skill_id: "broken-secondary-skill",
+        path: "agent/skills/missing-secondary-skill/SKILL.md",
+        selectors: {
+          primary_skills: ["watchdog-orchestrator"],
+          roles: ["runner"],
+          supervisor_modes: [],
+          task_capabilities: ["bounded_cpu_eval"]
+        }
+      }
+    ]
+  });
+  let secondaryValidationError = null;
+  try {
+    run("python3", [path.join(projectRoot, "agent", "bin", "validate_runtime.py")], {
+      cwd: projectRoot
+    });
+  } catch (error) {
+    secondaryValidationError = error;
+  }
+  assert.ok(secondaryValidationError, "invalid SECONDARY_SKILLS.json should fail runtime validation");
+  assert.match(
+    String(secondaryValidationError.stderr || "") + String(secondaryValidationError.stdout || "") + String(secondaryValidationError.message || ""),
+    /SECONDARY_SKILLS\.json/
+  );
+  fs.unlinkSync(path.join(projectRoot, "agent", "SECONDARY_SKILLS.json"));
 
   writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
     no_progress_cycles: 0,
@@ -938,8 +1002,20 @@ async function main() {
     owner_mode: "fully_autonomous",
     requires_review: false
   });
+  writeFile(projectRoot, "agent/skills/research-comparability/SKILL.md", [
+    "# Research Comparability",
+    "",
+    "Require explicit comparability notes when the route changes the active successor contract.",
+    ""
+  ].join("\n"));
   writeJson(projectRoot, "agent/status/SKILL_ROUTE.json", {
     primary_skill: "watchdog-orchestrator",
+    secondary_skills: [
+      {
+        skill_id: "research-comparability",
+        path: "agent/skills/research-comparability/SKILL.md"
+      }
+    ],
     reason: "Test render path for successor contract generation.",
     stop_condition: "Prepare one successor contract and stop.",
     permission_guardian_required: false,
@@ -947,12 +1023,72 @@ async function main() {
     route_locked: true,
     task_id: "stage06_g1_followup"
   });
+  assert.throws(() => runRender(projectRoot, {
+    timestamp_utc: "2026-06-08T12:00:00Z",
+    report_markdown: "# Report\n\nAccepted successor route and prepared the next exact contract.",
+    overall_status: "active",
+    report_type: "decision",
+    primary_skill: "watchdog-orchestrator",
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "Accepted the successor route and materialized the next runnable object.",
+    blocked_items: [],
+    completed_items: ["Accepted successor route"],
+    running_items: [],
+    evidence: ["agent/ROUTE_CANONICAL.json"],
+    progress_changed: true,
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "execute_exact_successor",
+      description: "Use the exact queue draft path for the next bounded task.",
+      can_execute_automatically: true,
+      reason: "The successor contract now has exact task, profile, and queue draft objects."
+    },
+    skill_stop_condition: "Prepare exactly one successor contract and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "Runtime state updated for successor route.",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    successor_task_draft: {
+      task_id: "stage06_g1_followup",
+      status: "pending",
+      allowed_runner: "gpu",
+      title: "Enqueue the next bounded GPU follow-up task."
+    },
+    task_profile_draft: {
+      task_id: "stage06_g1_followup",
+      profile_kind: "gpu_eval",
+      entrypoint: "python scripts/run_stage06_g1.py"
+    },
+    queue_request_draft: {
+      task_id: "stage06_g1_followup",
+      queue_target: "gpu_queue",
+      command_profile: "stage06_g1_followup",
+      expected_outputs: ["runs/stage06_g1_followup/metrics.json"],
+      max_runtime_minutes: 45,
+      budget_contract: "one bounded queue job"
+    },
+    route_canonical_update: {
+      route_id: "route-new",
+      route_epoch: "route-002",
+      owner_mode: "fully_autonomous",
+      requires_review: false,
+      active_carrier: "g1"
+    }
+  }), /secondary_skills_consulted mismatch/);
   runRender(projectRoot, {
     timestamp_utc: "2026-06-08T12:00:00Z",
     report_markdown: "# Report\n\nAccepted successor route and prepared the next exact contract.",
     overall_status: "active",
     report_type: "decision",
     primary_skill: "watchdog-orchestrator",
+    secondary_skills_consulted: ["research-comparability"],
     supervisor_mode: "runner",
     review_scope: "none",
     review_resolver: "none",
@@ -1028,12 +1164,14 @@ async function main() {
   assert.match(nextActionText, /Exact object path: agent\/queue\/drafts\/stage06_g1_followup\.json/);
   const currentStateText = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
   assert.match(currentStateText, /Route ID: route-new/);
+  assert.match(currentStateText, /Secondary skills: research-comparability/);
   assert.match(currentStateText, /Exact next object: agent\/queue\/drafts\/stage06_g1_followup\.json/);
   const evidenceLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
   const latestLedgerEntry = JSON.parse(evidenceLedgerLines[evidenceLedgerLines.length - 1]);
   assert.ok(latestLedgerEntry.output_paths.includes("agent/status/NEXT_TASK_DRAFT.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/task_profiles/stage06_g1_followup.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/queue/drafts/stage06_g1_followup.json"));
+  assert.deepStrictEqual(latestLedgerEntry.secondary_skills_consulted, ["research-comparability"]);
   assert.strictEqual(latestLedgerEntry.claim_scope, null);
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
