@@ -1123,6 +1123,9 @@ def parse_intent_signals(prompt: str, answers: str) -> dict[str, bool]:
         "wants_promotion": any(term in text for term in ("promote", "promotion", "shared_model", "deployment", "public docs", "合并到共享", "发布")),
         "wants_external_send": any(term in text for term in ("external send", "reviewer send", "deep research send", "发给 reviewer", "外部发送")),
         "wants_secret_or_service": any(term in text for term in ("token", "secret", ".env", "systemd", "restart service", "private key", "密码")),
+        "mentions_experiment": any(term in text for term in ("experiment", "ablation", "baseline", "control arm", "control", "curriculum", "checkpoint sweep", "official eval", "long eval", "compare", "vs ", "versus", "实验", "对照", "基线", "比较", "消融")),
+        "mentions_metric_goal": any(term in text for term in ("success criterion", "metric", "psnr", "ssim", "accuracy", "loss", "fixed epoch", "curve comparison", "指标", "成功标准", "loss")),
+        "mentions_fairness_constraint": any(term in text for term in ("one factor", "fair", "same budget", "same data", "same checkpoint", "same eval", "单一变量", "公平", "同预算", "同数据")),
     }
 
 
@@ -1160,6 +1163,9 @@ def build_gray_areas(prompt: str, answers: str, reference_task_id: str, signals:
         gray.append("target_reference_missing")
     if not prompt.strip():
         gray.append("empty_prompt")
+    gate = build_experiment_decision_gate(prompt, answers, infer_objective(signals), signals)
+    if gate["required"]:
+        gray.extend(gate["unresolved_items"])
     return gray
 
 
@@ -1171,7 +1177,88 @@ def clarification_questions(gray_areas: list[str], signals: dict[str, bool]) -> 
         questions.append("如果允许修改，请明确允许改动的文件或目录范围；如果只想先分析，也可以直接说明“先只读总结”。")
     if signals["wants_write"] and not signals["wants_local_workspace_copy"] and not signals["wants_cpu_eval"]:
         questions.append("这次是希望先做本地副本修复方案，还是只整理可执行 task contract？")
+    if "experiment_question_missing" in gray_areas:
+        questions.append("这次高成本实验要回答的核心问题是什么？请尽量用 A/B/C 或一句明确结论来确认，例如：A. 比较基线 vs 新机制；B. 验证某个 curriculum 是否有效。")
+    if "control_definition_missing" in gray_areas:
+        questions.append("这次实验的 control / baseline 到底指什么？请明确一个对照臂定义，不要只说 baseline。")
+    if "fairness_constraint_missing" in gray_areas:
+        questions.append("这次是否要求单一变量对比？请明确回答 Yes/No，或说明哪些因素允许同时变化。")
+    if "success_criterion_missing" in gray_areas:
+        questions.append("这次以什么结果算成功？请明确 metric / checkpoint / fixed epoch / curve comparison 中的判断标准。")
     return questions[:INTAKE_QUESTION_MAX]
+
+
+def experiment_decision_gate_required(objective: str, signals: dict[str, bool]) -> bool:
+    if signals.get("wants_training") or signals.get("wants_gpu"):
+        return True
+    if objective in {"training", "gpu", "bounded_training_canary", "bounded_gpu_probe"}:
+        return True
+    if objective == "bounded_cpu_eval" and signals["mentions_experiment"]:
+        return True
+    return False
+
+
+def experiment_field_present(text: str, kind: str) -> bool:
+    lowered = intake_words(text)
+    if kind == "experiment_question":
+        return any(term in lowered for term in ("question", "goal", "test whether", "hypothesis", "验证", "目标", "问题", "比较", "compare", "vs ", "versus"))
+    if kind == "control_definition":
+        return any(term in lowered for term in ("control", "baseline", "对照", "基线", "control arm"))
+    if kind == "fairness_constraint":
+        return any(term in lowered for term in ("one factor", "fair", "same budget", "same data", "same checkpoint", "same eval", "单一变量", "公平", "同预算", "同数据"))
+    if kind == "success_criterion":
+        return any(term in lowered for term in ("success criterion", "metric", "psnr", "ssim", "accuracy", "loss", "fixed epoch", "curve comparison", "指标", "成功标准"))
+    return False
+
+
+def build_experiment_decision_gate(prompt: str, answers: str, objective: str, signals: dict[str, bool]) -> dict[str, Any]:
+    required = experiment_decision_gate_required(objective, signals)
+    combined = f"{prompt}\n{answers}"
+    decisions = [
+        {
+            "decision_id": "D-01",
+            "key": "experiment_question",
+            "title": "Experimental question",
+            "required": required,
+            "resolved": experiment_field_present(combined, "experiment_question") if required else False,
+        },
+        {
+            "decision_id": "D-02",
+            "key": "control_definition",
+            "title": "Control-arm definition",
+            "required": required,
+            "resolved": experiment_field_present(combined, "control_definition") if required else False,
+        },
+        {
+            "decision_id": "D-05",
+            "key": "fairness_constraint",
+            "title": "Fairness constraint",
+            "required": required,
+            "resolved": experiment_field_present(combined, "fairness_constraint") if required else False,
+        },
+        {
+            "decision_id": "D-06",
+            "key": "success_criterion",
+            "title": "Success criterion",
+            "required": required,
+            "resolved": experiment_field_present(combined, "success_criterion") if required else False,
+        },
+    ]
+    unresolved_items = []
+    if required:
+        for item in decisions:
+            if not item["resolved"]:
+                unresolved_items.append(f"{item['key']}_missing")
+    return {
+        "schema_version": 1,
+        "required": required,
+        "objective": objective,
+        "decision_count": len(decisions) if required else 0,
+        "resolved_count": sum(1 for item in decisions if item["resolved"]) if required else 0,
+        "unresolved_items": unresolved_items,
+        "decisions": decisions if required else [],
+        "blocking": required and bool(unresolved_items),
+    }
 
 
 def intake_risk_class(objective: str, signals: dict[str, bool]) -> str:
@@ -1197,6 +1284,7 @@ def make_task_contract(
 ) -> dict[str, Any]:
     decision_source = "user+answers" if answers else "user"
     requires_human = risk_class == "high"
+    decision_gate = build_experiment_decision_gate(prompt, answers, objective, signals)
     write_scope = []
     if objective == "local_workspace_copy":
         write_scope = ["workspace/<task_id>/", "runs/<task_id>/", "agent/status/", "agent/reports/"]
@@ -1214,6 +1302,7 @@ def make_task_contract(
         "prompt": prompt,
         "answers_summary": answers,
         "summary": prompt_preview(prompt),
+        "experiment_decision_gate": decision_gate,
         "write_scope": write_scope,
         "blocked_actions": [
             "shared_file_promotion_without_human_review",
@@ -1276,11 +1365,16 @@ def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
 def make_policy_preflight(project: Project, contract: dict[str, Any], taskbox: dict[str, Any], questions: list[str]) -> dict[str, Any]:
     objective = str(contract.get("objective") or "")
     risk_class = str(contract.get("risk_class") or "low")
+    decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
     blocked_by: list[str] = []
     reasons: list[str] = []
     if questions:
         blocked_by.append("clarification_required")
         reasons.append("Task intent still has unresolved gray areas.")
+    if decision_gate.get("required") and decision_gate.get("blocking"):
+        blocked_by.append("experiment_decision_gate_required")
+        unresolved = ", ".join(str(item) for item in decision_gate.get("unresolved_items", []))
+        reasons.append(f"Experiment decision gate is still unresolved: {unresolved}.")
     if risk_class == "high":
         blocked_by.append("human_review_required")
         reasons.append(f"Objective {objective} is intentionally held for human approval.")
@@ -1303,10 +1397,12 @@ def make_policy_preflight(project: Project, contract: dict[str, Any], taskbox: d
         "reasons": reasons,
         "allowed_runner": taskbox.get("allowed_runner"),
         "workspace_mode": taskbox.get("workspace_mode"),
+        "experiment_decision_gate_required": bool(decision_gate.get("required")),
     }
 
 
 def intake_summary_markdown(contract: dict[str, Any], questions: list[str], preflight: dict[str, Any]) -> str:
+    decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
     lines = [
         "# Task Contract Summary",
         "",
@@ -1317,6 +1413,7 @@ def intake_summary_markdown(contract: dict[str, Any], questions: list[str], pref
         f"- decision_source: {contract.get('decision_source')}",
         f"- status: {contract.get('status')}",
         f"- preflight_ok: {'true' if preflight.get('ok') else 'false'}",
+        f"- experiment_decision_gate_required: {'true' if decision_gate.get('required') else 'false'}",
         "",
         "## Prompt",
         "",
@@ -1331,6 +1428,16 @@ def intake_summary_markdown(contract: dict[str, Any], questions: list[str], pref
         lines.append("")
         for idx, question in enumerate(questions, start=1):
             lines.append(f"{idx}. {question}")
+        lines.append("")
+    if decision_gate.get("required"):
+        lines.append("## Experiment Decision Gate")
+        lines.append("")
+        lines.append(f"- resolved_count: {decision_gate.get('resolved_count', 0)} / {decision_gate.get('decision_count', 0)}")
+        lines.append(f"- blocking: {'true' if decision_gate.get('blocking') else 'false'}")
+        for item in decision_gate.get("decisions", []):
+            lines.append(
+                f"- {item.get('decision_id')}: {item.get('title')} -> {'resolved' if item.get('resolved') else 'missing'}"
+            )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -1363,6 +1470,7 @@ def persist_intake_artifacts(
     write_json_atomic(root / "TASK_CONTRACT.json", contract)
     write_json_atomic(root / "TASKBOX_DRAFT.json", taskbox)
     write_json_atomic(root / "POLICY_PREFLIGHT.json", preflight)
+    write_json_atomic(root / "DECISION_GATE.json", contract.get("experiment_decision_gate", {}))
     write_text_atomic(
         root / "ASSUMPTIONS.md",
         "\n".join([
@@ -1371,6 +1479,7 @@ def persist_intake_artifacts(
             f"- objective_guess: {contract.get('objective')}",
             f"- risk_class: {contract.get('risk_class')}",
             f"- workspace_mode: {taskbox.get('workspace_mode')}",
+            f"- experiment_decision_gate_required: {'true' if (contract.get('experiment_decision_gate') or {}).get('required') else 'false'}",
         ]).rstrip() + "\n",
     )
     write_text_atomic(root / f"TASK_CONTRACT_{intake_id}.md", intake_summary_markdown(contract, questions, preflight))
@@ -1449,6 +1558,7 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         "objective_guess": objective,
         "signals": signals,
         "gray_area_count": len(gray_areas),
+        "experiment_decision_gate_required": bool((contract.get("experiment_decision_gate") or {}).get("required")),
         "answers_count": 1 if answers else 0,
         "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
     }
@@ -1471,6 +1581,7 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         "status": "blocked" if risk_class == "high" else ("need_user_reply" if questions else ("blocked" if not preflight.get("ok") else "prepared")),
         "questions": questions,
         "gray_areas": gray_areas,
+        "decision_gate": contract.get("experiment_decision_gate"),
         "contract": contract,
         "taskbox": taskbox,
         "preflight": preflight,

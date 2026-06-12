@@ -231,11 +231,13 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(response["status"], "prepared")
             self.assertTrue(response["ready_to_run"])
             self.assertEqual(response["contract"]["objective"], "report_only")
+            self.assertFalse(response["decision_gate"]["required"])
             intake_dir = Path(response["artifacts_dir"])
             self.assertTrue((intake_dir / "INTENT_DRAFT.json").exists())
             self.assertTrue((intake_dir / "TASK_CONTRACT.json").exists())
             self.assertTrue((intake_dir / "TASKBOX_DRAFT.json").exists())
             self.assertTrue((intake_dir / "POLICY_PREFLIGHT.json").exists())
+            self.assertTrue((intake_dir / "DECISION_GATE.json").exists())
 
     def test_codex_prepare_requests_clarification_for_write_without_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -307,6 +309,36 @@ class BridgeTests(unittest.TestCase):
             self.assertFalse(response["ready_to_run"])
             self.assertEqual(response["contract"]["risk_class"], "high")
             self.assertIn("human_review_required", response["preflight"]["blocked_by"])
+            self.assertTrue(response["decision_gate"]["required"])
+            self.assertTrue(response["decision_gate"]["blocking"])
+            self.assertIn("experiment_decision_gate_required", response["preflight"]["blocked_by"])
+            intake_dir = Path(response["artifacts_dir"])
+            gate = json.loads((intake_dir / "DECISION_GATE.json").read_text())
+            self.assertTrue(gate["required"])
+            self.assertGreaterEqual(len(gate["unresolved_items"]), 1)
+
+    def test_codex_prepare_requests_decision_gate_for_bounded_gpu_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            response = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Run a bounded GPU probe eval to compare the new curriculum against the baseline.",
+                    "source": "web",
+                },
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+
+            self.assertEqual(response["status"], "need_user_reply")
+            self.assertFalse(response["ready_to_run"])
+            self.assertEqual(response["contract"]["objective"], "bounded_gpu_probe")
+            self.assertTrue(response["decision_gate"]["required"])
+            self.assertIn("fairness_constraint_missing", response["gray_areas"])
+            self.assertIn("success_criterion_missing", response["gray_areas"])
+            self.assertIn("experiment_decision_gate_required", response["preflight"]["blocked_by"])
+            self.assertGreaterEqual(len(response["questions"]), 1)
 
     def test_codex_run_rejects_non_allowlisted_project(self):
         with tempfile.TemporaryDirectory() as tmp:
