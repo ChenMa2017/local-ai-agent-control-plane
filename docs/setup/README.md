@@ -16,6 +16,7 @@ Read in this order:
 08-new-machine-checklist.md
 09-github-ssh.md
 10-operational-safety.md
+11-watchdog-secondary-skills-and-prepare-gates.md
 ```
 
 The normal test workspaces are intentionally small:

@@ -102,6 +102,19 @@ Discord commands:
 
 `/agent_run` creates a task thread and sends completion notification with safe result.
 
+`/agent_prepare` is the structured clarification entrypoint. It persists Agent Host intake artifacts such as:
+
+```text
+INTENT_DRAFT
+QUESTIONS
+TASK_CONTRACT
+TASKBOX_DRAFT
+POLICY_PREFLIGHT
+DECISION_GATE
+```
+
+If Agent Host says `DECISION_GATE.required=true`, keep the user in `/agent_prepare` follow-up turns until the missing experiment choices are resolved. Do not bypass that by sending the same vague experiment prompt directly to `/agent_run`.
+
 Long safe replies are no longer adapter-truncated before sending. If a safe result is too long for one Discord message, the adapter splits it into ordered chunks such as:
 
 ```text

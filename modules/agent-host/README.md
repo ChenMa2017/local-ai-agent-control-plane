@@ -142,6 +142,17 @@ POST /codex/logs
 POST /codex/cancel
 ```
 
+`POST /codex/prepare` is now the structured intake path, not just a generic clarification collector. It can:
+
+```text
+- classify the request into a TASK_CONTRACT
+- persist INTENT_DRAFT / GRAY_AREAS / QUESTIONS / TASKBOX_DRAFT / POLICY_PREFLIGHT
+- persist DECISION_GATE.json for experiment-like requests
+- block direct execution until missing experiment decisions are clarified
+```
+
+Typical decision-gate triggers are requests that imply training, GPU use, fairness-sensitive comparisons, or a result claim that still lacks a clear control definition or success criterion.
+
 除 `/health` 和网页 HTML 外，所有 `/codex/*` API 与 `/whoami` 都需要：
 
 ```http

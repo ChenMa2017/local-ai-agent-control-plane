@@ -146,8 +146,15 @@ Generated watchdog projects now also treat the route contract as structured runt
 
 - `agent/TASK_BOX.json` can carry research-contract fields such as `project_question`, `decision_relevance`, `claim_scope`, `fair_comparability`, and `value_of_information`;
 - `agent/ROUTE_CANONICAL.json` can require an exact successor contract through fields such as `successor_contract_required` and `exact_next_object_path`;
+- projects may optionally add `agent/SECONDARY_SKILLS.json` so one routed wakeup can load project-owned support skills without changing the authoritative `primary_skill`;
 - the generated route/runtime layer can repair missing research-contract metadata locally through `task_box_update`;
 - if a route change requires an exact next object but the model forgot to emit one, the generated runtime can synthesize a bounded fallback successor draft instead of stopping at a broad report.
+
+The generated runtime now also validates the secondary-skill chain end to end:
+
+- `route_skill.py` may attach `secondary_skills` into `agent/status/SKILL_ROUTE.json`;
+- the wakeup prompt must report `secondary_skills_consulted`;
+- `render_report.py` rejects mismatched `primary_skill` or `secondary_skills_consulted` values.
 
 ## Local Config
 
@@ -204,6 +211,13 @@ POST /codex/prepare
 POST /codex/result-page
 ```
 
+`POST /codex/prepare` is now more than a generic clarification endpoint. It can:
+
+- classify low-risk report-only / bounded CPU / local-workspace-copy requests into a structured `TASK_CONTRACT`;
+- persist `INTENT_DRAFT`, `GRAY_AREAS`, `QUESTIONS`, `TASKBOX_DRAFT`, and `POLICY_PREFLIGHT`;
+- persist `DECISION_GATE.json` for expensive or scientifically ambiguous experiments;
+- block direct execution when experiment-defining decisions such as control-arm meaning, fairness constraints, or success criteria are still unresolved.
+
 Discord Adapter maps them to:
 
 ```text
@@ -216,6 +230,7 @@ See:
 
 ```text
 docs/setup/10-operational-safety.md
+docs/setup/11-watchdog-secondary-skills-and-prepare-gates.md
 ```
 
 ## Systemd User Services

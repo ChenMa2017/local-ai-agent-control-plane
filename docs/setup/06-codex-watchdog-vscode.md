@@ -95,6 +95,23 @@ agent/TASK_BOX.json
 agent/ROUTE_CANONICAL.json
 agent/EVIDENCE_LEDGER.jsonl
 agent/status/NEXT_TASK_DRAFT.json
+agent/status/SKILL_ROUTE.json
+```
+
+Projects may optionally add project-local support-skill routing:
+
+```text
+agent/SECONDARY_SKILLS.json
+agent/schemas/secondary_skills.schema.json
+agent/skills/project-secondary-example/SKILL.example.md
+```
+
+This does not replace the routed `primary_skill`. It lets the project attach bounded `secondary_skills` for cases such as a runner plus literature-triage helper, or a queue enqueue route plus queue-profile checker. The generated runtime validates the chain from route selection to final report:
+
+```text
+route_skill.py writes secondary_skills
+wakeup prompt requires secondary_skills_consulted
+render_report.py rejects mismatches
 ```
 
 Run this inside a watchdog project after bootstrap or refresh:

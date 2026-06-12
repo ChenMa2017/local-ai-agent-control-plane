@@ -238,9 +238,12 @@ QUESTIONS
 TASK_CONTRACT
 TASKBOX_DRAFT
 POLICY_PREFLIGHT
+DECISION_GATE
 ```
 
 If clarification is still needed, the adapter returns the generated questions plus an `intake_id`. A later `/<prefix>_prepare` call can continue the same intake by sending that `intake_id` with `answers`.
+
+If the request looks like a real experiment and Agent Host marks `DECISION_GATE.required=true`, keep the user in the `/prepare` loop until the missing experiment decisions are clarified. The adapter should not bypass that gate by turning the same vague request into `/run`.
 
 `/<prefix>_run workspace:grokking prompt:"..."` becomes a Codex task request. With the default prefix this is `/agent_run`. If `workspace` is omitted, the adapter uses `discord.default_workspace`, usually `main_codex`. The adapter asks the Agent Host for the selected workspace's default mode and sends that mode with the run request. For example, a normal project may be `readonly`, while the main coordination workspace can be `workspace-write`.
 

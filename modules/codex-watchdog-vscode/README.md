@@ -98,6 +98,48 @@ The control panel now keeps that setup discussion inside the UI:
 - `Reset Conversation` archives the current transcript and latest draft artifacts under `agent/status/bootstrap_archive/`, then clears the panel for a fresh setup round;
 - follow-up clarifications can continue in the same panel instead of moving to a separate chat.
 
+## Project Secondary Skills
+
+Generated watchdog projects can now keep one authoritative routed role while still consulting narrow project-local support skills.
+
+Optional project files:
+
+```text
+agent/SECONDARY_SKILLS.json
+agent/schemas/secondary_skills.schema.json
+agent/skills/project-secondary-example/SKILL.example.md
+```
+
+`SECONDARY_SKILLS.json` is an allowlisted routing table for extra support skills. It does not replace `primary_skill`. Instead `agent/bin/route_skill.py` may attach a bounded list of `secondary_skills` into:
+
+```text
+agent/status/SKILL_ROUTE.json
+```
+
+Typical selectors are:
+
+```text
+primary_skills
+roles
+supervisor_modes
+task_capabilities
+```
+
+This lets a single runner/supervisor wakeup do things like:
+
+- keep `watchdog-orchestrator` as the primary runner skill;
+- also consult a project-local `literature-triage` skill for a bounded research pass;
+- also consult a `queue-profile-checker` skill when the routed capability is `queue_enqueue`.
+
+The runtime now validates that chain end to end:
+
+- `route_skill.py` writes the selected `secondary_skills`;
+- the wakeup prompt tells Codex to read them after the primary skill;
+- the decision output must report `secondary_skills_consulted`;
+- `render_report.py` rejects a mismatch between routed and reported secondary skills.
+
+This is meant to make watchdogs more capable without turning the route contract into loose prose.
+
 `Start Guard` then performs the runtime startup path:
 
 - checks that the task files no longer look like generic placeholders;
