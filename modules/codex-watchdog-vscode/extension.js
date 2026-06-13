@@ -8949,11 +8949,25 @@ def conditional_queue_enqueue_allowed(task, task_box, route_canonical):
 def local_unblock_reason(state, task_box, route_canonical, run_state=None, progress=None):
     review_text = read_text("agent/REVIEW_PENDING.md")
     blockers_text = read_text("agent/BLOCKERS.md")
+    run_summary = {
+        "blocker_type": str((run_state or {}).get("blocker_type") or ""),
+        "requires_human_review": bool((run_state or {}).get("requires_human_review")),
+        "next_action": (run_state or {}).get("next_action") or {},
+        "exact_next_task_id": str((run_state or {}).get("exact_next_task_id") or ""),
+        "exact_next_object_path": str((run_state or {}).get("exact_next_object_path") or ""),
+    }
+    progress_summary = {
+        "current_blocker": str((progress or {}).get("current_blocker") or ""),
+        "requires_human_review": bool((progress or {}).get("requires_human_review")),
+        "next_safe_action": (progress or {}).get("next_safe_action") or {},
+        "exact_next_task_id": str((progress or {}).get("exact_next_task_id") or ""),
+        "exact_next_object_path": str((progress or {}).get("exact_next_object_path") or ""),
+    }
     combined = "\\n".join([
         review_text,
         blockers_text,
-        json.dumps(run_state or {}, sort_keys=True),
-        json.dumps(progress or {}, sort_keys=True),
+        json.dumps(run_summary, sort_keys=True),
+        json.dumps(progress_summary, sort_keys=True),
     ]).lower()
     scope = field_value(review_text, "scope")
     resolver = field_value(review_text, "resolver")
@@ -9930,10 +9944,15 @@ def infer_successor_allowed_runner(next_action, route_canonical, queue_request_d
     if isinstance(route_canonical, dict):
         candidates.append(route_canonical.get("preferred_runner"))
         candidates.append("gpu" if str(route_canonical.get("exact_queue_draft_path") or "").strip() else "")
+        step = str(route_canonical.get("current_allowed_step") or "").strip().lower()
+        if any(term in step for term in ("local_workspace_copy", "local-workspace-copy", "workspace_copy", "local copy", "project_local_copy")):
+            candidates.append("cpu")
     if isinstance(next_action, dict):
         text = " ".join(str(next_action.get(key) or "") for key in ("kind", "description", "reason")).lower()
         if "gpu" in text or "queue" in text:
             candidates.append("gpu")
+        elif "local workspace" in text or "project-local" in text or "project local" in text or "local copy" in text:
+            candidates.append("cpu")
         elif "cpu" in text or "smoke" in text or "eval" in text or "probe" in text:
             candidates.append("cpu")
     for candidate in candidates:
@@ -9979,6 +9998,14 @@ def infer_successor_output_paths(task_id, allowed_runner, workspace_mode, queue_
     if allowed_runner in {"cpu", "gpu"}:
         return [f"runs/{slug}/metrics.json"]
     return [f"agent/reports/{slug}.md"]
+
+def infer_successor_allowed_write_paths(task_box, workspace_mode):
+    allowed = task_box.get("allowed_write_paths") if isinstance(task_box, dict) else None
+    if isinstance(allowed, list) and any(str(item or "").strip() for item in allowed):
+        return [str(item).strip() for item in allowed if str(item or "").strip()]
+    if workspace_mode == "project_local_copy":
+        return ["workspace/", "runs/", "agent/status/", "agent/reports/", "agent/task_profiles/"]
+    return ["runs/", "agent/status/", "agent/reports/", "agent/task_profiles/"]
 
 def infer_successor_budget_contract(route_canonical, queue_mode, allowed_runner):
     budget = str((route_canonical or {}).get("current_budget_contract") or "").strip()
@@ -10040,6 +10067,15 @@ def synthesize_successor_task(route_canonical, task_box, next_action, queue_requ
     }
     if workspace_mode == "project_local_copy":
         task["workspace_mode"] = workspace_mode
+        task["kind"] = "local_workspace_copy"
+        task["allowed_write_paths"] = infer_successor_allowed_write_paths(task_box, workspace_mode)
+        task["expected_outputs"] = outputs
+        task["workspace_root"] = f"workspace/{safe_name(task_id)}/"
+    elif allowed_runner == "cpu":
+        task["kind"] = "bounded_cpu_eval"
+        task["expected_outputs"] = outputs
+        task["max_runtime_minutes"] = infer_successor_runtime_minutes(route_canonical, False, allowed_runner)
+        task["budget_contract"] = infer_successor_budget_contract(route_canonical, False, allowed_runner)
     if queue_mode:
         task["kind"] = "queue_enqueue"
         task["queue_target"] = infer_successor_queue_target(task_box, route_canonical)
@@ -10050,7 +10086,10 @@ def synthesize_successor_task(route_canonical, task_box, next_action, queue_requ
     return task
 
 def should_synthesize_successor_profile(task):
-    return isinstance(task, dict) and str(task.get("kind") or "").strip().lower() == "queue_enqueue"
+    if not isinstance(task, dict):
+        return False
+    kind = str(task.get("kind") or "").strip().lower()
+    return kind in {"queue_enqueue", "bounded_cpu_eval", "local_workspace_copy"}
 
 def synthesize_successor_profile_draft(route_canonical, task):
     if not should_synthesize_successor_profile(task):
@@ -10058,6 +10097,30 @@ def synthesize_successor_profile_draft(route_canonical, task):
     task_id = str(task.get("task_id") or "").strip()
     if not task_id:
         return {}
+    kind = str(task.get("kind") or "").strip().lower()
+    if kind == "bounded_cpu_eval":
+        return {
+            "task_id": task_id,
+            "profile_kind": "cpu_followup",
+            "allowed_runner": "cpu",
+            "route_id": str((route_canonical or {}).get("route_id") or ""),
+            "route_epoch": str((route_canonical or {}).get("route_epoch") or ""),
+            "budget_contract": str(task.get("budget_contract") or ""),
+            "max_runtime_minutes": int(task.get("max_runtime_minutes") or 20),
+            "expected_outputs": task.get("expected_outputs") if isinstance(task.get("expected_outputs"), list) else [],
+        }
+    if kind == "local_workspace_copy":
+        return {
+            "task_id": task_id,
+            "profile_kind": "local_workspace_copy",
+            "allowed_runner": str(task.get("allowed_runner") or "").strip().lower() or "cpu",
+            "workspace_mode": "project_local_copy",
+            "workspace_root": str(task.get("workspace_root") or f"workspace/{safe_name(task_id)}/"),
+            "allowed_write_paths": task.get("allowed_write_paths") if isinstance(task.get("allowed_write_paths"), list) else [],
+            "route_id": str((route_canonical or {}).get("route_id") or ""),
+            "route_epoch": str((route_canonical or {}).get("route_epoch") or ""),
+            "expected_outputs": task.get("expected_outputs") if isinstance(task.get("expected_outputs"), list) else [],
+        }
     return {
         "task_id": task_id,
         "profile_kind": "gpu_queue_followup",
@@ -10086,6 +10149,70 @@ def synthesize_successor_queue_request(route_canonical, task_box, task):
         "max_runtime_minutes": int(task.get("max_runtime_minutes") or infer_successor_runtime_minutes(route_canonical, True, str(task.get("allowed_runner") or "").strip().lower() or "gpu")),
         "budget_contract": str(task.get("budget_contract") or infer_successor_budget_contract(route_canonical, True, str(task.get("allowed_runner") or "").strip().lower() or "gpu")),
     }
+
+def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, next_action, existing_state, exact_next_object_path, task_profile_path, queue_request_draft_path, updated, requires_review):
+    state = dict(existing_state) if isinstance(existing_state, dict) else {}
+    tasks = []
+    for raw in task_box.get("tasks", []) if isinstance(task_box, dict) else []:
+        if isinstance(raw, dict) and str(raw.get("task_id") or "").strip():
+            tasks.append(dict(raw))
+    if not tasks and isinstance(successor_task_draft, dict) and str(successor_task_draft.get("task_id") or "").strip():
+        tasks.append(dict(successor_task_draft))
+    if not tasks:
+        fallback_tasks = existing_state.get("tasks") if isinstance(existing_state, dict) else []
+        if isinstance(fallback_tasks, list):
+            tasks = [dict(raw) for raw in fallback_tasks if isinstance(raw, dict) and str(raw.get("task_id") or "").strip()]
+
+    blocked_actions = task_box.get("blocked_actions") if isinstance(task_box, dict) and isinstance(task_box.get("blocked_actions"), list) else state.get("blocked_actions", [])
+    if not isinstance(blocked_actions, list):
+        blocked_actions = []
+
+    important_paths = []
+    for candidate in (
+        *(task.get("expected_outputs", []) for task in tasks if isinstance(task.get("expected_outputs"), list)),
+        *(task.get("outputs", []) for task in tasks if isinstance(task.get("outputs"), list)),
+        [exact_next_object_path] if exact_next_object_path else [],
+        [task_profile_path] if task_profile_path else [],
+        [queue_request_draft_path] if queue_request_draft_path else [],
+        state.get("important_paths", []) if isinstance(state.get("important_paths"), list) else [],
+    ):
+        for item in candidate:
+            text = str(item or "").strip()
+            if text and text not in important_paths:
+                important_paths.append(text)
+
+    mode = str(state.get("mode") or "observer")
+    if any(str(task.get("workspace_mode") or "").strip().lower() == "project_local_copy" for task in tasks):
+        mode = "project-local-worker"
+    elif any(str(task.get("kind") or "").strip().lower() == "queue_enqueue" or str(task.get("allowed_runner") or "").strip().lower() == "gpu" for task in tasks):
+        mode = "gpu-queue-worker"
+    elif any(str(task.get("allowed_runner") or "").strip().lower() == "cpu" for task in tasks):
+        mode = "project-local-worker"
+    elif not tasks:
+        mode = "observer"
+
+    state.update({
+        "schema_version": 1,
+        "updated_utc": updated,
+        "mode": mode,
+        "requires_review": bool((route_canonical or {}).get("requires_review", False) or (task_box or {}).get("requires_review", False) or requires_review),
+        "route_id": (route_canonical or {}).get("route_id") or (task_box or {}).get("route_id") or state.get("route_id"),
+        "route_epoch": (route_canonical or {}).get("route_epoch") or (task_box or {}).get("route_epoch") or state.get("route_epoch"),
+        "active_task_id": (route_canonical or {}).get("exact_next_task_id") or (successor_task_draft or {}).get("task_id") or state.get("active_task_id"),
+        "tasks": tasks,
+        "allowed_next_action": str((next_action or {}).get("kind") or state.get("allowed_next_action") or "report_only"),
+        "blocked_actions": blocked_actions,
+        "important_paths": important_paths,
+        "exact_next_task_id": (route_canonical or {}).get("exact_next_task_id") or (successor_task_draft or {}).get("task_id"),
+        "exact_next_object_path": exact_next_object_path or state.get("exact_next_object_path"),
+        "task_box_id": (task_box or {}).get("task_box_id") or state.get("task_box_id"),
+        "project_question": (task_box or {}).get("project_question") or state.get("project_question"),
+        "decision_relevance": (task_box or {}).get("decision_relevance") or state.get("decision_relevance"),
+        "claim_scope": (task_box or {}).get("claim_scope") or state.get("claim_scope"),
+        "diagnosis_target": (task_box or {}).get("diagnosis_target") or state.get("diagnosis_target"),
+        "derived_from_route_canonical": True,
+    })
+    return state
 
 def write_task_profile_draft(draft, fallback_task_id):
     if not isinstance(draft, dict) or not draft:
@@ -10188,6 +10315,24 @@ if route_canonical_changed and route_canonical:
     atomic_write_json(route_canonical_path, route_canonical)
 if task_box_changed and task_box:
     atomic_write_json(task_box_path, task_box)
+
+try:
+    existing_state = json.loads(Path("agent/STATE.json").read_text())
+except Exception:
+    existing_state = {}
+runtime_state_json = derive_runtime_state_json(
+    route_canonical,
+    task_box,
+    successor_task_draft,
+    next_action,
+    existing_state if isinstance(existing_state, dict) else {},
+    exact_next_object_path,
+    task_profile_path,
+    queue_request_draft_path,
+    updated,
+    bool(data.get("requires_human_review")),
+)
+atomic_write_json("agent/STATE.json", runtime_state_json)
 
 state_update = data.get("state_update_markdown", "").strip()
 if state_update:
@@ -10463,6 +10608,7 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "input_paths": [],
     "output_paths": [
         "agent/reports/latest.md",
+        "agent/STATE.json",
         "agent/CURRENT_STATE.md",
         "agent/RUN_STATE.json",
         "agent/PROGRESS_STATE.json",

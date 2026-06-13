@@ -1234,6 +1234,12 @@ async function main() {
   assert.strictEqual(routeCanonical.exact_next_task_id, "stage06_g1_followup");
   assert.strictEqual(routeCanonical.exact_profile_path, "agent/task_profiles/stage06_g1_followup.json");
   assert.strictEqual(routeCanonical.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
+  const mirroredState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.strictEqual(mirroredState.route_id, "route-new");
+  assert.strictEqual(mirroredState.route_epoch, "route-002");
+  assert.strictEqual(mirroredState.exact_next_task_id, "stage06_g1_followup");
+  assert.strictEqual(mirroredState.exact_next_object_path, "agent/queue/drafts/stage06_g1_followup.json");
+  assert.strictEqual(mirroredState.derived_from_route_canonical, true);
   const taskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
   assert.strictEqual(taskBox.route_id, "route-new");
   assert.strictEqual(taskBox.route_epoch, "route-002");
@@ -1362,10 +1368,155 @@ async function main() {
   assert.strictEqual(autoRouteCanonical.exact_profile_path, "agent/task_profiles/route_auto_gpu_followup.json");
   assert.strictEqual(autoRouteCanonical.exact_queue_draft_path, "agent/queue/drafts/route_auto_gpu_followup.json");
   assert.strictEqual(autoRouteCanonical.exact_next_object_path, "agent/queue/drafts/route_auto_gpu_followup.json");
+  const autoStateMirror = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.strictEqual(autoStateMirror.route_id, "route-auto");
+  assert.strictEqual(autoStateMirror.route_epoch, "route-auto-002");
+  assert.strictEqual(autoStateMirror.exact_next_task_id, "route_auto_gpu_followup");
+  assert.strictEqual(autoStateMirror.exact_next_object_path, "agent/queue/drafts/route_auto_gpu_followup.json");
   route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.task_id, "route_auto_gpu_followup");
   assert.match(route.reason, /exact queue draft already defines queue target, profile, budget, timeout, and expected outputs/i);
+
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: null,
+    next_safe_action: { kind: "none", description: "", reason: "" }
+  });
+  writeJson(projectRoot, "agent/RUN_STATE.json", {
+    schema_version: 1,
+    blocker_type: "none",
+    requires_human_review: false,
+    next_action: { kind: "none", description: "", reason: "" }
+  });
+  writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
+    "# Review Pending",
+    "",
+    "- state: none",
+    "- pending_send: no",
+    "- requires_human_review: false",
+    "- scope: none",
+    "- resolver: none",
+    ""
+  ].join("\n"));
+  writeFile(projectRoot, "agent/BLOCKERS.md", [
+    "# Blockers",
+    "",
+    "Blocker type: none",
+    "- Required: false",
+    ""
+  ].join("\n"));
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "route-local-copy-box",
+    route_id: "route-local-copy",
+    route_epoch: "route-local-copy-001",
+    requires_review: false,
+    allowed_actions: ["local_workspace_copy"],
+    blocked_actions: [],
+    allowed_write_paths: ["workspace/", "runs/", "agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: []
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-local-copy",
+    route_epoch: "route-local-copy-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false,
+    current_allowed_step: "local_workspace_copy"
+  });
+  runRender(projectRoot, {
+    timestamp_utc: "2026-06-08T13:15:00Z",
+    report_markdown: "# Report\n\nAccepted the route shift and auto-created the next local workspace copy successor contract.",
+    overall_status: "active",
+    report_type: "progress",
+    primary_skill: "watchdog-orchestrator",
+    secondary_skills_consulted: [],
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "Accepted the route shift and prepared a project-local copy successor task.",
+    blocked_items: [],
+    completed_items: ["Accepted local workspace successor route"],
+    running_items: [],
+    evidence: ["agent/ROUTE_CANONICAL.json"],
+    progress_changed: true,
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "safe_script_candidate",
+      description: "Create one local workspace copy follow-up and keep shared files untouched.",
+      can_execute_automatically: true,
+      reason: "The route changed and the next bounded step should run inside a project-local workspace copy."
+    },
+    skill_stop_condition: "Materialize one exact local workspace successor contract and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "Runtime state updated for local workspace successor materialization.",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {
+      route_id: "route-local-copy",
+      route_epoch: "route-local-copy-002",
+      owner_mode: "fully_autonomous",
+      requires_review: false,
+      current_allowed_step: "local_workspace_copy",
+      exact_next_task_id: "route_local_copy_followup",
+      successor_contract_required: true
+    },
+    task_box_update: {
+      project_question: "Does one local workspace copy follow-up reduce uncertainty about whether this route should continue?",
+      decision_relevance: "A positive result keeps the route alive; a negative one demotes it.",
+      claim_scope: "local_workspace_adapter",
+      diagnosis_target: "successor local-workspace viability",
+      fair_comparability: {
+        same_family_or_not: "same_family",
+        same_budget_or_not: "same_budget",
+        same_training_contract_or_not: "same_training_contract",
+        same_eval_contract_or_not: "same_eval_contract"
+      },
+      value_of_information: {
+        expected_information_gain: "medium",
+        decision_change_if_positive: "Keep the route alive for one more bounded local adaptation cycle.",
+        decision_change_if_negative: "Demote the route and choose a replacement.",
+        cheaper_alternative_exists: false
+      }
+    }
+  });
+  const localCopyDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "NEXT_TASK_DRAFT.json"), "utf8"));
+  assert.strictEqual(localCopyDraft.task_id, "route_local_copy_followup");
+  assert.strictEqual(localCopyDraft.kind, "local_workspace_copy");
+  assert.strictEqual(localCopyDraft.workspace_mode, "project_local_copy");
+  assert.strictEqual(localCopyDraft.workspace_root, "workspace/route_local_copy_followup/");
+  assert.deepStrictEqual(localCopyDraft.expected_outputs, ["workspace/route_local_copy_followup/", "agent/reports/route_local_copy_followup.md"]);
+  const localCopyProfile = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "task_profiles", "route_local_copy_followup.json"), "utf8"));
+  assert.strictEqual(localCopyProfile.profile_kind, "local_workspace_copy");
+  assert.strictEqual(localCopyProfile.workspace_mode, "project_local_copy");
+  assert.strictEqual(localCopyProfile.workspace_root, "workspace/route_local_copy_followup/");
+  const localCopyRouteCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
+  assert.strictEqual(localCopyRouteCanonical.exact_profile_path, "agent/task_profiles/route_local_copy_followup.json");
+  assert.strictEqual(localCopyRouteCanonical.exact_next_object_path, "agent/task_profiles/route_local_copy_followup.json");
+  const localCopyStateMirror = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.strictEqual(localCopyStateMirror.mode, "project-local-worker");
+  assert.strictEqual(localCopyStateMirror.exact_next_task_id, "route_local_copy_followup");
+  assert.strictEqual(localCopyStateMirror.exact_next_object_path, "agent/task_profiles/route_local_copy_followup.json");
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.task_id, "route_local_copy_followup");
+  assert.match(route.reason, /bounded local_workspace_copy step/i);
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
@@ -1474,20 +1625,28 @@ async function main() {
   const fallbackDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "NEXT_TASK_DRAFT.json"), "utf8"));
   assert.strictEqual(fallbackDraft.task_id, "route_fallback_cpu_followup");
   assert.strictEqual(fallbackDraft.allowed_runner, "cpu");
+  assert.strictEqual(fallbackDraft.kind, "bounded_cpu_eval");
+  assert.strictEqual(fallbackDraft.budget_contract, "one bounded cpu follow-up");
   assert.strictEqual(fallbackDraft.successor_contract_inferred, true);
   const fallbackRouteCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
   assert.strictEqual(fallbackRouteCanonical.route_epoch, "route-fallback-002");
   assert.strictEqual(fallbackRouteCanonical.successor_contract_required, false);
-  assert.strictEqual(fallbackRouteCanonical.exact_next_object_path, "agent/status/NEXT_TASK_DRAFT.json");
+  assert.strictEqual(fallbackRouteCanonical.exact_profile_path, "agent/task_profiles/route_fallback_cpu_followup.json");
+  assert.strictEqual(fallbackRouteCanonical.exact_next_object_path, "agent/task_profiles/route_fallback_cpu_followup.json");
+  const fallbackProfile = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "task_profiles", "route_fallback_cpu_followup.json"), "utf8"));
+  assert.strictEqual(fallbackProfile.profile_kind, "cpu_followup");
   const fallbackTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
   assert.strictEqual(fallbackTaskBox.project_question, "Does the CPU follow-up reduce uncertainty about whether this route should continue?");
   assert.ok(fallbackTaskBox.tasks.some((task) => task.task_id === "route_fallback_cpu_followup"));
   const fallbackCurrentState = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
   assert.match(fallbackCurrentState, /Project question: Does the CPU follow-up reduce uncertainty/i);
-  assert.match(fallbackCurrentState, /Exact next object: agent\/status\/NEXT_TASK_DRAFT\.json/);
+  assert.match(fallbackCurrentState, /Exact next object: agent\/task_profiles\/route_fallback_cpu_followup\.json/);
   const fallbackNextAction = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
   assert.match(fallbackNextAction, /Decision relevance: A positive result keeps the route alive/i);
   assert.match(fallbackNextAction, /Claim scope: bounded_cpu_diagnostic/);
+  const fallbackStateMirror = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.strictEqual(fallbackStateMirror.exact_next_task_id, "route_fallback_cpu_followup");
+  assert.strictEqual(fallbackStateMirror.exact_next_object_path, "agent/task_profiles/route_fallback_cpu_followup.json");
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
     task_box_id: "post-fallback-cleanup-box",
