@@ -9,6 +9,7 @@ const crypto = require("crypto");
 const cp = require("child_process");
 const packageMetadata = require("./package.json");
 const { createGuardLifecycle } = require("./guardLifecycle");
+const { createProjectRootManager } = require("./projectRootManager");
 const { createProjectSetupHelpers } = require("./projectSetup");
 const { createBootstrapWorkflowHelpers } = require("./bootstrapWorkflow");
 const { createGeneratedFilesHelpers } = require("./generatedFiles");
@@ -54,6 +55,7 @@ let projectSetupHelpers;
 let bootstrapWorkflowHelpers;
 let generatedFilesHelpers;
 let bootstrapScaffoldingHelpers;
+let projectRootManager;
 let controlPanelStateHelpers;
 let controlPanelMessageHandler;
 let controlPanelController;
@@ -88,6 +90,29 @@ function getProjectSetupHelpers() {
     });
   }
   return projectSetupHelpers;
+}
+
+function getProjectRootManager() {
+  if (!projectRootManager) {
+    projectRootManager = createProjectRootManager({
+      vscode,
+      fs,
+      path,
+      os,
+      projectRootKey: PROJECT_ROOT_KEY,
+      getExtensionContext: () => extensionContext,
+      output,
+      updateStatusBar: () => updateStatusBar(),
+      extensionSetting,
+      expandHome,
+      isExistingDirectory,
+      isSafeProjectRootPath,
+      validateProjectRootPath,
+      ensureDir,
+      requireExistingDirectory
+    });
+  }
+  return projectRootManager;
 }
 
 function taskLooksInstantiated(root) {
@@ -537,15 +562,7 @@ async function clearPanelOperationState() {
 }
 
 function getKnownProjectRoot() {
-  const configured = expandHome(extensionSetting("projectRoot", ""));
-  if (configured && isExistingDirectory(configured) && isSafeProjectRootPath(configured)) {
-    return configured;
-  }
-  const remembered = extensionContext && extensionContext.globalState.get(PROJECT_ROOT_KEY);
-  if (remembered && isExistingDirectory(remembered) && isSafeProjectRootPath(remembered)) {
-    return remembered;
-  }
-  return "";
+  return getProjectRootManager().getKnownProjectRoot();
 }
 
 function createNonce() {
@@ -1105,178 +1122,31 @@ async function isEffectivelyEmptyDir(root) {
 }
 
 function getWorkspaceRoot() {
-  const folders = vscode.workspace.workspaceFolders;
-  if (!folders || folders.length === 0) {
-    throw new Error("Open a project folder first.");
-  }
-  return folders[0].uri.fsPath;
-}
-
-function getDefaultRootUri() {
-  const configured = expandHome(extensionSetting("projectRoot", ""));
-  if (configured && isExistingDirectory(configured) && isSafeProjectRootPath(configured)) {
-    return vscode.Uri.file(configured);
-  }
-  const remembered = extensionContext && extensionContext.globalState.get(PROJECT_ROOT_KEY);
-  if (remembered && isExistingDirectory(remembered) && isSafeProjectRootPath(remembered)) {
-    return vscode.Uri.file(remembered);
-  }
-  const folders = vscode.workspace.workspaceFolders;
-  if (folders && folders.length > 0) {
-    return folders[0].uri;
-  }
-  return vscode.Uri.file(os.homedir());
-}
-
-function getDefaultRootInputValue() {
-  const configured = expandHome(extensionSetting("projectRoot", ""));
-  if (configured && isSafeProjectRootPath(configured)) {
-    return configured;
-  }
-  const folders = vscode.workspace.workspaceFolders;
-  if (folders && folders.length > 0 && isSafeProjectRootPath(folders[0].uri.fsPath)) {
-    return folders[0].uri.fsPath;
-  }
-  return path.join(os.homedir(), "codex-watchdog-project");
+  return getProjectRootManager().getWorkspaceRoot();
 }
 
 async function selectProjectRoot(title) {
-  const defaultRoot = getDefaultRootInputValue();
-  const value = await vscode.window.showInputBox({
-    title,
-    prompt: "Enter an absolute Linux folder path. If it does not exist, Codex Watchdog can create it.",
-    placeHolder: "/home/you/project",
-    value: defaultRoot,
-    ignoreFocusOut: true,
-    validateInput: (raw) => {
-      const expanded = expandHome(String(raw || "").trim());
-      if (!expanded) {
-        return "Enter a project folder path.";
-      }
-      if (!path.isAbsolute(expanded)) {
-        return "Use an absolute Linux path, or ~/...";
-      }
-      try {
-        validateProjectRootPath(expanded);
-      } catch (error) {
-        return error.message || String(error);
-      }
-      return undefined;
-    }
-  });
-  return normalizeProjectRootInput(value, "Selected project root", { offerCreate: true });
+  return getProjectRootManager().selectProjectRoot(title);
 }
 
 async function browseExistingProjectRoot(title, raw) {
-  const selected = await vscode.window.showOpenDialog({
-    title,
-    openLabel: "Select Folder",
-    defaultUri: getBrowseDefaultUri(raw),
-    canSelectFiles: false,
-    canSelectFolders: true,
-    canSelectMany: false
-  });
-  if (!selected || selected.length === 0) {
-    return undefined;
-  }
-  return requireExistingDirectory(selected[0].fsPath, "Selected project root");
-}
-
-function getBrowseDefaultUri(raw) {
-  const expanded = expandHome(String(raw || "").trim());
-  if (expanded && isExistingDirectory(expanded) && isSafeProjectRootPath(expanded)) {
-    return vscode.Uri.file(expanded);
-  }
-  if (expanded && path.isAbsolute(expanded)) {
-    let parent = path.dirname(expanded);
-    while (parent && parent !== path.dirname(parent)) {
-      if (isExistingDirectory(parent) && isSafeProjectRootPath(parent)) {
-        return vscode.Uri.file(parent);
-      }
-      parent = path.dirname(parent);
-    }
-  }
-  return getDefaultRootUri();
+  return getProjectRootManager().browseExistingProjectRoot(title, raw);
 }
 
 async function normalizeProjectRootInput(raw, label, options = {}) {
-  const root = expandHome(String(raw || "").trim());
-  if (!root) {
-    return undefined;
-  }
-  validateProjectRootPath(root);
-  if (!path.isAbsolute(root)) {
-    throw new Error(`${label} must be an absolute Linux path: ${root}`);
-  }
-  if (!fs.existsSync(root)) {
-    if (!options.offerCreate) {
-      throw new Error(`${label} does not exist: ${root}`);
-    }
-    if (options.confirmCreate !== false) {
-      const answer = await vscode.window.showWarningMessage(
-        `${label} does not exist. Create it?\n${root}`,
-        "Create Folder",
-        "Cancel"
-      );
-      if (answer !== "Create Folder") {
-        return undefined;
-      }
-    }
-    await ensureDir(root);
-  }
-  return requireExistingDirectory(root, label);
+  return getProjectRootManager().normalizeProjectRootInput(raw, label, options);
 }
 
 async function getProjectRoot() {
-  const configured = expandHome(extensionSetting("projectRoot", ""));
-  if (configured) {
-    return normalizeProjectRootInput(configured, "Configured codexWatchdog.projectRoot", { offerCreate: true });
-  }
-
-	  const remembered = extensionContext && extensionContext.globalState.get(PROJECT_ROOT_KEY);
-	  if (remembered && fs.existsSync(remembered)) {
-	    return requireExistingDirectory(remembered, "Remembered Codex Watchdog project root");
-	  }
-
-  const folders = vscode.workspace.workspaceFolders;
-  if (folders && folders.length > 0) {
-    const root = folders[0].uri.fsPath;
-    const answer = await vscode.window.showInformationMessage(
-      `No Codex Watchdog project root is selected. Use current workspace folder?\n${root}`,
-      "Use Workspace",
-      "Choose Folder"
-    );
-	    if (answer === "Use Workspace") {
-	      const safeRoot = requireExistingDirectory(root, "Workspace folder");
-	      await rememberProjectRoot(safeRoot);
-	      return safeRoot;
-	    }
-  }
-
-  const selected = await selectProjectRoot("Enter the project folder Codex Watchdog should control");
-  if (!selected) {
-    return undefined;
-  }
-  await rememberProjectRoot(selected);
-  return selected;
+  return getProjectRootManager().getProjectRoot();
 }
 
 async function rememberProjectRoot(root) {
-  if (!extensionContext) {
-    return;
-  }
-  await extensionContext.globalState.update(PROJECT_ROOT_KEY, root);
-  output.appendLine(`Selected project root: ${root}`);
-  await updateStatusBar();
+  await getProjectRootManager().rememberProjectRoot(root);
 }
 
 async function clearRememberedProjectRoot() {
-  if (!extensionContext) {
-    return;
-  }
-  await extensionContext.globalState.update(PROJECT_ROOT_KEY, undefined);
-  output.appendLine("Cleared remembered Codex Watchdog project root.");
-  await updateStatusBar();
+  await getProjectRootManager().clearRememberedProjectRoot();
 }
 
 function config() {
