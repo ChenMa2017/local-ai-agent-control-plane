@@ -592,6 +592,34 @@ async function main() {
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "task_box_cpu_probe");
   assert.match(route.reason, /TASK_BOX\.json/);
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "observer",
+    requires_review: false,
+    route_id: "route-autonomy",
+    route_epoch: "route-001",
+    tasks: [
+      {
+        task_id: "stale_state_report_only_task",
+        status: "pending",
+        allowed_runner: "report_only",
+        description: "Old state task that should not outrank TASK_BOX."
+      }
+    ],
+    blocked_actions: [],
+    important_paths: []
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "task_box_cpu_probe");
+  assert.match(route.reason, /TASK_BOX\.json/);
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "observer",
+    requires_review: false,
+    tasks: []
+  });
   writeFile(projectRoot, "agent/REVIEW_PENDING.md", [
     "# Review Pending",
     "",
@@ -861,6 +889,57 @@ async function main() {
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "controlled_queue_enqueue");
   assert.match(route.reason, /Autonomous queue policy allows one controlled queue enqueue/);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "queue-enqueue-from-draft-box",
+    route_id: "route-queue-enqueue-from-draft",
+    route_epoch: "route-queue-enqueue-from-draft-001",
+    requires_review: false,
+    allowed_actions: ["queue_enqueue"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/queue/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: true
+    },
+    tasks: [
+      {
+        task_id: "controlled_queue_enqueue_from_exact_draft",
+        status: "pending",
+        allowed_runner: "gpu",
+        title: "Enqueue exactly one bounded GPU task into the controlled queue."
+      }
+    ]
+  });
+  writeJson(projectRoot, "agent/queue/drafts/controlled_queue_enqueue_from_exact_draft.json", {
+    task_id: "controlled_queue_enqueue_from_exact_draft",
+    queue_target: "gpu_queue",
+    command_profile: "stage06_g1_profile_exact",
+    expected_outputs: ["runs/stage06_g1_exact/metrics.json"],
+    max_runtime_minutes: 35,
+    budget_contract: "one bounded queue job"
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-queue-enqueue-from-draft",
+    route_epoch: "route-queue-enqueue-from-draft-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false,
+    exact_next_task_id: "controlled_queue_enqueue_from_exact_draft",
+    exact_queue_draft_path: "agent/queue/drafts/controlled_queue_enqueue_from_exact_draft.json"
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-queue-enqueue-from-draft-001"
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "controlled_queue_enqueue_from_exact_draft");
+  assert.match(route.reason, /exact queue draft already defines queue target, profile, budget, timeout, and expected outputs/i);
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
@@ -1295,6 +1374,35 @@ async function main() {
   const fallbackNextAction = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
   assert.match(fallbackNextAction, /Decision relevance: A positive result keeps the route alive/i);
   assert.match(fallbackNextAction, /Claim scope: bounded_cpu_diagnostic/);
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "post-fallback-cleanup-box",
+    route_id: "route-clean",
+    route_epoch: "route-clean-001",
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: []
+  });
+  writeJson(projectRoot, "agent/status/NEXT_TASK_DRAFT.json", {
+    task_id: "cleared_next_task_draft",
+    status: "done",
+    allowed_runner: "cpu",
+    summary: "Cleared after fallback successor assertions so later tests can provide their own runnable task source."
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-clean",
+    route_epoch: "route-clean-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
   writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
     no_progress_cycles: 0,
     recommend_pause: false,

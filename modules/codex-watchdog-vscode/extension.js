@@ -8288,15 +8288,15 @@ def next_task_draft_pending_task(next_task_draft, route_canonical):
     return [task]
 
 def preferred_pending_tasks(state, task_box, next_task_draft, route_canonical):
-    state_tasks = pending_tasks(state)
-    if state_tasks:
-        return state_tasks, "STATE.json"
     task_box_tasks = task_box_pending_tasks(task_box)
     if task_box_tasks:
         return task_box_tasks, "TASK_BOX.json"
     draft_tasks = next_task_draft_pending_task(next_task_draft, route_canonical)
     if draft_tasks:
         return draft_tasks, "NEXT_TASK_DRAFT.json"
+    state_tasks = pending_tasks(state)
+    if state_tasks:
+        return state_tasks, "STATE.json"
     return [], ""
 
 def route_epoch_mismatch(route_canonical, state, progress, run_state):
@@ -8881,6 +8881,21 @@ def successor_contract_gap(route_canonical, next_task_draft):
     draft_task = str((next_task_draft or {}).get("task_id") or "").strip() if isinstance(next_task_draft, dict) else ""
     return not any((exact_task, exact_profile, exact_queue, exact_object, draft_task))
 
+def load_exact_queue_draft(route_canonical):
+    if not isinstance(route_canonical, dict):
+        return {}
+    rel_path = str(route_canonical.get("exact_queue_draft_path") or "").strip()
+    if not rel_path:
+        return {}
+    target = ROOT / rel_path
+    if not target.exists() or not target.is_file():
+        return {}
+    try:
+        data = json.loads(target.read_text())
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
 def conditional_queue_enqueue_allowed(task, task_box, route_canonical):
     if classify_task_capability(task) != "queue_enqueue":
         return False, ""
@@ -8890,11 +8905,32 @@ def conditional_queue_enqueue_allowed(task, task_box, route_canonical):
     if task_research_gate_gaps(task, task_box, route_canonical):
         return False, ""
 
-    queue_target = str(task.get("queue_target") or task.get("queue_name") or task.get("queue") or "").strip()
-    command_profile = str(task.get("command_profile") or task.get("task_profile") or task.get("profile_path") or "").strip()
+    queue_draft = load_exact_queue_draft(route_canonical)
+    queue_target = str(
+        task.get("queue_target")
+        or task.get("queue_name")
+        or task.get("queue")
+        or queue_draft.get("queue_target")
+        or queue_draft.get("queue_name")
+        or queue_draft.get("queue")
+        or ""
+    ).strip()
+    command_profile = str(
+        task.get("command_profile")
+        or task.get("task_profile")
+        or task.get("profile_path")
+        or queue_draft.get("command_profile")
+        or queue_draft.get("task_profile")
+        or queue_draft.get("profile_path")
+        or ""
+    ).strip()
     budget_contract = str(task.get("budget_contract") or policy.get("budget_contract") or (route_canonical.get("current_budget_contract") if isinstance(route_canonical, dict) else "") or "").strip()
+    if not budget_contract:
+        budget_contract = str(queue_draft.get("budget_contract") or "").strip()
     expected_outputs = task.get("expected_outputs") if isinstance(task.get("expected_outputs"), list) else task.get("outputs")
-    timeout_value = task.get("max_runtime_minutes") or task.get("timeout_minutes")
+    if not isinstance(expected_outputs, list):
+        expected_outputs = queue_draft.get("expected_outputs") if isinstance(queue_draft.get("expected_outputs"), list) else queue_draft.get("outputs")
+    timeout_value = task.get("max_runtime_minutes") or task.get("timeout_minutes") or queue_draft.get("max_runtime_minutes") or queue_draft.get("timeout_minutes")
 
     if not queue_target or not command_profile or not budget_contract or not expected_outputs or not timeout_value:
         return False, ""
@@ -8906,6 +8942,8 @@ def conditional_queue_enqueue_allowed(task, task_box, route_canonical):
     rejection = supervisor_policy_rejection(queue_only_policy, "queue_enqueue", text)
     if rejection:
         return False, ""
+    if queue_draft:
+        return True, "Autonomous queue policy allows one controlled queue enqueue because the exact queue draft already defines queue target, profile, budget, timeout, and expected outputs."
     return True, "Autonomous queue policy allows one controlled queue enqueue because exact queue target, profile, budget, timeout, and expected outputs are all defined."
 
 def local_unblock_reason(state, task_box, route_canonical, run_state=None, progress=None):

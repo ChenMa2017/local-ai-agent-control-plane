@@ -1317,38 +1317,48 @@ def make_task_contract(
 
 def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
     objective = str(contract.get("objective") or "")
+    decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
+    gate_required = bool(decision_gate.get("required"))
+    gate_blocking = bool(decision_gate.get("blocking"))
+    gate_status = "blocked" if gate_blocking else ("required_ready" if gate_required else "not_required")
     if objective == "report_only":
         return {
             "schema_version": 1,
             "intake_id": contract["intake_id"],
-            "status": "ready",
+            "status": "blocked" if gate_blocking else "ready",
             "allowed_runner": "report_only",
             "workspace_mode": "readonly",
             "allowed_write_paths": [],
             "blocked_actions": contract.get("blocked_actions", []),
             "summary": "Report-only clarification result; no execution side effects.",
+            "experiment_decision_gate": decision_gate,
+            "experiment_gate_status": gate_status,
         }
     if objective == "bounded_cpu_eval":
         return {
             "schema_version": 1,
             "intake_id": contract["intake_id"],
-            "status": "ready",
+            "status": "blocked" if gate_blocking else "ready",
             "allowed_runner": "cpu",
             "workspace_mode": "readonly",
             "allowed_write_paths": ["runs/<task_id>/", "agent/status/", "agent/reports/"],
             "blocked_actions": contract.get("blocked_actions", []),
-            "summary": "Bounded CPU evaluation or smoke-check task.",
+            "summary": "Bounded CPU evaluation or smoke-check task." if not gate_blocking else "Bounded CPU evaluation draft exists, but experiment decisions are still unresolved.",
+            "experiment_decision_gate": decision_gate,
+            "experiment_gate_status": gate_status,
         }
     if objective == "local_workspace_copy":
         return {
             "schema_version": 1,
             "intake_id": contract["intake_id"],
-            "status": "ready",
+            "status": "blocked" if gate_blocking else "ready",
             "allowed_runner": "cpu",
             "workspace_mode": "project_local_copy",
             "allowed_write_paths": contract.get("write_scope", []),
             "blocked_actions": contract.get("blocked_actions", []),
-            "summary": "Project-local copy task; shared files remain protected.",
+            "summary": "Project-local copy task; shared files remain protected." if not gate_blocking else "Project-local copy draft exists, but experiment decisions are still unresolved.",
+            "experiment_decision_gate": decision_gate,
+            "experiment_gate_status": gate_status,
         }
     return {
         "schema_version": 1,
@@ -1359,6 +1369,8 @@ def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
         "allowed_write_paths": [],
         "blocked_actions": contract.get("blocked_actions", []),
         "summary": "High-risk or nondelegable task; requires human approval before execution.",
+        "experiment_decision_gate": decision_gate,
+        "experiment_gate_status": gate_status,
     }
 
 
