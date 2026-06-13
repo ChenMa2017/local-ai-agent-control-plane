@@ -8984,6 +8984,106 @@ def load_exact_queue_draft(route_canonical):
         return {}
     return data if isinstance(data, dict) else {}
 
+def infer_experiment_gate_status(route_canonical, task_box):
+    for source in (task_box, route_canonical):
+        if not isinstance(source, dict):
+            continue
+        gate = source.get("experiment_decision_gate")
+        if isinstance(gate, dict):
+            if gate.get("blocking") is True:
+                return "blocked"
+            if gate.get("required") is True:
+                return "required_ready"
+            if gate:
+                return "not_required"
+        if source.get("experiment_decision_gate_blocking") is True:
+            return "blocked"
+        if source.get("experiment_decision_gate_required") is True:
+            return "required_ready"
+        status = str(source.get("experiment_gate_status") or "").strip()
+        if status:
+            return status
+    return "not_required"
+
+def load_exact_profile_draft(route_canonical):
+    if not isinstance(route_canonical, dict):
+        return {}
+    rel_path = str(route_canonical.get("exact_profile_path") or "").strip()
+    if not rel_path:
+        return {}
+    target = ROOT / rel_path
+    if not target.exists() or not target.is_file():
+        return {}
+    try:
+        data = json.loads(target.read_text())
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+def exact_profile_followup_allowed(task, task_box, route_canonical):
+    capability = classify_task_capability(task)
+    if capability not in {"bounded_cpu_eval", "local_workspace_copy"}:
+        return False, ""
+    if infer_experiment_gate_status(route_canonical, task_box) == "blocked":
+        return False, ""
+    if task_research_gate_gaps(task, task_box, route_canonical):
+        return False, ""
+
+    profile = load_exact_profile_draft(route_canonical)
+    if not profile:
+        return False, ""
+
+    exact_task_id = str(route_canonical.get("exact_next_task_id") or "").strip() if isinstance(route_canonical, dict) else ""
+    profile_task_id = str(profile.get("task_id") or "").strip()
+    task_id = str(task.get("task_id") or "").strip()
+    if exact_task_id and profile_task_id and profile_task_id != exact_task_id:
+        return False, ""
+    if exact_task_id and task_id and task_id != exact_task_id:
+        return False, ""
+
+    budget_contract = str(
+        task.get("budget_contract")
+        or profile.get("budget_contract")
+        or (route_canonical.get("current_budget_contract") if isinstance(route_canonical, dict) else "")
+        or ""
+    ).strip()
+    timeout_value = (
+        task.get("max_runtime_minutes")
+        or task.get("timeout_minutes")
+        or profile.get("max_runtime_minutes")
+        or profile.get("timeout_minutes")
+    )
+    expected_outputs = task.get("expected_outputs") if isinstance(task.get("expected_outputs"), list) else task.get("outputs")
+    if not isinstance(expected_outputs, list):
+        expected_outputs = profile.get("expected_outputs") if isinstance(profile.get("expected_outputs"), list) else profile.get("outputs")
+
+    if capability == "bounded_cpu_eval":
+        profile_kind = str(profile.get("profile_kind") or "").strip().lower()
+        allowed_runner = str(profile.get("allowed_runner") or task.get("allowed_runner") or "").strip().lower()
+        if profile_kind not in {"cpu_followup", "bounded_cpu_eval"}:
+            return False, ""
+        if allowed_runner and allowed_runner != "cpu":
+            return False, ""
+        if not budget_contract or not timeout_value or not isinstance(expected_outputs, list) or not any(str(item or "").strip() for item in expected_outputs):
+            return False, ""
+        return True, "Autonomous route allows one bounded CPU follow-up because the exact profile already defines budget, timeout, and expected outputs."
+
+    profile_kind = str(profile.get("profile_kind") or "").strip().lower()
+    workspace_mode = str(profile.get("workspace_mode") or task.get("workspace_mode") or "").strip().lower()
+    workspace_root = str(profile.get("workspace_root") or task.get("workspace_root") or "").strip()
+    allowed_write_paths = profile.get("allowed_write_paths") if isinstance(profile.get("allowed_write_paths"), list) else task.get("allowed_write_paths")
+    if profile_kind != "local_workspace_copy":
+        return False, ""
+    if workspace_mode not in {"project_local_copy", "local_workspace_copy"}:
+        return False, ""
+    if not workspace_root:
+        return False, ""
+    if not isinstance(allowed_write_paths, list) or not any(str(item or "").strip() for item in allowed_write_paths):
+        return False, ""
+    if not budget_contract or not timeout_value or not isinstance(expected_outputs, list) or not any(str(item or "").strip() for item in expected_outputs):
+        return False, ""
+    return True, "Autonomous route allows one bounded local workspace follow-up because the exact profile already defines workspace root, write paths, budget, timeout, and expected outputs."
+
 def conditional_queue_enqueue_allowed(task, task_box, route_canonical):
     if classify_task_capability(task) != "queue_enqueue":
         return False, ""
@@ -9074,6 +9174,9 @@ def local_unblock_reason(state, task_box, route_canonical, run_state=None, progr
     mismatch = route_epoch_mismatch(route_canonical, state, progress or {}, run_state or {})
     if mismatch:
         return "state_reconcile", mismatch
+
+    if autonomous and infer_experiment_gate_status(route_canonical, task_box) == "blocked" and str(route_canonical.get("exact_next_task_id") or "").strip():
+        return "state_reconcile", "Experiment decision gate is explicitly blocked; keep the exact successor contract synchronized, but do not execute the successor until the gate clears."
 
     if autonomous and isinstance(state, dict) and state.get("requires_review") is True:
         return "state_reconcile", "Canonical autonomy says requires_review=false but STATE.json still says requires_review=true; reconcile the stale derived state locally."
@@ -9382,6 +9485,18 @@ def route():
                             "primary_skill": "watchdog-orchestrator",
                             "reason": f"{len(pending)} pending task(s) exist in {pending_source}; queue enqueue is not yet executable, so prepare the exact queue/profile draft locally and refresh NEXT_ACTION instead of stalling.",
                             "stop_condition": "Author or repair exactly one local queue draft/profile package, do not enqueue yet, refresh compact state, and stop.",
+                            "permission_guardian_required": False,
+                            "permission_guardian_result": "not_required",
+                            "route_locked": True,
+                            "task_id": task.get("task_id")
+                        }
+                if capability in {"bounded_cpu_eval", "local_workspace_copy"}:
+                    profile_allowed, profile_reason = exact_profile_followup_allowed(task, task_box, route_canonical)
+                    if profile_allowed:
+                        return {
+                            "primary_skill": "watchdog-orchestrator",
+                            "reason": f"{len(pending)} pending task(s) exist in {pending_source}; {profile_reason}",
+                            "stop_condition": "Execute or prepare exactly one bounded local follow-up inside the exact profile contract, refresh compact state, and stop.",
                             "permission_guardian_required": False,
                             "permission_guardian_result": "not_required",
                             "route_locked": True,
@@ -10251,6 +10366,8 @@ def synthesize_successor_task(route_canonical, task_box, next_action, queue_requ
         task["allowed_write_paths"] = infer_successor_allowed_write_paths(task_box, workspace_mode)
         task["expected_outputs"] = outputs
         task["workspace_root"] = f"workspace/{safe_name(task_id)}/"
+        task["max_runtime_minutes"] = infer_successor_runtime_minutes(route_canonical, False, "cpu")
+        task["budget_contract"] = infer_successor_budget_contract(route_canonical, False, "cpu")
     elif allowed_runner == "cpu":
         task["kind"] = "bounded_cpu_eval"
         task["expected_outputs"] = outputs
@@ -10299,6 +10416,8 @@ def synthesize_successor_profile_draft(route_canonical, task):
             "allowed_write_paths": task.get("allowed_write_paths") if isinstance(task.get("allowed_write_paths"), list) else [],
             "route_id": str((route_canonical or {}).get("route_id") or ""),
             "route_epoch": str((route_canonical or {}).get("route_epoch") or ""),
+            "budget_contract": str(task.get("budget_contract") or ""),
+            "max_runtime_minutes": int(task.get("max_runtime_minutes") or 20),
             "expected_outputs": task.get("expected_outputs") if isinstance(task.get("expected_outputs"), list) else [],
         }
     return {

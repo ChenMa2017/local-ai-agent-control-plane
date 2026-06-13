@@ -1532,11 +1532,15 @@ async function main() {
   assert.strictEqual(localCopyDraft.kind, "local_workspace_copy");
   assert.strictEqual(localCopyDraft.workspace_mode, "project_local_copy");
   assert.strictEqual(localCopyDraft.workspace_root, "workspace/route_local_copy_followup/");
+  assert.strictEqual(localCopyDraft.max_runtime_minutes, 20);
+  assert.strictEqual(localCopyDraft.budget_contract, "one bounded cpu follow-up");
   assert.deepStrictEqual(localCopyDraft.expected_outputs, ["workspace/route_local_copy_followup/", "agent/reports/route_local_copy_followup.md"]);
   const localCopyProfile = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "task_profiles", "route_local_copy_followup.json"), "utf8"));
   assert.strictEqual(localCopyProfile.profile_kind, "local_workspace_copy");
   assert.strictEqual(localCopyProfile.workspace_mode, "project_local_copy");
   assert.strictEqual(localCopyProfile.workspace_root, "workspace/route_local_copy_followup/");
+  assert.strictEqual(localCopyProfile.max_runtime_minutes, 20);
+  assert.strictEqual(localCopyProfile.budget_contract, "one bounded cpu follow-up");
   const localCopyRouteCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
   assert.strictEqual(localCopyRouteCanonical.exact_profile_path, "agent/task_profiles/route_local_copy_followup.json");
   assert.strictEqual(localCopyRouteCanonical.exact_next_object_path, "agent/task_profiles/route_local_copy_followup.json");
@@ -1555,7 +1559,7 @@ async function main() {
   route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.task_id, "route_local_copy_followup");
-  assert.match(route.reason, /bounded local_workspace_copy step/i);
+  assert.match(route.reason, /exact profile already defines workspace root, write paths, budget, timeout, and expected outputs/i);
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
@@ -1695,6 +1699,10 @@ async function main() {
   assert.strictEqual(fallbackStateMirror.required_successor_exactness, "profile_exact");
   assert.strictEqual(fallbackStateMirror.successor_materialization_status, "profile_exact");
   assert.strictEqual(fallbackStateMirror.exact_next_object_path, "agent/task_profiles/route_fallback_cpu_followup.json");
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.task_id, "route_fallback_cpu_followup");
+  assert.match(route.reason, /exact profile already defines budget, timeout, and expected outputs/i);
   runRender(projectRoot, {
     timestamp_utc: "2026-06-11T12:10:00Z",
     report_markdown: "# Report\n\nThe route is still blocked by the experiment decision gate, so successor materialization must stay pending.",
@@ -1775,6 +1783,10 @@ async function main() {
   assert.match(gateBlockedNextAction, /Required successor exactness: queue_exact/);
   assert.match(gateBlockedNextAction, /Successor materialization status: blocked_by_experiment_gate/);
   assert.match(gateBlockedNextAction, /Experiment gate status: blocked/);
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.match(route.reason, /experiment decision gate is explicitly blocked/i);
+  assert.doesNotMatch(route.reason, /exact queue draft already defines/i);
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
     task_box_id: "post-fallback-cleanup-box",
