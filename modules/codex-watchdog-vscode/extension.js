@@ -8367,14 +8367,94 @@ def next_task_draft_pending_task(next_task_draft, route_canonical):
         return []
     return [task]
 
+def canonical_exact_pending_task(route_canonical):
+    if not isinstance(route_canonical, dict):
+        return []
+    exact_task_id = str(route_canonical.get("exact_next_task_id") or "").strip()
+    if not exact_task_id:
+        return []
+
+    queue_draft = load_exact_queue_draft(route_canonical)
+    if queue_draft:
+        return [{
+            "task_id": exact_task_id,
+            "status": "pending",
+            "allowed_runner": str(queue_draft.get("runner") or "gpu").strip().lower() or "gpu",
+            "kind": "queue_enqueue",
+            "queue_target": str(queue_draft.get("queue_target") or "").strip(),
+            "command_profile": str(queue_draft.get("command_profile") or "").strip(),
+            "expected_outputs": queue_draft.get("expected_outputs") if isinstance(queue_draft.get("expected_outputs"), list) else [],
+            "max_runtime_minutes": queue_draft.get("max_runtime_minutes"),
+            "budget_contract": str(queue_draft.get("budget_contract") or "").strip(),
+            "derived_from_route_canonical": True,
+        }]
+
+    profile = load_exact_profile_draft(route_canonical)
+    if not profile:
+        return []
+
+    profile_kind = str(profile.get("profile_kind") or "").strip().lower()
+    task = {
+        "task_id": exact_task_id,
+        "status": "pending",
+        "allowed_runner": str(profile.get("allowed_runner") or "cpu").strip().lower() or "cpu",
+        "derived_from_route_canonical": True,
+    }
+    if profile_kind == "local_workspace_copy":
+        task.update({
+            "kind": "local_workspace_copy",
+            "workspace_mode": str(profile.get("workspace_mode") or "project_local_copy"),
+            "workspace_root": str(profile.get("workspace_root") or f"workspace/{safe_name(exact_task_id)}/"),
+            "allowed_write_paths": profile.get("allowed_write_paths") if isinstance(profile.get("allowed_write_paths"), list) else [],
+            "expected_outputs": profile.get("expected_outputs") if isinstance(profile.get("expected_outputs"), list) else [],
+            "max_runtime_minutes": profile.get("max_runtime_minutes"),
+            "budget_contract": str(profile.get("budget_contract") or "").strip(),
+        })
+        return [task]
+    if profile_kind in {"cpu_followup", "bounded_cpu_eval"}:
+        task.update({
+            "kind": "bounded_cpu_eval",
+            "expected_outputs": profile.get("expected_outputs") if isinstance(profile.get("expected_outputs"), list) else [],
+            "max_runtime_minutes": profile.get("max_runtime_minutes"),
+            "budget_contract": str(profile.get("budget_contract") or "").strip(),
+        })
+        return [task]
+    if profile_kind == "gpu_queue_followup":
+        task.update({
+            "kind": "queue_enqueue",
+            "queue_target": "gpu_queue",
+            "command_profile": str(profile.get("command_profile") or safe_name(exact_task_id)),
+            "expected_outputs": profile.get("expected_outputs") if isinstance(profile.get("expected_outputs"), list) else [],
+        })
+        return [task]
+    return []
+
+def matching_pending_tasks(tasks, exact_task_id):
+    if not exact_task_id:
+        return tasks
+    return [
+        task for task in tasks
+        if isinstance(task, dict) and str(task.get("task_id") or "").strip() == exact_task_id
+    ]
+
 def preferred_pending_tasks(state, task_box, next_task_draft, route_canonical):
+    exact_task_id = str(route_canonical.get("exact_next_task_id") or "").strip() if isinstance(route_canonical, dict) else ""
+    canonical_tasks = canonical_exact_pending_task(route_canonical)
     task_box_tasks = task_box_pending_tasks(task_box)
-    if task_box_tasks:
-        return task_box_tasks, "TASK_BOX.json"
+    task_box_matches = matching_pending_tasks(task_box_tasks, exact_task_id)
+    if task_box_matches:
+        return task_box_matches, "TASK_BOX.json"
     draft_tasks = next_task_draft_pending_task(next_task_draft, route_canonical)
     if draft_tasks:
         return draft_tasks, "NEXT_TASK_DRAFT.json"
+    if canonical_tasks:
+        return canonical_tasks, "ROUTE_CANONICAL.json"
     state_tasks = pending_tasks(state)
+    state_matches = matching_pending_tasks(state_tasks, exact_task_id)
+    if state_matches:
+        return state_matches, "STATE.json"
+    if task_box_tasks:
+        return task_box_tasks, "TASK_BOX.json"
     if state_tasks:
         return state_tasks, "STATE.json"
     return [], ""
@@ -8764,7 +8844,7 @@ def safe_autonomous_capability(capability):
         "bounded_cpu_eval",
     }
 
-def route_task_lookup(state, task_box, next_task_draft):
+def route_task_lookup(state, task_box, next_task_draft, route_canonical):
     candidates = []
     state_tasks = state.get("tasks") if isinstance(state, dict) else []
     if isinstance(state_tasks, list):
@@ -8780,6 +8860,7 @@ def route_task_lookup(state, task_box, next_task_draft):
             candidates.append(task)
     if isinstance(next_task_draft, dict) and str(next_task_draft.get("task_id") or "").strip():
         candidates.append(dict(next_task_draft))
+    candidates.extend(canonical_exact_pending_task(route_canonical))
     by_id = {}
     for task in candidates:
         task_id = str(task.get("task_id") or "").strip()
@@ -8796,7 +8877,7 @@ def route_capability_from_result(result, role, supervisor_mode, state, task_box,
         if marker in reason:
             capability = reason.split(marker, 1)[1].split(".", 1)[0].strip().strip(" ,)")
             return normalize_capability(capability)
-    lookup = route_task_lookup(state, task_box, next_task_draft)
+    lookup = route_task_lookup(state, task_box, next_task_draft, route_canonical)
     task_id = str(result.get("task_id") or "").strip()
     if task_id and task_id in lookup:
         return classify_task_capability(lookup[task_id])
@@ -9174,6 +9255,18 @@ def local_unblock_reason(state, task_box, route_canonical, run_state=None, progr
     mismatch = route_epoch_mismatch(route_canonical, state, progress or {}, run_state or {})
     if mismatch:
         return "state_reconcile", mismatch
+
+    exact_task_id = str((route_canonical or {}).get("exact_next_task_id") or "").strip()
+    if autonomous and exact_task_id:
+        task_box_ids = [str(task.get("task_id") or "").strip() for task in task_box_pending_tasks(task_box)]
+        state_ids = [str(task.get("task_id") or "").strip() for task in pending_tasks(state)]
+        draft_id = str(load_next_task_draft(ROOT).get("task_id") or "").strip()
+        if task_box_ids and exact_task_id not in task_box_ids:
+            return "state_reconcile", f"Canonical route exact_next_task_id={exact_task_id} but TASK_BOX.json pending tasks still point at {', '.join(task_box_ids)}; reconcile derived task mirrors before continuing."
+        if draft_id and draft_id != exact_task_id:
+            return "state_reconcile", f"Canonical route exact_next_task_id={exact_task_id} but NEXT_TASK_DRAFT.json still points at {draft_id}; reconcile derived task mirrors before continuing."
+        if state_ids and exact_task_id not in state_ids:
+            return "state_reconcile", f"Canonical route exact_next_task_id={exact_task_id} but STATE.json pending tasks still point at {', '.join(state_ids)}; reconcile derived task mirrors before continuing."
 
     if autonomous and infer_experiment_gate_status(route_canonical, task_box) == "blocked" and str(route_canonical.get("exact_next_task_id") or "").strip():
         return "state_reconcile", "Experiment decision gate is explicitly blocked; keep the exact successor contract synchronized, but do not execute the successor until the gate clears."

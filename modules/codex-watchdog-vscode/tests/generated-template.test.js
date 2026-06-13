@@ -756,6 +756,9 @@ async function main() {
     requires_review: false,
     allowed_actions: ["bounded_cpu_eval"],
     blocked_actions: [],
+    forbidden_conclusions: [
+      "Do not treat this exact CPU follow-up as a project-level superiority claim."
+    ],
     allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
     queue_policy: {
       gpu: "queue_only",
@@ -823,6 +826,9 @@ async function main() {
     requires_review: false,
     allowed_actions: ["bounded_cpu_eval"],
     blocked_actions: [],
+    forbidden_conclusions: [
+      "Do not treat this exact CPU follow-up as a project-level superiority claim."
+    ],
     allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
     queue_policy: {
       gpu: "queue_only",
@@ -1577,6 +1583,9 @@ async function main() {
     requires_review: false,
     allowed_actions: ["bounded_cpu_eval"],
     blocked_actions: [],
+    forbidden_conclusions: [
+      "Do not treat this exact CPU follow-up as a project-level superiority claim."
+    ],
     allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
     queue_policy: {
       gpu: "queue_only",
@@ -1787,6 +1796,293 @@ async function main() {
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.match(route.reason, /experiment decision gate is explicitly blocked/i);
   assert.doesNotMatch(route.reason, /exact queue draft already defines/i);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "canonical-only-box",
+    route_id: "route-canonical-only",
+    route_epoch: "route-canonical-only-001",
+    project_question: "Does one exact CPU follow-up decide whether this route continues?",
+    decision_relevance: "A positive result keeps the route alive; a negative one retires it.",
+    claim_scope: "bounded_cpu_diagnostic",
+    diagnosis_target: "canonical successor viability",
+    fair_comparability: {
+      same_family_or_not: "same_family",
+      same_budget_or_not: "same_budget",
+      same_training_contract_or_not: "same_training_contract",
+      same_eval_contract_or_not: "same_eval_contract"
+    },
+    value_of_information: {
+      expected_information_gain: "medium",
+      decision_change_if_positive: "Continue the route.",
+      decision_change_if_negative: "Retire the route.",
+      cheaper_alternative_exists: false
+    },
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    forbidden_conclusions: [
+      "Do not treat this exact CPU follow-up as a project-level superiority claim."
+    ],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: []
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-canonical-only",
+    route_epoch: "route-canonical-only-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false,
+    current_allowed_step: "cpu_followup",
+    exact_next_task_id: "canonical_cpu_only_followup",
+    exact_profile_path: "agent/task_profiles/canonical_cpu_only_followup.json",
+    exact_next_object_path: "agent/task_profiles/canonical_cpu_only_followup.json",
+    required_successor_exactness: "profile_exact",
+    successor_materialization_status: "profile_exact",
+    experiment_gate_status: "not_required"
+  });
+  writeJson(projectRoot, "agent/task_profiles/canonical_cpu_only_followup.json", {
+    task_id: "canonical_cpu_only_followup",
+    profile_kind: "cpu_followup",
+    allowed_runner: "cpu",
+    budget_contract: "one bounded cpu follow-up",
+    max_runtime_minutes: 15,
+    expected_outputs: ["runs/canonical_cpu_only_followup/metrics.json"]
+  });
+  writeJson(projectRoot, "agent/status/NEXT_TASK_DRAFT.json", {});
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [],
+    blocked_actions: [],
+    important_paths: ["agent/ROUTE_CANONICAL.json", "agent/TASK_BOX.json"]
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-canonical-only-001"
+  });
+  writeJson(projectRoot, "agent/RUN_STATE.json", {
+    schema_version: 1,
+    blocker_type: "none",
+    requires_human_review: false,
+    route_epoch: "route-canonical-only-001",
+    next_action: { kind: "none", description: "", reason: "" }
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.task_id, "canonical_cpu_only_followup");
+  assert.match(route.reason, /exact profile already defines budget, timeout, and expected outputs/i);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "canonical-local-copy-box",
+    route_id: "route-canonical-local-copy",
+    route_epoch: "route-canonical-local-copy-001",
+    project_question: "Does one exact local workspace copy follow-up decide whether this route continues?",
+    decision_relevance: "A positive result keeps the route alive; a negative one retires it.",
+    claim_scope: "local_workspace_adapter",
+    diagnosis_target: "canonical local-workspace successor viability",
+    fair_comparability: {
+      same_family_or_not: "same_family",
+      same_budget_or_not: "same_budget",
+      same_training_contract_or_not: "same_training_contract",
+      same_eval_contract_or_not: "same_eval_contract"
+    },
+    value_of_information: {
+      expected_information_gain: "medium",
+      decision_change_if_positive: "Continue the route.",
+      decision_change_if_negative: "Retire the route.",
+      cheaper_alternative_exists: false
+    },
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["local_workspace_copy"],
+    blocked_actions: [],
+    forbidden_conclusions: [
+      "Do not treat this local workspace copy follow-up as a project-level superiority claim."
+    ],
+    allowed_write_paths: ["workspace/", "runs/", "agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: []
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-canonical-local-copy",
+    route_epoch: "route-canonical-local-copy-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false,
+    current_allowed_step: "local_workspace_copy",
+    exact_next_task_id: "canonical_local_workspace_followup",
+    exact_profile_path: "agent/task_profiles/canonical_local_workspace_followup.json",
+    exact_next_object_path: "agent/task_profiles/canonical_local_workspace_followup.json",
+    required_successor_exactness: "profile_exact",
+    successor_materialization_status: "profile_exact",
+    experiment_gate_status: "not_required"
+  });
+  writeJson(projectRoot, "agent/task_profiles/canonical_local_workspace_followup.json", {
+    task_id: "canonical_local_workspace_followup",
+    profile_kind: "local_workspace_copy",
+    allowed_runner: "cpu",
+    workspace_mode: "project_local_copy",
+    workspace_root: "workspace/canonical_local_workspace_followup/",
+    allowed_write_paths: ["workspace/canonical_local_workspace_followup/", "agent/status/", "agent/reports/"],
+    budget_contract: "one bounded local workspace follow-up",
+    max_runtime_minutes: 20,
+    expected_outputs: [
+      "workspace/canonical_local_workspace_followup/",
+      "agent/reports/canonical_local_workspace_followup.md"
+    ]
+  });
+  writeJson(projectRoot, "agent/status/NEXT_TASK_DRAFT.json", {});
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [],
+    blocked_actions: [],
+    important_paths: ["agent/ROUTE_CANONICAL.json", "agent/TASK_BOX.json"]
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-canonical-local-copy-001"
+  });
+  writeJson(projectRoot, "agent/RUN_STATE.json", {
+    schema_version: 1,
+    blocker_type: "none",
+    requires_human_review: false,
+    route_epoch: "route-canonical-local-copy-001",
+    next_action: { kind: "none", description: "", reason: "" }
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.task_id, "canonical_local_workspace_followup");
+  assert.match(route.reason, /exact profile already defines workspace root, write paths, budget, timeout, and expected outputs/i);
+
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-canonical-only",
+    route_epoch: "route-canonical-only-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false,
+    current_allowed_step: "cpu_followup",
+    exact_next_task_id: "canonical_cpu_only_followup",
+    exact_profile_path: "agent/task_profiles/canonical_cpu_only_followup.json",
+    exact_next_object_path: "agent/task_profiles/canonical_cpu_only_followup.json",
+    required_successor_exactness: "profile_exact",
+    successor_materialization_status: "profile_exact",
+    experiment_gate_status: "not_required"
+  });
+  writeJson(projectRoot, "agent/task_profiles/canonical_cpu_only_followup.json", {
+    task_id: "canonical_cpu_only_followup",
+    profile_kind: "cpu_followup",
+    allowed_runner: "cpu",
+    budget_contract: "one bounded cpu follow-up",
+    max_runtime_minutes: 15,
+    expected_outputs: ["runs/canonical_cpu_only_followup/metrics.json"]
+  });
+  writeJson(projectRoot, "agent/status/NEXT_TASK_DRAFT.json", {});
+  writeJson(projectRoot, "agent/STATE.json", {
+    schema_version: 1,
+    mode: "project-local-worker",
+    requires_review: false,
+    tasks: [],
+    blocked_actions: [],
+    important_paths: ["agent/ROUTE_CANONICAL.json", "agent/TASK_BOX.json"]
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-canonical-only-001"
+  });
+  writeJson(projectRoot, "agent/RUN_STATE.json", {
+    schema_version: 1,
+    blocker_type: "none",
+    requires_human_review: false,
+    route_epoch: "route-canonical-only-001",
+    next_action: { kind: "none", description: "", reason: "" }
+  });
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "canonical-drift-box",
+    route_id: "route-canonical-only",
+    route_epoch: "route-canonical-only-001",
+    project_question: "Does one exact CPU follow-up decide whether this route continues?",
+    decision_relevance: "A positive result keeps the route alive; a negative one retires it.",
+    claim_scope: "bounded_cpu_diagnostic",
+    diagnosis_target: "canonical successor viability",
+    fair_comparability: {
+      same_family_or_not: "same_family",
+      same_budget_or_not: "same_budget",
+      same_training_contract_or_not: "same_training_contract",
+      same_eval_contract_or_not: "same_eval_contract"
+    },
+    value_of_information: {
+      expected_information_gain: "medium",
+      decision_change_if_positive: "Continue the route.",
+      decision_change_if_negative: "Retire the route.",
+      cheaper_alternative_exists: false
+    },
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    forbidden_conclusions: [
+      "Do not treat this exact CPU follow-up as a project-level superiority claim."
+    ],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: [
+      {
+        task_id: "stale_old_cpu_followup",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "This stale task should be reconciled away."
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.task_id, "canonical_cpu_only_followup");
+  assert.match(route.reason, /TASK_BOX\.json pending tasks still point at stale_old_cpu_followup/i);
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
     task_box_id: "post-fallback-cleanup-box",
