@@ -10689,6 +10689,53 @@ def synthesize_successor_queue_request(route_canonical, task_box, task):
         "budget_contract": str(task.get("budget_contract") or infer_successor_budget_contract(route_canonical, True, str(task.get("allowed_runner") or "").strip().lower() or "gpu")),
     }
 
+def rehydrate_successor_task_from_exact_contract(route_canonical, task_box, next_action, task_profile_draft, queue_request_draft):
+    if not isinstance(route_canonical, dict):
+        return {}
+    exact_next_task_id = str(route_canonical.get("exact_next_task_id") or "").strip()
+    if not exact_next_task_id:
+        return {}
+    required_exactness = str(route_canonical.get("required_successor_exactness") or "").strip().lower()
+    if required_exactness == "missing":
+        return {}
+
+    def load_exact_object(rel_path):
+        rel_path = str(rel_path or "").strip()
+        if not rel_path:
+            return {}
+        target = Path(rel_path)
+        if not target.exists() or not target.is_file():
+            return {}
+        try:
+            payload = json.loads(target.read_text())
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    loaded_profile = {}
+    if isinstance(task_profile_draft, dict) and str(task_profile_draft.get("task_id") or "").strip() == exact_next_task_id:
+        loaded_profile = dict(task_profile_draft)
+    else:
+        loaded_profile = load_exact_object(route_canonical.get("exact_profile_path"))
+
+    loaded_queue = {}
+    if isinstance(queue_request_draft, dict) and str(queue_request_draft.get("task_id") or "").strip() == exact_next_task_id:
+        loaded_queue = dict(queue_request_draft)
+    else:
+        loaded_queue = load_exact_object(route_canonical.get("exact_queue_draft_path"))
+
+    if required_exactness == "queue_exact" and not loaded_queue:
+        return {}
+    if required_exactness == "profile_exact" and not loaded_profile:
+        return {}
+
+    task = synthesize_successor_task(route_canonical, task_box, next_action, loaded_queue, loaded_profile)
+    if not isinstance(task, dict) or not str(task.get("task_id") or "").strip():
+        return {}
+    task["task_id"] = exact_next_task_id
+    task["exact_contract_rehydrated"] = True
+    return task
+
 def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, next_action, route_task_id, existing_state, exact_next_object_path, task_profile_path, queue_request_draft_path, updated, requires_review):
     state = dict(existing_state) if isinstance(existing_state, dict) else {}
     tasks = []
@@ -10841,6 +10888,15 @@ initial_experiment_gate_status = infer_experiment_gate_status(route_canonical, t
 
 if not successor_task_draft and route_canonical.get("successor_contract_required") is True and initial_experiment_gate_status != "blocked":
     successor_task_draft = synthesize_successor_task(route_canonical, task_box, next_action, queue_request_draft, task_profile_draft)
+
+if not successor_task_draft and initial_experiment_gate_status != "blocked":
+    successor_task_draft = rehydrate_successor_task_from_exact_contract(
+        route_canonical,
+        task_box,
+        next_action,
+        task_profile_draft,
+        queue_request_draft,
+    )
 
 if not task_profile_draft and should_synthesize_successor_profile(successor_task_draft) and initial_experiment_gate_status != "blocked":
     task_profile_draft = synthesize_successor_profile_draft(route_canonical, successor_task_draft)

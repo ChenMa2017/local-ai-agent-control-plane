@@ -2030,6 +2030,52 @@ async function main() {
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.task_id, "canonical_cpu_only_followup");
   assert.match(route.reason, /exact profile already defines budget, timeout, and expected outputs/i);
+  runRender(projectRoot, {
+    timestamp_utc: "2026-06-13T08:00:00Z",
+    report_markdown: "# Report\n\nCanonical CPU successor is already exact and should be rehydrated into an explicit runnable object.",
+    overall_status: "active",
+    report_type: "progress",
+    primary_skill: "watchdog-orchestrator",
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "Recovered the canonical CPU exact successor into an explicit next task draft.",
+    blocked_items: [],
+    completed_items: ["Recovered exact CPU successor object"],
+    running_items: [],
+    evidence: ["agent/ROUTE_CANONICAL.json", "agent/task_profiles/canonical_cpu_only_followup.json"],
+    progress_changed: true,
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "state_reconcile",
+      description: "Keep the canonical CPU successor explicit in local derived files.",
+      can_execute_automatically: true,
+      reason: "The exact CPU contract already exists and should stay materialized as a runnable bounded task."
+    },
+    skill_stop_condition: "Rehydrate one canonical CPU successor object and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {},
+    task_box_update: {}
+  });
+  const canonicalCpuDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "NEXT_TASK_DRAFT.json"), "utf8"));
+  assert.strictEqual(canonicalCpuDraft.task_id, "canonical_cpu_only_followup");
+  assert.strictEqual(canonicalCpuDraft.kind, "bounded_cpu_eval");
+  assert.strictEqual(canonicalCpuDraft.exact_contract_rehydrated, true);
+  const canonicalCpuTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
+  assert.ok(canonicalCpuTaskBox.tasks.some((task) => task.task_id === "canonical_cpu_only_followup"));
+  const canonicalCpuState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.ok(canonicalCpuState.tasks.some((task) => task.task_id === "canonical_cpu_only_followup"));
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
@@ -2127,6 +2173,52 @@ async function main() {
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.task_id, "canonical_local_workspace_followup");
   assert.match(route.reason, /exact profile already defines workspace root, write paths, budget, timeout, and expected outputs/i);
+  runRender(projectRoot, {
+    timestamp_utc: "2026-06-13T08:05:00Z",
+    report_markdown: "# Report\n\nCanonical local-workspace successor is already exact and should be rehydrated into an explicit runnable object.",
+    overall_status: "active",
+    report_type: "progress",
+    primary_skill: "watchdog-orchestrator",
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "Recovered the canonical local-workspace exact successor into an explicit next task draft.",
+    blocked_items: [],
+    completed_items: ["Recovered exact local-workspace successor object"],
+    running_items: [],
+    evidence: ["agent/ROUTE_CANONICAL.json", "agent/task_profiles/canonical_local_workspace_followup.json"],
+    progress_changed: true,
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "state_reconcile",
+      description: "Keep the canonical local-workspace successor explicit in local derived files.",
+      can_execute_automatically: true,
+      reason: "The exact local-workspace contract already exists and should stay materialized as a runnable bounded task."
+    },
+    skill_stop_condition: "Rehydrate one canonical local-workspace successor object and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {},
+    task_box_update: {}
+  });
+  const canonicalLocalDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "NEXT_TASK_DRAFT.json"), "utf8"));
+  assert.strictEqual(canonicalLocalDraft.task_id, "canonical_local_workspace_followup");
+  assert.strictEqual(canonicalLocalDraft.kind, "local_workspace_copy");
+  assert.strictEqual(canonicalLocalDraft.exact_contract_rehydrated, true);
+  const canonicalLocalTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
+  assert.ok(canonicalLocalTaskBox.tasks.some((task) => task.task_id === "canonical_local_workspace_followup"));
+  const canonicalLocalState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.ok(canonicalLocalState.tasks.some((task) => task.task_id === "canonical_local_workspace_followup"));
 
   writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
     schema_version: 1,
