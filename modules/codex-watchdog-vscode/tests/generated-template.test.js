@@ -1234,22 +1234,48 @@ async function main() {
   assert.strictEqual(routeCanonical.exact_next_task_id, "stage06_g1_followup");
   assert.strictEqual(routeCanonical.exact_profile_path, "agent/task_profiles/stage06_g1_followup.json");
   assert.strictEqual(routeCanonical.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
+  assert.strictEqual(routeCanonical.required_successor_exactness, "queue_exact");
+  assert.strictEqual(routeCanonical.successor_materialization_status, "queue_exact");
+  assert.strictEqual(routeCanonical.experiment_gate_status, "not_required");
   const mirroredState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
   assert.strictEqual(mirroredState.route_id, "route-new");
   assert.strictEqual(mirroredState.route_epoch, "route-002");
   assert.strictEqual(mirroredState.exact_next_task_id, "stage06_g1_followup");
+  assert.strictEqual(mirroredState.exact_profile_path, "agent/task_profiles/stage06_g1_followup.json");
+  assert.strictEqual(mirroredState.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
   assert.strictEqual(mirroredState.exact_next_object_path, "agent/queue/drafts/stage06_g1_followup.json");
+  assert.strictEqual(mirroredState.required_successor_exactness, "queue_exact");
+  assert.strictEqual(mirroredState.successor_materialization_status, "queue_exact");
+  assert.strictEqual(mirroredState.experiment_gate_status, "not_required");
   assert.strictEqual(mirroredState.derived_from_route_canonical, true);
   const taskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
   assert.strictEqual(taskBox.route_id, "route-new");
   assert.strictEqual(taskBox.route_epoch, "route-002");
+  assert.strictEqual(taskBox.exact_profile_path, "agent/task_profiles/stage06_g1_followup.json");
+  assert.strictEqual(taskBox.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
+  assert.strictEqual(taskBox.required_successor_exactness, "queue_exact");
+  assert.strictEqual(taskBox.successor_materialization_status, "queue_exact");
   assert.ok(taskBox.tasks.some((task) => task.task_id === "stage06_g1_followup"));
+  const queueProgressState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "PROGRESS_STATE.json"), "utf8"));
+  assert.strictEqual(queueProgressState.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
+  assert.strictEqual(queueProgressState.required_successor_exactness, "queue_exact");
+  assert.strictEqual(queueProgressState.successor_materialization_status, "queue_exact");
+  const queueRunState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "RUN_STATE.json"), "utf8"));
+  assert.strictEqual(queueRunState.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
+  assert.strictEqual(queueRunState.required_successor_exactness, "queue_exact");
+  assert.strictEqual(queueRunState.successor_materialization_status, "queue_exact");
   const nextActionText = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
   assert.match(nextActionText, /Exact next task: stage06_g1_followup/);
+  assert.match(nextActionText, /Exact profile path: agent\/task_profiles\/stage06_g1_followup\.json/);
+  assert.match(nextActionText, /Exact queue draft path: agent\/queue\/drafts\/stage06_g1_followup\.json/);
+  assert.match(nextActionText, /Required successor exactness: queue_exact/);
+  assert.match(nextActionText, /Successor materialization status: queue_exact/);
   assert.match(nextActionText, /Exact object path: agent\/queue\/drafts\/stage06_g1_followup\.json/);
   const currentStateText = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
   assert.match(currentStateText, /Route ID: route-new/);
   assert.match(currentStateText, /Secondary skills: research-comparability/);
+  assert.match(currentStateText, /Exact queue draft path: agent\/queue\/drafts\/stage06_g1_followup\.json/);
+  assert.match(currentStateText, /Required successor exactness: queue_exact/);
   assert.match(currentStateText, /Exact next object: agent\/queue\/drafts\/stage06_g1_followup\.json/);
   const evidenceLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
   const latestLedgerEntry = JSON.parse(evidenceLedgerLines[evidenceLedgerLines.length - 1]);
@@ -1368,10 +1394,15 @@ async function main() {
   assert.strictEqual(autoRouteCanonical.exact_profile_path, "agent/task_profiles/route_auto_gpu_followup.json");
   assert.strictEqual(autoRouteCanonical.exact_queue_draft_path, "agent/queue/drafts/route_auto_gpu_followup.json");
   assert.strictEqual(autoRouteCanonical.exact_next_object_path, "agent/queue/drafts/route_auto_gpu_followup.json");
+  assert.strictEqual(autoRouteCanonical.required_successor_exactness, "queue_exact");
+  assert.strictEqual(autoRouteCanonical.successor_materialization_status, "queue_exact");
   const autoStateMirror = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
   assert.strictEqual(autoStateMirror.route_id, "route-auto");
   assert.strictEqual(autoStateMirror.route_epoch, "route-auto-002");
   assert.strictEqual(autoStateMirror.exact_next_task_id, "route_auto_gpu_followup");
+  assert.strictEqual(autoStateMirror.exact_queue_draft_path, "agent/queue/drafts/route_auto_gpu_followup.json");
+  assert.strictEqual(autoStateMirror.required_successor_exactness, "queue_exact");
+  assert.strictEqual(autoStateMirror.successor_materialization_status, "queue_exact");
   assert.strictEqual(autoStateMirror.exact_next_object_path, "agent/queue/drafts/route_auto_gpu_followup.json");
   route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
@@ -1509,10 +1540,18 @@ async function main() {
   const localCopyRouteCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
   assert.strictEqual(localCopyRouteCanonical.exact_profile_path, "agent/task_profiles/route_local_copy_followup.json");
   assert.strictEqual(localCopyRouteCanonical.exact_next_object_path, "agent/task_profiles/route_local_copy_followup.json");
+  assert.strictEqual(localCopyRouteCanonical.required_successor_exactness, "profile_exact");
+  assert.strictEqual(localCopyRouteCanonical.successor_materialization_status, "profile_exact");
   const localCopyStateMirror = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
   assert.strictEqual(localCopyStateMirror.mode, "project-local-worker");
   assert.strictEqual(localCopyStateMirror.exact_next_task_id, "route_local_copy_followup");
+  assert.strictEqual(localCopyStateMirror.exact_profile_path, "agent/task_profiles/route_local_copy_followup.json");
+  assert.strictEqual(localCopyStateMirror.required_successor_exactness, "profile_exact");
+  assert.strictEqual(localCopyStateMirror.successor_materialization_status, "profile_exact");
   assert.strictEqual(localCopyStateMirror.exact_next_object_path, "agent/task_profiles/route_local_copy_followup.json");
+  const localCopyNextAction = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
+  assert.match(localCopyNextAction, /Exact profile path: agent\/task_profiles\/route_local_copy_followup\.json/);
+  assert.match(localCopyNextAction, /Required successor exactness: profile_exact/);
   route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.task_id, "route_local_copy_followup");
@@ -1633,6 +1672,8 @@ async function main() {
   assert.strictEqual(fallbackRouteCanonical.successor_contract_required, false);
   assert.strictEqual(fallbackRouteCanonical.exact_profile_path, "agent/task_profiles/route_fallback_cpu_followup.json");
   assert.strictEqual(fallbackRouteCanonical.exact_next_object_path, "agent/task_profiles/route_fallback_cpu_followup.json");
+  assert.strictEqual(fallbackRouteCanonical.required_successor_exactness, "profile_exact");
+  assert.strictEqual(fallbackRouteCanonical.successor_materialization_status, "profile_exact");
   const fallbackProfile = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "task_profiles", "route_fallback_cpu_followup.json"), "utf8"));
   assert.strictEqual(fallbackProfile.profile_kind, "cpu_followup");
   const fallbackTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
@@ -1640,13 +1681,100 @@ async function main() {
   assert.ok(fallbackTaskBox.tasks.some((task) => task.task_id === "route_fallback_cpu_followup"));
   const fallbackCurrentState = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
   assert.match(fallbackCurrentState, /Project question: Does the CPU follow-up reduce uncertainty/i);
+  assert.match(fallbackCurrentState, /Exact profile path: agent\/task_profiles\/route_fallback_cpu_followup\.json/);
+  assert.match(fallbackCurrentState, /Required successor exactness: profile_exact/);
   assert.match(fallbackCurrentState, /Exact next object: agent\/task_profiles\/route_fallback_cpu_followup\.json/);
   const fallbackNextAction = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
+  assert.match(fallbackNextAction, /Exact profile path: agent\/task_profiles\/route_fallback_cpu_followup\.json/);
+  assert.match(fallbackNextAction, /Successor materialization status: profile_exact/);
   assert.match(fallbackNextAction, /Decision relevance: A positive result keeps the route alive/i);
   assert.match(fallbackNextAction, /Claim scope: bounded_cpu_diagnostic/);
   const fallbackStateMirror = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
   assert.strictEqual(fallbackStateMirror.exact_next_task_id, "route_fallback_cpu_followup");
+  assert.strictEqual(fallbackStateMirror.exact_profile_path, "agent/task_profiles/route_fallback_cpu_followup.json");
+  assert.strictEqual(fallbackStateMirror.required_successor_exactness, "profile_exact");
+  assert.strictEqual(fallbackStateMirror.successor_materialization_status, "profile_exact");
   assert.strictEqual(fallbackStateMirror.exact_next_object_path, "agent/task_profiles/route_fallback_cpu_followup.json");
+  runRender(projectRoot, {
+    timestamp_utc: "2026-06-11T12:10:00Z",
+    report_markdown: "# Report\n\nThe route is still blocked by the experiment decision gate, so successor materialization must stay pending.",
+    overall_status: "blocked",
+    report_type: "progress",
+    primary_skill: "watchdog-orchestrator",
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "The experiment gate is explicit, but the next successor should not materialize beyond the gate boundary yet.",
+    blocked_items: ["experiment_decision_gate_required"],
+    completed_items: [],
+    running_items: [],
+    evidence: ["agent/ROUTE_CANONICAL.json", "agent/TASK_BOX.json"],
+    progress_changed: false,
+    no_progress_cycles: 1,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "state_reconcile",
+      description: "Keep the route contract explicit while waiting for the experiment decision gate to clear.",
+      can_execute_automatically: true,
+      reason: "The gate is defined, but successor materialization must remain blocked until the gate decision is ready."
+    },
+    skill_stop_condition: "Record the gate-blocked successor state and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {
+      route_id: "route-fallback",
+      route_epoch: "route-fallback-003",
+      owner_mode: "fully_autonomous",
+      requires_review: false,
+      current_allowed_step: "queue_enqueue",
+      exact_next_task_id: "route_fallback_gpu_after_gate",
+      successor_contract_required: true,
+      experiment_decision_gate: {
+        required: true,
+        blocking: true
+      }
+    },
+    task_box_update: {
+      project_question: "Does the gate-clearing experiment justify queueing the next GPU follow-up?",
+      decision_relevance: "Only after the gate clears should the queue successor become exact.",
+      claim_scope: "gate_blocked_successor",
+      diagnosis_target: "experiment gate readiness",
+      experiment_decision_gate: {
+        required: true,
+        blocking: true
+      }
+    }
+  });
+  const gateBlockedRoute = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
+  assert.strictEqual(gateBlockedRoute.required_successor_exactness, "queue_exact");
+  assert.strictEqual(gateBlockedRoute.experiment_gate_status, "blocked");
+  assert.strictEqual(gateBlockedRoute.successor_materialization_status, "blocked_by_experiment_gate");
+  const gateBlockedTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
+  assert.strictEqual(gateBlockedTaskBox.experiment_gate_status, "blocked");
+  assert.strictEqual(gateBlockedTaskBox.successor_materialization_status, "blocked_by_experiment_gate");
+  const gateBlockedState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.strictEqual(gateBlockedState.required_successor_exactness, "queue_exact");
+  assert.strictEqual(gateBlockedState.experiment_gate_status, "blocked");
+  assert.strictEqual(gateBlockedState.successor_materialization_status, "blocked_by_experiment_gate");
+  const gateBlockedProgress = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "PROGRESS_STATE.json"), "utf8"));
+  assert.strictEqual(gateBlockedProgress.experiment_gate_status, "blocked");
+  assert.strictEqual(gateBlockedProgress.successor_materialization_status, "blocked_by_experiment_gate");
+  const gateBlockedRunState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "RUN_STATE.json"), "utf8"));
+  assert.strictEqual(gateBlockedRunState.experiment_gate_status, "blocked");
+  assert.strictEqual(gateBlockedRunState.successor_materialization_status, "blocked_by_experiment_gate");
+  const gateBlockedNextAction = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
+  assert.match(gateBlockedNextAction, /Required successor exactness: queue_exact/);
+  assert.match(gateBlockedNextAction, /Successor materialization status: blocked_by_experiment_gate/);
+  assert.match(gateBlockedNextAction, /Experiment gate status: blocked/);
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
     task_box_id: "post-fallback-cleanup-box",

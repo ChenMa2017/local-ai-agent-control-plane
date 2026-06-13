@@ -4786,6 +4786,17 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     latest_gate_result: null,
     allowed_next_action: "report_only",
     blocked_actions: [],
+    exact_next_task_id: null,
+    exact_profile_path: null,
+    exact_queue_draft_path: null,
+    exact_next_object_path: null,
+    required_successor_exactness: "task_only",
+    successor_materialization_status: "missing",
+    experiment_gate_status: "not_required",
+    experiment_decision_gate_required: false,
+    experiment_decision_gate_blocking: false,
+    owner_mode: "fully_autonomous",
+    current_allowed_step: "bootstrap",
     important_paths: [
       "agent/PLAN.md",
       "agent/TODO.md",
@@ -4802,7 +4813,18 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     recommend_pause: false,
     route_id: "bootstrap-route",
     route_epoch: "bootstrap-000",
-    task_box_id: "bootstrap-taskbox"
+    task_box_id: "bootstrap-taskbox",
+    exact_next_task_id: null,
+    exact_profile_path: null,
+    exact_queue_draft_path: null,
+    exact_next_object_path: null,
+    required_successor_exactness: "task_only",
+    successor_materialization_status: "missing",
+    experiment_gate_status: "not_required",
+    experiment_decision_gate_required: false,
+    experiment_decision_gate_blocking: false,
+    owner_mode: "fully_autonomous",
+    current_allowed_step: "bootstrap"
   }, null, 2) + "\n",
 
   taskBoxJson: () => JSON.stringify({
@@ -4812,6 +4834,19 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     task_box_id: "bootstrap-taskbox",
     route_id: "bootstrap-route",
     route_epoch: "bootstrap-000",
+    owner_mode: "fully_autonomous",
+    current_allowed_step: "bootstrap",
+    successor_contract_required: false,
+    active_task_id: null,
+    exact_next_task_id: null,
+    exact_profile_path: null,
+    exact_queue_draft_path: null,
+    exact_next_object_path: null,
+    required_successor_exactness: "task_only",
+    successor_materialization_status: "missing",
+    experiment_gate_status: "not_required",
+    experiment_decision_gate_required: false,
+    experiment_decision_gate_blocking: false,
     active_target: "Define the first concrete watchdog mission before unattended runs.",
     project_question: "What bounded watchdog setup or research question is this task box directly helping answer?",
     decision_relevance: "This task box should reduce one concrete uncertainty that changes the next route decision.",
@@ -4920,7 +4955,12 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     exact_next_task_id: null,
     exact_profile_path: null,
     exact_queue_draft_path: null,
-    exact_next_object_path: null
+    exact_next_object_path: null,
+    required_successor_exactness: "task_only",
+    successor_materialization_status: "missing",
+    experiment_gate_status: "not_required",
+    experiment_decision_gate_required: false,
+    experiment_decision_gate_blocking: false
   }, null, 2) + "\n",
 
   evidenceLedgerJsonl: () => "",
@@ -5076,6 +5116,17 @@ Updated: never
     active_task_id: null,
     blocker_type: "none",
     requires_human_review: false,
+    exact_next_task_id: null,
+    exact_profile_path: null,
+    exact_queue_draft_path: null,
+    exact_next_object_path: null,
+    required_successor_exactness: "task_only",
+    successor_materialization_status: "missing",
+    experiment_gate_status: "not_required",
+    experiment_decision_gate_required: false,
+    experiment_decision_gate_blocking: false,
+    owner_mode: "fully_autonomous",
+    current_allowed_step: "bootstrap",
     next_action: {
       kind: "none",
       description: "",
@@ -6082,6 +6133,17 @@ The final output must follow the JSON schema.
       latest_gate_result: { type: ["object", "null"] },
       allowed_next_action: { type: "string" },
       blocked_actions: { type: "array", items: { type: "string" } },
+      exact_next_task_id: { type: ["string", "null"] },
+      exact_profile_path: { type: ["string", "null"] },
+      exact_queue_draft_path: { type: ["string", "null"] },
+      exact_next_object_path: { type: ["string", "null"] },
+      required_successor_exactness: { type: "string" },
+      successor_materialization_status: { type: "string" },
+      experiment_gate_status: { type: "string" },
+      experiment_decision_gate_required: { type: "boolean" },
+      experiment_decision_gate_blocking: { type: "boolean" },
+      owner_mode: { type: ["string", "null"] },
+      current_allowed_step: { type: ["string", "null"] },
       important_paths: { type: "array", items: { type: "string" } }
     },
     additionalProperties: true
@@ -6108,6 +6170,19 @@ The final output must follow the JSON schema.
       task_box_id: { type: "string" },
       route_id: { type: "string" },
       route_epoch: { type: "string" },
+      owner_mode: { type: ["string", "null"] },
+      current_allowed_step: { type: ["string", "null"] },
+      successor_contract_required: { type: "boolean" },
+      active_task_id: { type: ["string", "null"] },
+      exact_next_task_id: { type: ["string", "null"] },
+      exact_profile_path: { type: ["string", "null"] },
+      exact_queue_draft_path: { type: ["string", "null"] },
+      exact_next_object_path: { type: ["string", "null"] },
+      required_successor_exactness: { type: "string" },
+      successor_materialization_status: { type: "string" },
+      experiment_gate_status: { type: "string" },
+      experiment_decision_gate_required: { type: "boolean" },
+      experiment_decision_gate_blocking: { type: "boolean" },
       active_target: { type: "string" },
       project_question: { type: "string" },
       decision_relevance: { type: "string" },
@@ -6162,7 +6237,12 @@ The final output must follow the JSON schema.
       exact_next_task_id: { type: ["string", "null"] },
       exact_profile_path: { type: ["string", "null"] },
       exact_queue_draft_path: { type: ["string", "null"] },
-      exact_next_object_path: { type: ["string", "null"] }
+      exact_next_object_path: { type: ["string", "null"] },
+      required_successor_exactness: { type: "string" },
+      successor_materialization_status: { type: "string" },
+      experiment_gate_status: { type: "string" },
+      experiment_decision_gate_required: { type: "boolean" },
+      experiment_decision_gate_blocking: { type: "boolean" }
     },
     additionalProperties: true
   }, null, 2) + "\n",
@@ -8874,11 +8954,19 @@ def successor_contract_gap(route_canonical, next_task_draft):
         return False
     if route_canonical.get("successor_contract_required") is not True:
         return False
+    required_exactness = str(route_canonical.get("required_successor_exactness") or "").strip()
+    experiment_gate_status = str(route_canonical.get("experiment_gate_status") or "").strip().lower()
+    if experiment_gate_status == "blocked":
+        return False
     exact_task = str(route_canonical.get("exact_next_task_id") or "").strip()
     exact_profile = str(route_canonical.get("exact_profile_path") or "").strip()
     exact_queue = str(route_canonical.get("exact_queue_draft_path") or "").strip()
     exact_object = str(route_canonical.get("exact_next_object_path") or "").strip()
     draft_task = str((next_task_draft or {}).get("task_id") or "").strip() if isinstance(next_task_draft, dict) else ""
+    if required_exactness == "queue_exact":
+        return not (exact_task and exact_queue and exact_object)
+    if required_exactness == "profile_exact":
+        return not (exact_task and exact_profile and exact_object)
     return not any((exact_task, exact_profile, exact_queue, exact_object, draft_task))
 
 def load_exact_queue_draft(route_canonical):
@@ -8954,14 +9042,24 @@ def local_unblock_reason(state, task_box, route_canonical, run_state=None, progr
         "requires_human_review": bool((run_state or {}).get("requires_human_review")),
         "next_action": (run_state or {}).get("next_action") or {},
         "exact_next_task_id": str((run_state or {}).get("exact_next_task_id") or ""),
+        "exact_profile_path": str((run_state or {}).get("exact_profile_path") or ""),
+        "exact_queue_draft_path": str((run_state or {}).get("exact_queue_draft_path") or ""),
         "exact_next_object_path": str((run_state or {}).get("exact_next_object_path") or ""),
+        "required_successor_exactness": str((run_state or {}).get("required_successor_exactness") or ""),
+        "successor_materialization_status": str((run_state or {}).get("successor_materialization_status") or ""),
+        "experiment_gate_status": str((run_state or {}).get("experiment_gate_status") or ""),
     }
     progress_summary = {
         "current_blocker": str((progress or {}).get("current_blocker") or ""),
         "requires_human_review": bool((progress or {}).get("requires_human_review")),
         "next_safe_action": (progress or {}).get("next_safe_action") or {},
         "exact_next_task_id": str((progress or {}).get("exact_next_task_id") or ""),
+        "exact_profile_path": str((progress or {}).get("exact_profile_path") or ""),
+        "exact_queue_draft_path": str((progress or {}).get("exact_queue_draft_path") or ""),
         "exact_next_object_path": str((progress or {}).get("exact_next_object_path") or ""),
+        "required_successor_exactness": str((progress or {}).get("required_successor_exactness") or ""),
+        "successor_materialization_status": str((progress or {}).get("successor_materialization_status") or ""),
+        "experiment_gate_status": str((progress or {}).get("experiment_gate_status") or ""),
     }
     combined = "\\n".join([
         review_text,
@@ -9498,6 +9596,12 @@ def validate_progress():
         errors.append("agent/PROGRESS_STATE.json recommend_pause must be boolean")
     if "route_epoch" in progress and progress.get("route_epoch") is not None and not isinstance(progress.get("route_epoch"), str):
         errors.append("agent/PROGRESS_STATE.json route_epoch must be string or null")
+    for key in ("exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status", "owner_mode", "current_allowed_step"):
+        if key in progress and progress.get(key) is not None and not isinstance(progress.get(key), str):
+            errors.append(f"agent/PROGRESS_STATE.json {key} must be string or null")
+    for key in ("experiment_decision_gate_required", "experiment_decision_gate_blocking"):
+        if key in progress and not isinstance(progress.get(key), bool):
+            errors.append(f"agent/PROGRESS_STATE.json {key} must be boolean")
 
 def validate_task_box():
     task_box = load_json("agent/TASK_BOX.json", required=False)
@@ -9527,6 +9631,12 @@ def validate_task_box():
     gate_policy = task_box.get("gate_policy")
     if gate_policy is not None and not isinstance(gate_policy, dict):
         errors.append("agent/TASK_BOX.json gate_policy must be an object")
+    for key in ("owner_mode", "current_allowed_step", "active_task_id", "exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
+        if key in task_box and task_box.get(key) is not None and not isinstance(task_box.get(key), str):
+            errors.append(f"agent/TASK_BOX.json {key} must be string or null")
+    for key in ("successor_contract_required", "experiment_decision_gate_required", "experiment_decision_gate_blocking"):
+        if key in task_box and not isinstance(task_box.get(key), bool):
+            errors.append(f"agent/TASK_BOX.json {key} must be boolean")
 
 def validate_route_canonical():
     route = load_json("agent/ROUTE_CANONICAL.json", required=False)
@@ -9541,8 +9651,12 @@ def validate_route_canonical():
         errors.append("agent/ROUTE_CANONICAL.json owner_mode must be string or null")
     if "successor_contract_required" in route and not isinstance(route.get("successor_contract_required"), bool):
         errors.append("agent/ROUTE_CANONICAL.json successor_contract_required must be boolean")
-    if "exact_next_object_path" in route and route.get("exact_next_object_path") is not None and not isinstance(route.get("exact_next_object_path"), str):
-        errors.append("agent/ROUTE_CANONICAL.json exact_next_object_path must be string or null")
+    for key in ("exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
+        if key in route and route.get(key) is not None and not isinstance(route.get(key), str):
+            errors.append(f"agent/ROUTE_CANONICAL.json {key} must be string or null")
+    for key in ("experiment_decision_gate_required", "experiment_decision_gate_blocking"):
+        if key in route and not isinstance(route.get(key), bool):
+            errors.append(f"agent/ROUTE_CANONICAL.json {key} must be boolean")
 
 def validate_next_task_draft():
     draft = load_json("agent/status/NEXT_TASK_DRAFT.json", required=False)
@@ -9885,6 +9999,12 @@ def ensure_task_box(existing, route_canonical):
             box["route_epoch"] = route_canonical.get("route_epoch")
         if isinstance(route_canonical.get("requires_review"), bool):
             box["requires_review"] = route_canonical.get("requires_review")
+        for key in ("owner_mode", "current_allowed_step", "active_task_id", "exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
+            if route_canonical.get(key) is not None:
+                box[key] = route_canonical.get(key)
+        for key in ("successor_contract_required", "experiment_decision_gate_required", "experiment_decision_gate_blocking"):
+            if isinstance(route_canonical.get(key), bool):
+                box[key] = route_canonical.get(key)
     box.setdefault("schema_version", 1)
     if not isinstance(box.get("tasks"), list):
         box["tasks"] = []
@@ -10040,6 +10160,66 @@ def infer_successor_queue_target(task_box, route_canonical):
                 return value
     return "gpu_queue"
 
+def infer_required_successor_exactness(route_canonical, task_box, successor_task_draft, next_action):
+    step = str((route_canonical or {}).get("current_allowed_step") or "").strip().lower()
+    if isinstance(successor_task_draft, dict):
+        kind = str(successor_task_draft.get("kind") or "").strip().lower()
+        if kind == "queue_enqueue":
+            return "queue_exact"
+        if kind in {"bounded_cpu_eval", "local_workspace_copy"}:
+            return "profile_exact"
+    if any(term in step for term in ("queue", "enqueue", "gpu")):
+        return "queue_exact"
+    if any(term in step for term in ("local_workspace_copy", "local-workspace-copy", "workspace_copy", "local copy", "cpu")):
+        return "profile_exact"
+    text = ""
+    if isinstance(next_action, dict):
+        text = " ".join(str(next_action.get(key) or "") for key in ("kind", "description", "reason")).lower()
+    if any(term in text for term in ("queue", "enqueue", "gpu_queue", "gpu follow-up", "gpu followup")):
+        return "queue_exact"
+    if any(term in text for term in ("local workspace", "project-local", "project local", "local copy", "cpu", "smoke", "eval", "probe")):
+        return "profile_exact"
+    allowed = task_box.get("allowed_actions") if isinstance(task_box, dict) else []
+    if isinstance(allowed, list):
+        normalized = {str(item or "").strip().lower() for item in allowed}
+        if "queue_enqueue" in normalized:
+            return "queue_exact"
+        if normalized.intersection({"bounded_cpu_eval", "local_workspace_copy"}):
+            return "profile_exact"
+    return "task_only"
+
+def infer_experiment_gate_status(route_canonical, task_box):
+    for source in (task_box, route_canonical):
+        if not isinstance(source, dict):
+            continue
+        gate = source.get("experiment_decision_gate")
+        if isinstance(gate, dict):
+            if gate.get("blocking") is True:
+                return "blocked"
+            if gate.get("required") is True:
+                return "required_ready"
+            if gate:
+                return "not_required"
+        if source.get("experiment_decision_gate_blocking") is True:
+            return "blocked"
+        if source.get("experiment_decision_gate_required") is True:
+            return "required_ready"
+        status = str(source.get("experiment_gate_status") or "").strip()
+        if status:
+            return status
+    return "not_required"
+
+def infer_successor_materialization_status(route_canonical, task_box, successor_task_draft, task_profile_path, queue_request_draft_path, next_task_draft_path, next_action):
+    gate_status = infer_experiment_gate_status(route_canonical, task_box)
+    required_exactness = infer_required_successor_exactness(route_canonical, task_box, successor_task_draft, next_action)
+    if gate_status == "blocked":
+        return "blocked_by_experiment_gate"
+    if required_exactness == "queue_exact":
+        return "queue_exact" if queue_request_draft_path else ("task_only" if next_task_draft_path else "missing")
+    if required_exactness == "profile_exact":
+        return "profile_exact" if task_profile_path else ("task_only" if next_task_draft_path else "missing")
+    return "task_only" if next_task_draft_path else "missing"
+
 def synthesize_successor_task(route_canonical, task_box, next_action, queue_request_draft, task_profile_draft):
     if not isinstance(route_canonical, dict):
         return {}
@@ -10191,6 +10371,10 @@ def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, n
     elif not tasks:
         mode = "observer"
 
+    required_successor_exactness = str((route_canonical or {}).get("required_successor_exactness") or (task_box or {}).get("required_successor_exactness") or "")
+    successor_materialization_status = str((route_canonical or {}).get("successor_materialization_status") or (task_box or {}).get("successor_materialization_status") or "")
+    experiment_gate_status = str((route_canonical or {}).get("experiment_gate_status") or (task_box or {}).get("experiment_gate_status") or "not_required")
+
     state.update({
         "schema_version": 1,
         "updated_utc": updated,
@@ -10204,8 +10388,17 @@ def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, n
         "blocked_actions": blocked_actions,
         "important_paths": important_paths,
         "exact_next_task_id": (route_canonical or {}).get("exact_next_task_id") or (successor_task_draft or {}).get("task_id"),
+        "exact_profile_path": (route_canonical or {}).get("exact_profile_path"),
+        "exact_queue_draft_path": (route_canonical or {}).get("exact_queue_draft_path"),
         "exact_next_object_path": exact_next_object_path or state.get("exact_next_object_path"),
+        "required_successor_exactness": required_successor_exactness,
+        "successor_materialization_status": successor_materialization_status,
+        "experiment_gate_status": experiment_gate_status,
+        "experiment_decision_gate_required": bool((route_canonical or {}).get("experiment_decision_gate_required") or (task_box or {}).get("experiment_decision_gate_required")),
+        "experiment_decision_gate_blocking": bool((route_canonical or {}).get("experiment_decision_gate_blocking") or (task_box or {}).get("experiment_decision_gate_blocking")),
         "task_box_id": (task_box or {}).get("task_box_id") or state.get("task_box_id"),
+        "owner_mode": (route_canonical or {}).get("owner_mode") or state.get("owner_mode"),
+        "current_allowed_step": (route_canonical or {}).get("current_allowed_step") or state.get("current_allowed_step"),
         "project_question": (task_box or {}).get("project_question") or state.get("project_question"),
         "decision_relevance": (task_box or {}).get("decision_relevance") or state.get("decision_relevance"),
         "claim_scope": (task_box or {}).get("claim_scope") or state.get("claim_scope"),
@@ -10311,6 +10504,42 @@ if exact_next_object_path:
     }, updated)
     route_canonical_changed = True
 
+required_successor_exactness = infer_required_successor_exactness(route_canonical, task_box, successor_task_draft, next_action)
+experiment_gate_status = infer_experiment_gate_status(route_canonical, task_box)
+successor_materialization_status = infer_successor_materialization_status(
+    route_canonical,
+    task_box,
+    successor_task_draft,
+    task_profile_path,
+    queue_request_draft_path,
+    next_task_draft_path,
+    next_action,
+)
+route_canonical = merge_route_canonical(route_canonical, {
+    "required_successor_exactness": required_successor_exactness,
+    "successor_materialization_status": successor_materialization_status,
+    "experiment_gate_status": experiment_gate_status,
+    "experiment_decision_gate_required": experiment_gate_status in {"required_ready", "blocked"},
+    "experiment_decision_gate_blocking": experiment_gate_status == "blocked",
+}, updated)
+route_canonical_changed = True
+task_box = ensure_task_box(task_box, route_canonical)
+task_box["owner_mode"] = route_canonical.get("owner_mode") or task_box.get("owner_mode")
+task_box["current_allowed_step"] = route_canonical.get("current_allowed_step") or task_box.get("current_allowed_step")
+task_box["successor_contract_required"] = bool(route_canonical.get("successor_contract_required"))
+task_box["active_task_id"] = route_canonical.get("active_task_id") or task_box.get("active_task_id")
+task_box["exact_next_task_id"] = route_canonical.get("exact_next_task_id") or successor_task_draft.get("task_id") or task_box.get("exact_next_task_id")
+task_box["exact_profile_path"] = route_canonical.get("exact_profile_path") or task_profile_path or task_box.get("exact_profile_path")
+task_box["exact_queue_draft_path"] = route_canonical.get("exact_queue_draft_path") or queue_request_draft_path or task_box.get("exact_queue_draft_path")
+task_box["exact_next_object_path"] = exact_next_object_path or task_box.get("exact_next_object_path")
+task_box["required_successor_exactness"] = required_successor_exactness
+task_box["successor_materialization_status"] = successor_materialization_status
+task_box["experiment_gate_status"] = experiment_gate_status
+task_box["experiment_decision_gate_required"] = experiment_gate_status in {"required_ready", "blocked"}
+task_box["experiment_decision_gate_blocking"] = experiment_gate_status == "blocked"
+task_box["updated_utc"] = updated
+task_box_changed = True
+
 if route_canonical_changed and route_canonical:
     atomic_write_json(route_canonical_path, route_canonical)
 if task_box_changed and task_box:
@@ -10333,6 +10562,11 @@ runtime_state_json = derive_runtime_state_json(
     bool(data.get("requires_human_review")),
 )
 atomic_write_json("agent/STATE.json", runtime_state_json)
+
+exact_next_task_id = str(route_canonical.get("exact_next_task_id") or task_box.get("exact_next_task_id") or successor_task_draft.get("task_id") or "").strip()
+exact_profile_path = str(route_canonical.get("exact_profile_path") or task_box.get("exact_profile_path") or task_profile_path or "").strip()
+exact_queue_draft_path = str(route_canonical.get("exact_queue_draft_path") or task_box.get("exact_queue_draft_path") or queue_request_draft_path or "").strip()
+exact_next_object_path = str(exact_next_object_path or route_canonical.get("exact_next_object_path") or task_box.get("exact_next_object_path") or "").strip()
 
 state_update = data.get("state_update_markdown", "").strip()
 if state_update:
@@ -10361,12 +10595,21 @@ progress_state = {
     "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
     "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
     "task_box_id": task_box.get("task_box_id"),
+    "owner_mode": route_canonical.get("owner_mode") or task_box.get("owner_mode"),
+    "current_allowed_step": route_canonical.get("current_allowed_step") or task_box.get("current_allowed_step"),
     "recommend_pause": bool(data.get("recommend_pause")),
     "requires_human_review": bool(data.get("requires_human_review")),
     "current_blocker": data.get("human_review_reason") or "; ".join(data.get("blocked_items") or [])[:1000],
     "next_safe_action": next_action,
-    "exact_next_task_id": route_canonical.get("exact_next_task_id") or successor_task_draft.get("task_id"),
+    "exact_next_task_id": exact_next_task_id,
+    "exact_profile_path": exact_profile_path or None,
+    "exact_queue_draft_path": exact_queue_draft_path or None,
     "exact_next_object_path": exact_next_object_path,
+    "required_successor_exactness": required_successor_exactness,
+    "successor_materialization_status": successor_materialization_status,
+    "experiment_gate_status": experiment_gate_status,
+    "experiment_decision_gate_required": experiment_gate_status in {"required_ready", "blocked"},
+    "experiment_decision_gate_blocking": experiment_gate_status == "blocked",
     "project_question": task_box.get("project_question"),
     "decision_relevance": task_box.get("decision_relevance"),
     "claim_scope": task_box.get("claim_scope"),
@@ -10420,9 +10663,16 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Secondary skills: {', '.join(actual_secondary_skills) if actual_secondary_skills else 'none'}",
     f"Route ID: {route_canonical.get('route_id') or task_box.get('route_id') or 'unknown'}",
     f"Route epoch: {route_canonical.get('route_epoch') or task_box.get('route_epoch') or 'unknown'}",
+    f"Owner mode: {route_canonical.get('owner_mode') or task_box.get('owner_mode') or 'unknown'}",
+    f"Current allowed step: {route_canonical.get('current_allowed_step') or task_box.get('current_allowed_step') or 'unknown'}",
     f"Task box: {task_box.get('task_box_id') or 'none'}",
-    f"Exact next task: {route_canonical.get('exact_next_task_id') or successor_task_draft.get('task_id') or 'none'}",
+    f"Exact next task: {exact_next_task_id or 'none'}",
+    f"Exact profile path: {exact_profile_path or 'none'}",
+    f"Exact queue draft path: {exact_queue_draft_path or 'none'}",
     f"Exact next object: {exact_next_object_path or 'none'}",
+    f"Required successor exactness: {required_successor_exactness or 'task_only'}",
+    f"Successor materialization: {successor_materialization_status or 'missing'}",
+    f"Experiment gate status: {experiment_gate_status or 'not_required'}",
     f"Project question: {task_box.get('project_question') or 'none'}",
     f"Decision relevance: {task_box.get('decision_relevance') or 'none'}",
     f"Claim scope: {task_box.get('claim_scope') or 'none'}",
@@ -10473,11 +10723,20 @@ atomic_write_json("agent/RUN_STATE.json", {
     "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
     "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
     "task_box_id": task_box.get("task_box_id"),
+    "owner_mode": route_canonical.get("owner_mode") or task_box.get("owner_mode"),
+    "current_allowed_step": route_canonical.get("current_allowed_step") or task_box.get("current_allowed_step"),
     "blocker_type": blocker,
     "requires_human_review": requires_review,
     "next_action": next_action,
-    "exact_next_task_id": route_canonical.get("exact_next_task_id") or successor_task_draft.get("task_id"),
+    "exact_next_task_id": exact_next_task_id or None,
+    "exact_profile_path": exact_profile_path or None,
+    "exact_queue_draft_path": exact_queue_draft_path or None,
     "exact_next_object_path": exact_next_object_path,
+    "required_successor_exactness": required_successor_exactness,
+    "successor_materialization_status": successor_materialization_status,
+    "experiment_gate_status": experiment_gate_status,
+    "experiment_decision_gate_required": experiment_gate_status in {"required_ready", "blocked"},
+    "experiment_decision_gate_blocking": experiment_gate_status == "blocked",
     "project_question": task_box.get("project_question"),
     "decision_relevance": task_box.get("decision_relevance"),
     "claim_scope": task_box.get("claim_scope"),
@@ -10511,8 +10770,13 @@ write_lines("agent/NEXT_ACTION.md", [
     f"- Description: {next_action.get('description', '') or 'None.'}",
     f"- Automatic: {next_action.get('can_execute_automatically', False)}",
     f"- Reason: {next_action.get('reason', '') or 'No reason provided.'}",
-    f"- Exact next task: {route_canonical.get('exact_next_task_id') or successor_task_draft.get('task_id') or 'none'}",
+    f"- Exact next task: {exact_next_task_id or 'none'}",
+    f"- Exact profile path: {exact_profile_path or 'none'}",
+    f"- Exact queue draft path: {exact_queue_draft_path or 'none'}",
     f"- Exact object path: {exact_next_object_path or 'none'}",
+    f"- Required successor exactness: {required_successor_exactness or 'task_only'}",
+    f"- Successor materialization status: {successor_materialization_status or 'missing'}",
+    f"- Experiment gate status: {experiment_gate_status or 'not_required'}",
     f"- Decision relevance: {task_box.get('decision_relevance') or 'none'}",
     f"- Claim scope: {task_box.get('claim_scope') or 'none'}",
     "",
@@ -10602,8 +10866,15 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
     "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
     "successor_contract_generated": bool(next_task_draft_path or task_profile_path or queue_request_draft_path),
-    "exact_next_task_id": route_canonical.get("exact_next_task_id"),
+    "exact_next_task_id": exact_next_task_id or None,
+    "exact_profile_path": exact_profile_path or None,
+    "exact_queue_draft_path": exact_queue_draft_path or None,
     "exact_next_object_path": exact_next_object_path,
+    "required_successor_exactness": required_successor_exactness,
+    "successor_materialization_status": successor_materialization_status,
+    "experiment_gate_status": experiment_gate_status,
+    "experiment_decision_gate_required": experiment_gate_status in {"required_ready", "blocked"},
+    "experiment_decision_gate_blocking": experiment_gate_status == "blocked",
     "task_box_id": task_box.get("task_box_id"),
     "input_paths": [],
     "output_paths": [
