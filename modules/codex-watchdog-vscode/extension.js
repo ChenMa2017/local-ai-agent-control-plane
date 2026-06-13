@@ -7,23 +7,11 @@ const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
 const cp = require("child_process");
-const packageMetadata = require("./package.json");
-const { createGuardLifecycle } = require("./guardLifecycle");
-const { createProjectRootManager } = require("./projectRootManager");
-const { createRuntimeConfigHelpers } = require("./runtimeConfig");
-const { createRuntimeHelpers } = require("./runtimeHelpers");
-const { createProjectCommands } = require("./projectCommands");
-const { createProjectSetupHelpers } = require("./projectSetup");
-const { createBootstrapWorkflowHelpers } = require("./bootstrapWorkflow");
-const { createGeneratedFilesHelpers } = require("./generatedFiles");
-const { createBootstrapScaffoldingHelpers } = require("./bootstrapScaffolding");
+const { createServiceAssembly } = require("./serviceAssembly");
 const {
   emptyPanelOperationState: emptyControlPanelOperationState,
-  nextPanelOperationState,
-  createControlPanelStateHelpers
+  nextPanelOperationState
 } = require("./controlPanelState");
-const { createControlPanelActionHandler } = require("./controlPanelActions");
-const { createControlPanelController } = require("./controlPanelController");
 const {
   bootstrapArchiveDir,
   bootstrapChangePreviewPath,
@@ -53,18 +41,7 @@ const {
 
 let output;
 let extensionContext;
-let guardCommands;
-let projectSetupHelpers;
-let bootstrapWorkflowHelpers;
-let generatedFilesHelpers;
-let bootstrapScaffoldingHelpers;
-let projectRootManager;
-let runtimeConfigHelpers;
-let runtimeHelpers;
-let projectCommands;
-let controlPanelStateHelpers;
-let controlPanelMessageHandler;
-let controlPanelController;
+let serviceAssembly;
 
 const PROJECT_ROOT_KEY = "projectRoot";
 const STATUS_REFRESH_MS = 60000;
@@ -82,213 +59,95 @@ function emptyPanelOperationState() {
   return emptyControlPanelOperationState();
 }
 
-function getProjectSetupHelpers() {
-  if (!projectSetupHelpers) {
-    projectSetupHelpers = createProjectSetupHelpers({
+function getServiceAssembly() {
+  if (!serviceAssembly) {
+    serviceAssembly = createServiceAssembly({
       vscode,
-      ensureDir,
-      bootstrapProject,
-      showBootstrapResult,
-      refreshGeneratedWatcherFiles: (root) => getGeneratedFilesHelpers().refreshGeneratedWatcherFiles(root),
-      bootstrapResultSchemaPath,
-      bootstrapConversationTurnSchemaPath,
-      openDocument
-    });
-  }
-  return projectSetupHelpers;
-}
-
-function getProjectRootManager() {
-  if (!projectRootManager) {
-    projectRootManager = createProjectRootManager({
-      vscode,
-      fs,
-      path,
-      os,
-      projectRootKey: PROJECT_ROOT_KEY,
-      getExtensionContext: () => extensionContext,
-      output,
-      updateStatusBar: () => updateStatusBar(),
-      extensionSetting,
-      expandHome,
-      isExistingDirectory,
-      isSafeProjectRootPath,
-      validateProjectRootPath,
-      ensureDir,
-      requireExistingDirectory
-    });
-  }
-  return projectRootManager;
-}
-
-function taskLooksInstantiated(root) {
-  return getProjectSetupHelpers().taskLooksInstantiated(root);
-}
-
-function getBootstrapWorkflowHelpers() {
-  if (!bootstrapWorkflowHelpers) {
-    const runtimeConfig = getRuntimeConfigHelpers();
-    bootstrapWorkflowHelpers = createBootstrapWorkflowHelpers({
-      vscode,
-      projectSetupHelpers: getProjectSetupHelpers(),
-      resolveCodexBin,
-      codexHomeSetting: runtimeConfig.codexHomeSetting,
-      readBootstrapConversation,
-      writeBootstrapConversation,
-      clearBootstrapDraftArtifacts,
-      bootstrapLastResultPath,
-      bootstrapConversationPromptText,
-      bootstrapConversationTurnSchemaPath,
-      runLoggedWithInput,
-      watchdogCommandTimeoutMs,
-      createNonce,
-      bootstrapInstantiationPromptText,
-      bootstrapResultSchemaPath,
-      stageBootstrapDraftFiles,
-      applyBootstrapDraftFiles,
-      openDocument,
-      bootstrapConversationMarkdownPath,
-      bootstrapChangePreviewPath,
-      ensureCodexHome,
-      writeBootstrapRuntimeState,
-      emptyBootstrapRuntimeState,
-      updateControlPanel,
-      confirmLoginIfNeeded
-    });
-  }
-  return bootstrapWorkflowHelpers;
-}
-
-function getGeneratedFilesHelpers() {
-  if (!generatedFilesHelpers) {
-    generatedFilesHelpers = createGeneratedFilesHelpers({
       fs,
       fsp,
       path,
+      os,
       crypto,
-      packageVersion: packageMetadata.version,
-      templates,
-      ensureDir,
-      output,
-      ensureCodexHome,
-      renderWatchdogEnv
-    });
-  }
-  return generatedFilesHelpers;
-}
-
-function getBootstrapScaffoldingHelpers() {
-  if (!bootstrapScaffoldingHelpers) {
-    bootstrapScaffoldingHelpers = createBootstrapScaffoldingHelpers({
-      fs,
-      fsp,
-      path,
-      vscode,
-      templates,
-      output,
-      ensureDir,
-      generatedFilesHelpers: getGeneratedFilesHelpers(),
-      getProjectSetupHelpers,
-      isWatchdogInitialized,
-      isEffectivelyEmptyDir
-    });
-  }
-  return bootstrapScaffoldingHelpers;
-}
-
-function getRuntimeConfigHelpers() {
-  if (!runtimeConfigHelpers) {
-    runtimeConfigHelpers = createRuntimeConfigHelpers({
-      fs,
-      path,
-      os,
-      output,
+      getOutput: () => output,
+      getExtensionContext: () => extensionContext,
+      projectRootKey: PROJECT_ROOT_KEY,
+      statusRefreshMs: STATUS_REFRESH_MS,
+      defaultIntervalMinutes: DEFAULT_INTERVAL_MINUTES,
+      defaultTimeoutMinutes: DEFAULT_TIMEOUT_MINUTES,
+      defaultCompactEveryRuns: DEFAULT_COMPACT_EVERY_RUNS,
+      defaultPhaseOffsetMinutes: DEFAULT_PHASE_OFFSET_MINUTES,
       defaultWatchdogRole: DEFAULT_WATCHDOG_ROLE,
+      defaultSupervisorAuditEveryRunnerRuns: DEFAULT_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS,
+      defaultSupervisorLightFollowup: DEFAULT_SUPERVISOR_LIGHT_FOLLOWUP,
       defaultServicePrefix: DEFAULT_SERVICE_PREFIX,
+      loginReadyRe: LOGIN_READY_RE,
+      emptyPanelOperationState,
+      nextPanelOperationState,
+      templates,
+      ensureDir,
+      openDocument,
       extensionSetting,
       extensionSettingWithSource,
       projectSetting,
       projectSettingWithSource,
-      expandHome
-    });
-  }
-  return runtimeConfigHelpers;
-}
-
-function getRuntimeHelpers() {
-  if (!runtimeHelpers) {
-    const runtimeConfig = getRuntimeConfigHelpers();
-    runtimeHelpers = createRuntimeHelpers({
-      vscode,
-      fs,
-      fsp,
-      path,
-      os,
-      output,
-      loginReadyRe: LOGIN_READY_RE,
+      expandHome,
+      isExistingDirectory,
+      isSafeProjectRootPath,
+      validateProjectRootPath,
+      requireExistingDirectory,
       resolveCodexBin,
-      codexHomeSetting: runtimeConfig.codexHomeSetting,
-      codexHomePlan: runtimeConfig.codexHomePlan,
-      sandboxModeSetting: runtimeConfig.sandboxModeSetting,
-      positiveNumberSetting: runtimeConfig.positiveNumberSetting,
-      extensionSetting,
-      watchdogRoleSetting: runtimeConfig.watchdogRoleSetting,
-      booleanSetting: runtimeConfig.booleanSetting,
-      servicePrefixSetting: runtimeConfig.servicePrefixSetting,
-      defaultTimeoutMinutes: DEFAULT_TIMEOUT_MINUTES,
-      defaultIntervalMinutes: DEFAULT_INTERVAL_MINUTES,
-      defaultCompactEveryRuns: DEFAULT_COMPACT_EVERY_RUNS,
-      defaultPhaseOffsetMinutes: DEFAULT_PHASE_OFFSET_MINUTES,
-      defaultSupervisorLightFollowup: DEFAULT_SUPERVISOR_LIGHT_FOLLOWUP,
-      defaultSupervisorAuditEveryRunnerRuns: DEFAULT_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS,
+      runLogged,
+      runLoggedWithInput,
+      createNonce,
       updateProjectSetting,
-      watcherProfileModelDefaults: runtimeConfig.watcherProfileModelDefaults,
-      mergeWatcherConfigText: runtimeConfig.mergeWatcherConfigText,
-      hasTomlAssignment: runtimeConfig.hasTomlAssignment,
-      parseTomlBasicString: runtimeConfig.parseTomlBasicString,
       run,
-      ensureDir,
       unitNames,
       systemdQuote,
       systemdPathValue,
       systemdEnvValue,
       shellQuote,
-      getProjectRoot,
-      readFilePrefix
+      readFilePrefix,
+      isWatchdogInitialized,
+      isEffectivelyEmptyDir
     });
   }
-  return runtimeHelpers;
+  return serviceAssembly;
+}
+
+function getProjectSetupHelpers() {
+  return getServiceAssembly().getProjectSetupHelpers();
+}
+
+function getProjectRootManager() {
+  return getServiceAssembly().getProjectRootManager();
+}
+
+function taskLooksInstantiated(root) {
+  return getServiceAssembly().taskLooksInstantiated(root);
+}
+
+function getBootstrapWorkflowHelpers() {
+  return getServiceAssembly().getBootstrapWorkflowHelpers();
+}
+
+function getGeneratedFilesHelpers() {
+  return getServiceAssembly().getGeneratedFilesHelpers();
+}
+
+function getBootstrapScaffoldingHelpers() {
+  return getServiceAssembly().getBootstrapScaffoldingHelpers();
+}
+
+function getRuntimeConfigHelpers() {
+  return getServiceAssembly().getRuntimeConfigHelpers();
+}
+
+function getRuntimeHelpers() {
+  return getServiceAssembly().getRuntimeHelpers();
 }
 
 function getProjectCommands() {
-  if (!projectCommands) {
-    projectCommands = createProjectCommands({
-      vscode,
-      fs,
-      fsp,
-      path,
-      getProjectRoot,
-      selectProjectRoot,
-      rememberProjectRoot,
-      ensureCodexHome,
-      confirmLoginIfNeeded,
-      effectiveWatchdogSettings,
-      positiveNumberSetting,
-      extensionSetting,
-      defaultTimeoutMinutes: DEFAULT_TIMEOUT_MINUTES,
-      getBootstrapScaffoldingHelpers,
-      getGeneratedFilesHelpers,
-      getProjectSetupHelpers,
-      getBootstrapWorkflowHelpers,
-      writeBootstrapRuntimeState,
-      emptyBootstrapRuntimeState,
-      setPanelOperationState,
-      clearPanelOperationState,
-      updateControlPanel,
-      openDocument
-    });
-  }
-  return projectCommands;
+  return getServiceAssembly().getProjectCommands();
 }
 
 async function ensureGeneratedDirs(root) {
@@ -300,191 +159,54 @@ async function refreshGeneratedWatcherFiles(root) {
 }
 
 function getGuardCommands() {
-  if (!guardCommands) {
-    const commands = getProjectCommands();
-    guardCommands = createGuardLifecycle({
-      vscode,
-      output,
-      getProjectRoot,
-      ensureDir,
-      prepareProjectForGuard: getProjectSetupHelpers().prepareProjectForGuard,
-      confirmTaskInstantiatedIfNeeded: getProjectSetupHelpers().confirmTaskInstantiatedIfNeeded,
-      ensureCodexHome,
-      confirmLoginIfNeeded,
-      runLogged,
-      watchdogCommandEnv: commands.watchdogCommandEnv,
-      watchdogCommandTimeoutMs: commands.watchdogCommandTimeoutMs,
-      setPanelOperationState: (data) => getControlPanelController().setPanelOperationState(data),
-      clearPanelOperationState: () => getControlPanelController().clearPanelOperationState(),
-      updateStatusBar: () => getControlPanelController().updateStatusBar(),
-      unitNames,
-      getTimerStatus,
-      openDocument
-    });
-  }
-  return guardCommands;
+  return getServiceAssembly().getGuardCommands();
 }
 
 function getControlPanelStateHelpers() {
-  if (!controlPanelStateHelpers) {
-    const runtimeConfig = getRuntimeConfigHelpers();
-    const commands = getProjectCommands();
-    controlPanelStateHelpers = createControlPanelStateHelpers({
-      getKnownProjectRoot,
-      isWatchdogInitialized,
-      getProjectSetupHelpers,
-      isGuardPaused: commands.isGuardPaused,
-      codexHomePlan: runtimeConfig.codexHomePlan,
-      resolveCodexBin,
-      sandboxModeSetting: runtimeConfig.sandboxModeSetting,
-      positiveNumberSetting: runtimeConfig.positiveNumberSetting,
-      extensionSetting,
-      DEFAULT_TIMEOUT_MINUTES,
-      DEFAULT_INTERVAL_MINUTES,
-      DEFAULT_COMPACT_EVERY_RUNS,
-      getCodexLoginStatus,
-      getTimerStatus,
-      inspectProjectRuntimeClarity,
-      effectiveWatchdogSettings,
-      readWatcherUnitDrift,
-      getBootstrapConversationState,
-      readFilePrefix
-    });
-  }
-  return controlPanelStateHelpers;
+  return getServiceAssembly().getControlPanelStateHelpers();
 }
 
 function getControlPanelMessageHandler() {
-  if (!controlPanelMessageHandler) {
-    const commands = getProjectCommands();
-    controlPanelMessageHandler = createControlPanelActionHandler({
-      vscode,
-      getProjectRoot,
-      selectProjectRoot,
-      rememberProjectRoot,
-      showProjectRootSelected: commands.showProjectRootSelected,
-      browseExistingProjectRoot,
-      normalizeProjectRootInput,
-      clearRememberedProjectRoot,
-      updateProjectSetting,
-      readWatcherUnitDrift,
-      effectiveWatchdogSettings,
-      updateControlPanel,
-      openLoginTerminal,
-      prepareProjectCommand: commands.prepareProjectCommand,
-      generateBootstrapConversationCommand: commands.generateBootstrapConversationCommand,
-      getBootstrapWorkflowHelpers,
-      getProjectSetupHelpers,
-      archiveAndResetBootstrapConversation,
-      getGuardCommands,
-      openMorningBriefCommand: commands.openMorningBriefCommand,
-      refreshGeneratedFilesCommand: commands.refreshGeneratedFilesCommand
-    });
-  }
-  return controlPanelMessageHandler;
+  return getServiceAssembly().getControlPanelMessageHandler();
 }
 
 function getControlPanelController() {
-  if (!controlPanelController) {
-    const commands = getProjectCommands();
-    controlPanelController = createControlPanelController({
-      vscode,
-      output,
-      statusRefreshMs: STATUS_REFRESH_MS,
-      emptyPanelOperationState,
-      nextPanelOperationState,
-      getKnownProjectRoot,
-      isGuardPaused: commands.isGuardPaused,
-      getTimerStatus,
-      getControlPanelStateHelpers,
-      getControlPanelMessageHandler
-    });
-  }
-  return controlPanelController;
+  return getServiceAssembly().getControlPanelController();
 }
 
 function activate(context) {
   extensionContext = context;
   output = vscode.window.createOutputChannel("Codex Watchdog");
   context.subscriptions.push(output);
-
-  projectSetupHelpers = getProjectSetupHelpers();
-  bootstrapWorkflowHelpers = getBootstrapWorkflowHelpers();
-  projectCommands = getProjectCommands();
-  guardCommands = getGuardCommands();
-  bootstrapScaffoldingHelpers = getBootstrapScaffoldingHelpers();
-  controlPanelStateHelpers = getControlPanelStateHelpers();
-  controlPanelMessageHandler = getControlPanelMessageHandler();
-  controlPanelController = getControlPanelController();
-
-  register(context, "codexWatchdog.openControlPanel", openControlPanelCommand);
-  register(context, "codexWatchdog.selectProjectRoot", projectCommands.selectProjectRootCommand);
-  register(context, "codexWatchdog.bootstrapProject", projectCommands.bootstrapProjectCommand);
-  register(context, "codexWatchdog.createDemoProjectTemplate", projectCommands.createDemoProjectTemplateCommand);
-  register(context, "codexWatchdog.prepareProject", projectCommands.prepareProjectCommand);
-  register(context, "codexWatchdog.refreshGeneratedFiles", projectCommands.refreshGeneratedFilesCommand);
-  register(context, "codexWatchdog.prepareEveningHandoff", projectCommands.prepareEveningHandoffCommand);
-  register(context, "codexWatchdog.openMorningBrief", projectCommands.openMorningBriefCommand);
-  register(context, "codexWatchdog.startGuard", guardCommands.startGuardCommand);
-  register(context, "codexWatchdog.pauseGuard", guardCommands.pauseGuardCommand);
-  register(context, "codexWatchdog.resumeGuard", guardCommands.resumeGuardCommand);
-  register(context, "codexWatchdog.stopGuard", guardCommands.stopGuardCommand);
-  register(context, "codexWatchdog.runOnce", guardCommands.runOnceCommand);
-  register(context, "codexWatchdog.startTimer", guardCommands.startTimerCommand);
-  register(context, "codexWatchdog.stopTimer", guardCommands.stopTimerCommand);
-  register(context, "codexWatchdog.showTimerStatus", guardCommands.showTimerStatusCommand);
-  register(context, "codexWatchdog.openLatestReport", guardCommands.openLatestReportCommand);
-  register(context, "codexWatchdog.acceptStateUpdate", projectCommands.acceptStateUpdateCommand);
-
-  initializeStatusBar(context);
+  getServiceAssembly().activate(context);
 }
 
 function deactivate() {
-  if (controlPanelController) {
-    controlPanelController.deactivate();
-  }
-}
-
-function register(context, command, handler) {
-  context.subscriptions.push(vscode.commands.registerCommand(command, async () => {
-    try {
-      await handler();
-    } catch (error) {
-      const message = error && error.message ? error.message : String(error);
-      output.appendLine(`[error] ${message}`);
-      vscode.window.showErrorMessage(`Codex Watchdog: ${message}`);
-    } finally {
-      await getControlPanelController().updateStatusBar();
-    }
-  }));
-}
-
-function initializeStatusBar(context) {
-  getControlPanelController().initializeStatusBar(context);
+  getServiceAssembly().deactivate();
 }
 
 async function updateStatusBar() {
-  await getControlPanelController().updateStatusBar();
+  await getServiceAssembly().updateStatusBar();
 }
 
 async function openControlPanelCommand() {
-  await getControlPanelController().openControlPanel();
+  await getServiceAssembly().openControlPanelCommand();
 }
 
 async function updateControlPanel() {
-  await getControlPanelController().updateControlPanel();
+  await getServiceAssembly().updateControlPanel();
 }
 
 async function setPanelOperationState(data) {
-  await getControlPanelController().setPanelOperationState(data);
+  await getServiceAssembly().setPanelOperationState(data);
 }
 
 async function clearPanelOperationState() {
-  await getControlPanelController().clearPanelOperationState();
+  await getServiceAssembly().clearPanelOperationState();
 }
 
 function getKnownProjectRoot() {
-  return getProjectRootManager().getKnownProjectRoot();
+  return getServiceAssembly().getKnownProjectRoot();
 }
 
 function createNonce() {
@@ -571,31 +293,31 @@ async function isEffectivelyEmptyDir(root) {
 }
 
 function getWorkspaceRoot() {
-  return getProjectRootManager().getWorkspaceRoot();
+  return getServiceAssembly().getWorkspaceRoot();
 }
 
 async function selectProjectRoot(title) {
-  return getProjectRootManager().selectProjectRoot(title);
+  return getServiceAssembly().selectProjectRoot(title);
 }
 
 async function browseExistingProjectRoot(title, raw) {
-  return getProjectRootManager().browseExistingProjectRoot(title, raw);
+  return getServiceAssembly().browseExistingProjectRoot(title, raw);
 }
 
 async function normalizeProjectRootInput(raw, label, options = {}) {
-  return getProjectRootManager().normalizeProjectRootInput(raw, label, options);
+  return getServiceAssembly().normalizeProjectRootInput(raw, label, options);
 }
 
 async function getProjectRoot() {
-  return getProjectRootManager().getProjectRoot();
+  return getServiceAssembly().getProjectRoot();
 }
 
 async function rememberProjectRoot(root) {
-  await getProjectRootManager().rememberProjectRoot(root);
+  await getServiceAssembly().rememberProjectRoot(root);
 }
 
 async function clearRememberedProjectRoot() {
-  await getProjectRootManager().clearRememberedProjectRoot();
+  await getServiceAssembly().clearRememberedProjectRoot();
 }
 
 function config() {
