@@ -9251,6 +9251,8 @@ def local_unblock_reason(state, task_box, route_canonical, run_state=None, progr
     scope = field_value(review_text, "scope")
     resolver = field_value(review_text, "resolver")
     autonomous = autonomous_mode(state, task_box, route_canonical)
+    exact_profile_exists = bool(load_exact_profile_draft(route_canonical))
+    exact_queue_exists = bool(load_exact_queue_draft(route_canonical))
 
     mismatch = route_epoch_mismatch(route_canonical, state, progress or {}, run_state or {})
     if mismatch:
@@ -9289,7 +9291,7 @@ def local_unblock_reason(state, task_box, route_canonical, run_state=None, progr
         or "missing profile" in combined
         or "profile package" in combined
         or "task profile" in combined
-    ):
+    ) and not exact_profile_exists:
         return "local_profile_authoring", "Autonomous route is blocked only by a missing local task/profile package; author it locally and continue."
 
     if autonomous and (
@@ -9297,7 +9299,7 @@ def local_unblock_reason(state, task_box, route_canonical, run_state=None, progr
         or "draft queue" in combined
         or "prepare queue request" in combined
         or "prepare taskbox" in combined
-    ):
+    ) and not exact_queue_exists:
         return "local_queue_draft_authoring", "Autonomous route can prepare a local queue draft/taskbox without performing a controlled enqueue yet."
 
     next_task_draft = load_next_task_draft(ROOT)
@@ -9566,6 +9568,17 @@ def route():
                             "primary_skill": "watchdog-orchestrator",
                             "reason": f"{len(pending)} pending task(s) exist in {pending_source}; {queue_reason}",
                             "stop_condition": "Perform exactly one controlled queue enqueue inside the declared queue boundary, refresh compact state, and stop.",
+                            "permission_guardian_required": False,
+                            "permission_guardian_result": "not_required",
+                            "route_locked": True,
+                            "task_id": task.get("task_id")
+                        }
+                    queue_draft = load_exact_queue_draft(route_canonical)
+                    if queue_draft:
+                        return {
+                            "primary_skill": "watchdog-orchestrator",
+                            "reason": f"{len(pending)} pending task(s) exist in {pending_source}; exact queue draft is already materialized, but autonomous enqueue is still disabled by queue policy, so keep the draft explicit and refresh NEXT_ACTION instead of stalling.",
+                            "stop_condition": "Do not enqueue yet; keep the exact queue/profile draft coherent, refresh compact state, and stop.",
                             "permission_guardian_required": False,
                             "permission_guardian_result": "not_required",
                             "route_locked": True,
@@ -10163,9 +10176,19 @@ def normalize_successor_task(value):
 
 def merge_route_canonical(existing, update, updated_utc):
     merged = dict(existing) if isinstance(existing, dict) else {}
+    clearable_keys = {
+        "active_task_id",
+        "exact_next_task_id",
+        "exact_profile_path",
+        "exact_queue_draft_path",
+        "exact_next_object_path",
+        "required_successor_exactness",
+        "successor_materialization_status",
+        "experiment_gate_status",
+    }
     if isinstance(update, dict):
         for key, value in update.items():
-            if value is None:
+            if value is None and key not in clearable_keys:
                 continue
             merged[key] = value
     if merged:
@@ -10208,7 +10231,7 @@ def ensure_task_box(existing, route_canonical):
         if isinstance(route_canonical.get("requires_review"), bool):
             box["requires_review"] = route_canonical.get("requires_review")
         for key in ("owner_mode", "current_allowed_step", "active_task_id", "exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
-            if route_canonical.get(key) is not None:
+            if key in route_canonical:
                 box[key] = route_canonical.get(key)
         for key in ("successor_contract_required", "experiment_decision_gate_required", "experiment_decision_gate_blocking"):
             if isinstance(route_canonical.get(key), bool):
@@ -10255,6 +10278,26 @@ def merge_task_box(existing, update):
         if isinstance(task, dict) and str(task.get("task_id") or "").strip():
             box = upsert_task_box_task(box, task)
     return box
+
+def prune_previous_exact_task_from_task_box(task_box, previous_exact_task_id, current_exact_task_id):
+    if not isinstance(task_box, dict):
+        return task_box
+    previous_exact_task_id = str(previous_exact_task_id or "").strip()
+    current_exact_task_id = str(current_exact_task_id or "").strip()
+    if not previous_exact_task_id or not current_exact_task_id or previous_exact_task_id == current_exact_task_id:
+        return task_box
+    tasks = task_box.get("tasks")
+    if not isinstance(tasks, list):
+        return task_box
+    task_box["tasks"] = [
+        task for task in tasks
+        if not (
+            isinstance(task, dict)
+            and str(task.get("task_id") or "").strip() == previous_exact_task_id
+            and str(task.get("status") or "").strip().lower() == "pending"
+        )
+    ]
+    return task_box
 
 def infer_successor_allowed_runner(next_action, route_canonical, queue_request_draft, task_profile_draft):
     candidates = []
@@ -10428,6 +10471,96 @@ def infer_successor_materialization_status(route_canonical, task_box, successor_
         return "profile_exact" if task_profile_path else ("task_only" if next_task_draft_path else "missing")
     return "task_only" if next_task_draft_path else "missing"
 
+def successor_path_matches_task_id(path_text, task_id):
+    path_text = str(path_text or "").strip()
+    task_id = str(task_id or "").strip()
+    if not path_text or not task_id:
+        return False
+    try:
+        return Path(path_text).stem == safe_name(task_id)
+    except Exception:
+        return False
+
+def first_matching_successor_path(paths, task_id):
+    for item in paths:
+        text = str(item or "").strip()
+        if successor_path_matches_task_id(text, task_id):
+            return text
+    return ""
+
+def infer_successor_materialization_status_from_resolved(required_exactness, gate_status, exact_profile_path, exact_queue_draft_path, next_task_draft_path):
+    if gate_status == "blocked":
+        return "blocked_by_experiment_gate"
+    if required_exactness == "queue_exact":
+        return "queue_exact" if exact_queue_draft_path else ("task_only" if next_task_draft_path else "missing")
+    if required_exactness == "profile_exact":
+        return "profile_exact" if exact_profile_path else ("task_only" if next_task_draft_path else "missing")
+    return "task_only" if next_task_draft_path else "missing"
+
+def resolve_exact_successor_contract(route_canonical, task_box, successor_task_draft, task_profile_path, queue_request_draft_path, next_task_draft_path, next_action):
+    required_exactness = infer_required_successor_exactness(route_canonical, task_box, successor_task_draft, next_action)
+    gate_status = infer_experiment_gate_status(route_canonical, task_box)
+    exact_next_task_id = str(
+        (route_canonical or {}).get("exact_next_task_id")
+        or (successor_task_draft or {}).get("task_id")
+        or (task_box or {}).get("exact_next_task_id")
+        or ""
+    ).strip()
+
+    exact_profile_path = first_matching_successor_path([
+        task_profile_path,
+        (route_canonical or {}).get("exact_profile_path"),
+        (task_box or {}).get("exact_profile_path"),
+    ], exact_next_task_id)
+    exact_queue_draft_path = first_matching_successor_path([
+        queue_request_draft_path,
+        (route_canonical or {}).get("exact_queue_draft_path"),
+        (task_box or {}).get("exact_queue_draft_path"),
+    ], exact_next_task_id)
+
+    matching_next_task_draft_path = ""
+    if isinstance(successor_task_draft, dict) and str(successor_task_draft.get("task_id") or "").strip() == exact_next_task_id:
+        matching_next_task_draft_path = str(next_task_draft_path or "").strip()
+
+    if required_exactness == "queue_exact":
+        exact_next_object_path = exact_queue_draft_path or ""
+    elif required_exactness == "profile_exact":
+        exact_next_object_path = exact_profile_path or ""
+        exact_queue_draft_path = ""
+    else:
+        exact_next_object_path = matching_next_task_draft_path or ""
+        exact_profile_path = ""
+        exact_queue_draft_path = ""
+
+    successor_materialization_status = infer_successor_materialization_status_from_resolved(
+        required_exactness,
+        gate_status,
+        exact_profile_path,
+        exact_queue_draft_path,
+        matching_next_task_draft_path,
+    )
+
+    successor_contract_required = False
+    if required_exactness == "queue_exact":
+        successor_contract_required = successor_materialization_status != "queue_exact"
+    elif required_exactness == "profile_exact":
+        successor_contract_required = successor_materialization_status != "profile_exact"
+    elif not matching_next_task_draft_path and exact_next_task_id:
+        successor_contract_required = True
+
+    return {
+        "exact_next_task_id": exact_next_task_id or None,
+        "exact_profile_path": exact_profile_path or None,
+        "exact_queue_draft_path": exact_queue_draft_path or None,
+        "exact_next_object_path": exact_next_object_path or None,
+        "required_successor_exactness": required_exactness,
+        "successor_materialization_status": successor_materialization_status,
+        "experiment_gate_status": gate_status,
+        "experiment_decision_gate_required": gate_status in {"required_ready", "blocked"},
+        "experiment_decision_gate_blocking": gate_status == "blocked",
+        "successor_contract_required": successor_contract_required,
+    }
+
 def synthesize_successor_task(route_canonical, task_box, next_action, queue_request_draft, task_profile_draft):
     if not isinstance(route_canonical, dict):
         return {}
@@ -10545,6 +10678,8 @@ def synthesize_successor_queue_request(route_canonical, task_box, task):
 def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, next_action, existing_state, exact_next_object_path, task_profile_path, queue_request_draft_path, updated, requires_review):
     state = dict(existing_state) if isinstance(existing_state, dict) else {}
     tasks = []
+    current_exact_task_id = str((route_canonical or {}).get("exact_next_task_id") or (successor_task_draft or {}).get("task_id") or "").strip()
+    previous_exact_task_id = str(state.get("exact_next_task_id") or "").strip() if isinstance(state, dict) else ""
     for raw in task_box.get("tasks", []) if isinstance(task_box, dict) else []:
         if isinstance(raw, dict) and str(raw.get("task_id") or "").strip():
             tasks.append(dict(raw))
@@ -10553,7 +10688,17 @@ def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, n
     if not tasks:
         fallback_tasks = existing_state.get("tasks") if isinstance(existing_state, dict) else []
         if isinstance(fallback_tasks, list):
-            tasks = [dict(raw) for raw in fallback_tasks if isinstance(raw, dict) and str(raw.get("task_id") or "").strip()]
+            tasks = [
+                dict(raw) for raw in fallback_tasks
+                if isinstance(raw, dict)
+                and str(raw.get("task_id") or "").strip()
+                and not (
+                    current_exact_task_id
+                    and previous_exact_task_id
+                    and current_exact_task_id != previous_exact_task_id
+                    and str(raw.get("task_id") or "").strip() == previous_exact_task_id
+                )
+            ]
 
     blocked_actions = task_box.get("blocked_actions") if isinstance(task_box, dict) and isinstance(task_box.get("blocked_actions"), list) else state.get("blocked_actions", [])
     if not isinstance(blocked_actions, list):
@@ -10602,7 +10747,7 @@ def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, n
         "exact_next_task_id": (route_canonical or {}).get("exact_next_task_id") or (successor_task_draft or {}).get("task_id"),
         "exact_profile_path": (route_canonical or {}).get("exact_profile_path"),
         "exact_queue_draft_path": (route_canonical or {}).get("exact_queue_draft_path"),
-        "exact_next_object_path": exact_next_object_path or state.get("exact_next_object_path"),
+        "exact_next_object_path": exact_next_object_path or None,
         "required_successor_exactness": required_successor_exactness,
         "successor_materialization_status": successor_materialization_status,
         "experiment_gate_status": experiment_gate_status,
@@ -10653,6 +10798,11 @@ task_profile_draft = clean_object(data.get("task_profile_draft"))
 queue_request_draft = clean_object(data.get("queue_request_draft"))
 route_canonical_update = clean_object(data.get("route_canonical_update"))
 task_box_update = clean_object(data.get("task_box_update"))
+previous_exact_task_id = str(
+    (route_canonical or {}).get("exact_next_task_id")
+    or (task_box or {}).get("exact_next_task_id")
+    or ""
+).strip()
 
 route_canonical_changed = False
 task_box_changed = False
@@ -10671,14 +10821,15 @@ if task_box_update:
     task_box_changed = True
 
 next_action = data.get("next_safe_action") or {}
+initial_experiment_gate_status = infer_experiment_gate_status(route_canonical, task_box)
 
-if not successor_task_draft and route_canonical.get("successor_contract_required") is True:
+if not successor_task_draft and route_canonical.get("successor_contract_required") is True and initial_experiment_gate_status != "blocked":
     successor_task_draft = synthesize_successor_task(route_canonical, task_box, next_action, queue_request_draft, task_profile_draft)
 
-if not task_profile_draft and should_synthesize_successor_profile(successor_task_draft):
+if not task_profile_draft and should_synthesize_successor_profile(successor_task_draft) and initial_experiment_gate_status != "blocked":
     task_profile_draft = synthesize_successor_profile_draft(route_canonical, successor_task_draft)
 
-if not queue_request_draft and should_synthesize_successor_queue_request(successor_task_draft):
+if not queue_request_draft and should_synthesize_successor_queue_request(successor_task_draft) and initial_experiment_gate_status != "blocked":
     queue_request_draft = synthesize_successor_queue_request(route_canonical, task_box, successor_task_draft)
 
 next_task_draft_path = ""
@@ -10708,17 +10859,7 @@ if queue_request_draft_path:
     }, updated)
     route_canonical_changed = True
 
-exact_next_object_path = queue_request_draft_path or task_profile_path or next_task_draft_path or str(route_canonical.get("exact_next_object_path") or "").strip()
-if exact_next_object_path:
-    route_canonical = merge_route_canonical(route_canonical, {
-        "exact_next_object_path": exact_next_object_path,
-        "successor_contract_required": False,
-    }, updated)
-    route_canonical_changed = True
-
-required_successor_exactness = infer_required_successor_exactness(route_canonical, task_box, successor_task_draft, next_action)
-experiment_gate_status = infer_experiment_gate_status(route_canonical, task_box)
-successor_materialization_status = infer_successor_materialization_status(
+resolved_exact_contract = resolve_exact_successor_contract(
     route_canonical,
     task_box,
     successor_task_draft,
@@ -10727,28 +10868,54 @@ successor_materialization_status = infer_successor_materialization_status(
     next_task_draft_path,
     next_action,
 )
+required_successor_exactness = resolved_exact_contract["required_successor_exactness"]
+experiment_gate_status = resolved_exact_contract["experiment_gate_status"]
+successor_materialization_status = resolved_exact_contract["successor_materialization_status"]
+exact_next_task_id = str(resolved_exact_contract.get("exact_next_task_id") or "").strip()
+exact_profile_path = resolved_exact_contract.get("exact_profile_path")
+exact_queue_draft_path = resolved_exact_contract.get("exact_queue_draft_path")
+exact_next_object_path = resolved_exact_contract.get("exact_next_object_path")
+
+task_box = prune_previous_exact_task_from_task_box(task_box, previous_exact_task_id, exact_next_task_id)
+
+if not successor_task_draft:
+    try:
+        existing_next_task_draft = json.loads(Path("agent/status/NEXT_TASK_DRAFT.json").read_text())
+    except Exception:
+        existing_next_task_draft = {}
+    existing_task_id = str(existing_next_task_draft.get("task_id") or "").strip() if isinstance(existing_next_task_draft, dict) else ""
+    if existing_task_id and existing_task_id != exact_next_task_id:
+        atomic_write_json("agent/status/NEXT_TASK_DRAFT.json", {})
+        next_task_draft_path = ""
+
 route_canonical = merge_route_canonical(route_canonical, {
-    "required_successor_exactness": required_successor_exactness,
-    "successor_materialization_status": successor_materialization_status,
-    "experiment_gate_status": experiment_gate_status,
-    "experiment_decision_gate_required": experiment_gate_status in {"required_ready", "blocked"},
-    "experiment_decision_gate_blocking": experiment_gate_status == "blocked",
+    "active_task_id": resolved_exact_contract.get("exact_next_task_id"),
+    "exact_next_task_id": resolved_exact_contract.get("exact_next_task_id"),
+    "exact_profile_path": resolved_exact_contract.get("exact_profile_path"),
+    "exact_queue_draft_path": resolved_exact_contract.get("exact_queue_draft_path"),
+    "exact_next_object_path": resolved_exact_contract.get("exact_next_object_path"),
+    "required_successor_exactness": resolved_exact_contract.get("required_successor_exactness"),
+    "successor_materialization_status": resolved_exact_contract.get("successor_materialization_status"),
+    "experiment_gate_status": resolved_exact_contract.get("experiment_gate_status"),
+    "experiment_decision_gate_required": resolved_exact_contract.get("experiment_decision_gate_required"),
+    "experiment_decision_gate_blocking": resolved_exact_contract.get("experiment_decision_gate_blocking"),
+    "successor_contract_required": resolved_exact_contract.get("successor_contract_required"),
 }, updated)
 route_canonical_changed = True
 task_box = ensure_task_box(task_box, route_canonical)
 task_box["owner_mode"] = route_canonical.get("owner_mode") or task_box.get("owner_mode")
 task_box["current_allowed_step"] = route_canonical.get("current_allowed_step") or task_box.get("current_allowed_step")
-task_box["successor_contract_required"] = bool(route_canonical.get("successor_contract_required"))
-task_box["active_task_id"] = route_canonical.get("active_task_id") or task_box.get("active_task_id")
-task_box["exact_next_task_id"] = route_canonical.get("exact_next_task_id") or successor_task_draft.get("task_id") or task_box.get("exact_next_task_id")
-task_box["exact_profile_path"] = route_canonical.get("exact_profile_path") or task_profile_path or task_box.get("exact_profile_path")
-task_box["exact_queue_draft_path"] = route_canonical.get("exact_queue_draft_path") or queue_request_draft_path or task_box.get("exact_queue_draft_path")
-task_box["exact_next_object_path"] = exact_next_object_path or task_box.get("exact_next_object_path")
-task_box["required_successor_exactness"] = required_successor_exactness
-task_box["successor_materialization_status"] = successor_materialization_status
-task_box["experiment_gate_status"] = experiment_gate_status
-task_box["experiment_decision_gate_required"] = experiment_gate_status in {"required_ready", "blocked"}
-task_box["experiment_decision_gate_blocking"] = experiment_gate_status == "blocked"
+task_box["successor_contract_required"] = bool(resolved_exact_contract.get("successor_contract_required"))
+task_box["active_task_id"] = resolved_exact_contract.get("exact_next_task_id")
+task_box["exact_next_task_id"] = resolved_exact_contract.get("exact_next_task_id")
+task_box["exact_profile_path"] = resolved_exact_contract.get("exact_profile_path")
+task_box["exact_queue_draft_path"] = resolved_exact_contract.get("exact_queue_draft_path")
+task_box["exact_next_object_path"] = resolved_exact_contract.get("exact_next_object_path")
+task_box["required_successor_exactness"] = resolved_exact_contract.get("required_successor_exactness")
+task_box["successor_materialization_status"] = resolved_exact_contract.get("successor_materialization_status")
+task_box["experiment_gate_status"] = resolved_exact_contract.get("experiment_gate_status")
+task_box["experiment_decision_gate_required"] = resolved_exact_contract.get("experiment_decision_gate_required")
+task_box["experiment_decision_gate_blocking"] = resolved_exact_contract.get("experiment_decision_gate_blocking")
 task_box["updated_utc"] = updated
 task_box_changed = True
 
@@ -10774,11 +10941,6 @@ runtime_state_json = derive_runtime_state_json(
     bool(data.get("requires_human_review")),
 )
 atomic_write_json("agent/STATE.json", runtime_state_json)
-
-exact_next_task_id = str(route_canonical.get("exact_next_task_id") or task_box.get("exact_next_task_id") or successor_task_draft.get("task_id") or "").strip()
-exact_profile_path = str(route_canonical.get("exact_profile_path") or task_box.get("exact_profile_path") or task_profile_path or "").strip()
-exact_queue_draft_path = str(route_canonical.get("exact_queue_draft_path") or task_box.get("exact_queue_draft_path") or queue_request_draft_path or "").strip()
-exact_next_object_path = str(exact_next_object_path or route_canonical.get("exact_next_object_path") or task_box.get("exact_next_object_path") or "").strip()
 
 state_update = data.get("state_update_markdown", "").strip()
 if state_update:
