@@ -1252,6 +1252,120 @@ async function main() {
   assert.ok(latestLedgerEntry.output_paths.includes("agent/queue/drafts/stage06_g1_followup.json"));
   assert.deepStrictEqual(latestLedgerEntry.secondary_skills_consulted, ["research-comparability"]);
   assert.strictEqual(latestLedgerEntry.claim_scope, null);
+  assert.strictEqual(latestLedgerEntry.successor_contract_generated, true);
+  assert.strictEqual(latestLedgerEntry.exact_next_object_path, "agent/queue/drafts/stage06_g1_followup.json");
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "auto-successor-box",
+    route_id: "route-auto",
+    route_epoch: "route-auto-001",
+    requires_review: false,
+    allowed_actions: ["queue_enqueue"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/", "agent/queue/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: true
+    },
+    tasks: []
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-auto",
+    route_epoch: "route-auto-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false,
+    current_allowed_step: "queue_enqueue",
+    current_budget_contract: "one bounded queue job"
+  });
+  runRender(projectRoot, {
+    timestamp_utc: "2026-06-08T13:00:00Z",
+    report_markdown: "# Report\n\nAccepted the route switch and automatically materialized the next queue-bound successor contract.",
+    overall_status: "active",
+    report_type: "progress",
+    primary_skill: "watchdog-orchestrator",
+    secondary_skills_consulted: ["research-comparability"],
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "Accepted the route shift and auto-created the exact follow-up queue contract.",
+    blocked_items: [],
+    completed_items: ["Accepted successor route"],
+    running_items: [],
+    evidence: ["agent/ROUTE_CANONICAL.json"],
+    progress_changed: true,
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "safe_script_candidate",
+      description: "Enqueue exactly one bounded GPU follow-up for the accepted route.",
+      can_execute_automatically: true,
+      reason: "The route changed and the next bounded step should go through the controlled GPU queue."
+    },
+    skill_stop_condition: "Materialize one exact successor contract and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "Runtime state updated for automatic successor materialization.",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {
+      route_id: "route-auto",
+      route_epoch: "route-auto-002",
+      owner_mode: "fully_autonomous",
+      requires_review: false,
+      current_allowed_step: "queue_enqueue",
+      exact_next_task_id: "route_auto_gpu_followup",
+      successor_contract_required: true
+    },
+    task_box_update: {
+      project_question: "Does one more bounded GPU follow-up change whether this route stays primary?",
+      decision_relevance: "A positive result keeps the route alive; a negative result demotes it.",
+      claim_scope: "bounded_gpu_diagnostic",
+      diagnosis_target: "successor queue viability",
+      fair_comparability: {
+        same_family_or_not: "same_family",
+        same_budget_or_not: "same_budget",
+        same_training_contract_or_not: "same_training_contract",
+        same_eval_contract_or_not: "same_eval_contract"
+      },
+      value_of_information: {
+        expected_information_gain: "medium",
+        decision_change_if_positive: "Keep the route alive for one more bounded queue cycle.",
+        decision_change_if_negative: "Demote the route and choose a replacement.",
+        cheaper_alternative_exists: false
+      }
+    }
+  });
+  const autoSuccessorDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "NEXT_TASK_DRAFT.json"), "utf8"));
+  assert.strictEqual(autoSuccessorDraft.task_id, "route_auto_gpu_followup");
+  assert.strictEqual(autoSuccessorDraft.kind, "queue_enqueue");
+  assert.strictEqual(autoSuccessorDraft.queue_target, "gpu_queue");
+  assert.strictEqual(autoSuccessorDraft.command_profile, "route_auto_gpu_followup");
+  assert.strictEqual(autoSuccessorDraft.budget_contract, "one bounded queue job");
+  assert.deepStrictEqual(autoSuccessorDraft.expected_outputs, ["runs/route_auto_gpu_followup/metrics.json"]);
+  const autoProfileDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "task_profiles", "route_auto_gpu_followup.json"), "utf8"));
+  assert.strictEqual(autoProfileDraft.profile_kind, "gpu_queue_followup");
+  const autoQueueDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "queue", "drafts", "route_auto_gpu_followup.json"), "utf8"));
+  assert.strictEqual(autoQueueDraft.queue_target, "gpu_queue");
+  assert.strictEqual(autoQueueDraft.command_profile, "route_auto_gpu_followup");
+  assert.deepStrictEqual(autoQueueDraft.expected_outputs, ["runs/route_auto_gpu_followup/metrics.json"]);
+  const autoRouteCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
+  assert.strictEqual(autoRouteCanonical.exact_next_task_id, "route_auto_gpu_followup");
+  assert.strictEqual(autoRouteCanonical.exact_profile_path, "agent/task_profiles/route_auto_gpu_followup.json");
+  assert.strictEqual(autoRouteCanonical.exact_queue_draft_path, "agent/queue/drafts/route_auto_gpu_followup.json");
+  assert.strictEqual(autoRouteCanonical.exact_next_object_path, "agent/queue/drafts/route_auto_gpu_followup.json");
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.task_id, "route_auto_gpu_followup");
+  assert.match(route.reason, /exact queue draft already defines queue target, profile, budget, timeout, and expected outputs/i);
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,

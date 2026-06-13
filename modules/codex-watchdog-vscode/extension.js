@@ -9942,7 +9942,78 @@ def infer_successor_allowed_runner(next_action, route_canonical, queue_request_d
             return value
     return "report_only"
 
-def synthesize_successor_task(route_canonical, next_action, queue_request_draft, task_profile_draft):
+def infer_successor_workspace_mode(next_action, route_canonical):
+    text = ""
+    if isinstance(next_action, dict):
+        text = " ".join(str(next_action.get(key) or "") for key in ("kind", "description", "reason")).lower()
+    step = str((route_canonical or {}).get("current_allowed_step") or "").lower()
+    if "local workspace" in text or "project local" in text or "local copy" in text:
+        return "project_local_copy"
+    if "workspace" in step or "local_copy" in step or "local-copy" in step or "copy" in step:
+        return "project_local_copy"
+    return "readonly"
+
+def infer_successor_queue_mode(task_box, route_canonical, next_action, allowed_runner):
+    if allowed_runner != "gpu":
+        return False
+    policy = task_box.get("queue_policy") if isinstance(task_box, dict) else {}
+    policy_gpu = str(policy.get("gpu") or "").strip().lower() if isinstance(policy, dict) else ""
+    text = ""
+    if isinstance(next_action, dict):
+        text = " ".join(str(next_action.get(key) or "") for key in ("kind", "description", "reason")).lower()
+    step = str((route_canonical or {}).get("current_allowed_step") or "").lower()
+    if policy_gpu == "queue_only":
+        return True
+    if any(term in text for term in ("queue", "enqueue", "gpu_queue")):
+        return True
+    return any(term in step for term in ("queue", "enqueue", "gpu"))
+
+def infer_successor_output_paths(task_id, allowed_runner, workspace_mode, queue_request_draft):
+    if isinstance(queue_request_draft, dict):
+        outputs = queue_request_draft.get("expected_outputs") if isinstance(queue_request_draft.get("expected_outputs"), list) else queue_request_draft.get("outputs")
+        if isinstance(outputs, list) and any(str(item or "").strip() for item in outputs):
+            return [str(item).strip() for item in outputs if str(item or "").strip()]
+    slug = safe_name(task_id or "next-task")
+    if workspace_mode == "project_local_copy":
+        return [f"workspace/{slug}/", f"agent/reports/{slug}.md"]
+    if allowed_runner in {"cpu", "gpu"}:
+        return [f"runs/{slug}/metrics.json"]
+    return [f"agent/reports/{slug}.md"]
+
+def infer_successor_budget_contract(route_canonical, queue_mode, allowed_runner):
+    budget = str((route_canonical or {}).get("current_budget_contract") or "").strip()
+    if budget:
+        return budget
+    if queue_mode:
+        return "one bounded queue job"
+    if allowed_runner == "cpu":
+        return "one bounded cpu follow-up"
+    if allowed_runner == "gpu":
+        return "one bounded gpu follow-up"
+    return "one bounded report-only follow-up"
+
+def infer_successor_runtime_minutes(route_canonical, queue_mode, allowed_runner):
+    for key in ("max_runtime_minutes", "bounded_runtime_minutes", "timeout_minutes"):
+        value = (route_canonical or {}).get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    if queue_mode or allowed_runner == "gpu":
+        return 45
+    if allowed_runner == "cpu":
+        return 20
+    return 10
+
+def infer_successor_queue_target(task_box, route_canonical):
+    for source in ((route_canonical or {}), (task_box.get("queue_policy") if isinstance(task_box, dict) else {})):
+        if not isinstance(source, dict):
+            continue
+        for key in ("queue_target", "queue_name", "default_queue_target"):
+            value = str(source.get(key) or "").strip()
+            if value:
+                return value
+    return "gpu_queue"
+
+def synthesize_successor_task(route_canonical, task_box, next_action, queue_request_draft, task_profile_draft):
     if not isinstance(route_canonical, dict):
         return {}
     task_id = str(route_canonical.get("exact_next_task_id") or "").strip()
@@ -9955,12 +10026,65 @@ def synthesize_successor_task(route_canonical, next_action, queue_request_draft,
         title = str(next_action.get("description") or "").strip()
     if not title:
         title = f"Continue with exact successor route {route_canonical.get('route_id') or 'next-step'}."
-    return {
+    allowed_runner = infer_successor_allowed_runner(next_action, route_canonical, queue_request_draft, task_profile_draft)
+    workspace_mode = infer_successor_workspace_mode(next_action, route_canonical)
+    queue_mode = infer_successor_queue_mode(task_box, route_canonical, next_action, allowed_runner)
+    outputs = infer_successor_output_paths(task_id, allowed_runner, workspace_mode, queue_request_draft)
+    task = {
         "task_id": task_id,
         "status": "pending",
-        "allowed_runner": infer_successor_allowed_runner(next_action, route_canonical, queue_request_draft, task_profile_draft),
+        "allowed_runner": allowed_runner,
         "title": title,
         "successor_contract_inferred": True,
+        "outputs": outputs,
+    }
+    if workspace_mode == "project_local_copy":
+        task["workspace_mode"] = workspace_mode
+    if queue_mode:
+        task["kind"] = "queue_enqueue"
+        task["queue_target"] = infer_successor_queue_target(task_box, route_canonical)
+        task["command_profile"] = safe_name(task_id)
+        task["expected_outputs"] = outputs
+        task["max_runtime_minutes"] = infer_successor_runtime_minutes(route_canonical, queue_mode, allowed_runner)
+        task["budget_contract"] = infer_successor_budget_contract(route_canonical, queue_mode, allowed_runner)
+    return task
+
+def should_synthesize_successor_profile(task):
+    return isinstance(task, dict) and str(task.get("kind") or "").strip().lower() == "queue_enqueue"
+
+def synthesize_successor_profile_draft(route_canonical, task):
+    if not should_synthesize_successor_profile(task):
+        return {}
+    task_id = str(task.get("task_id") or "").strip()
+    if not task_id:
+        return {}
+    return {
+        "task_id": task_id,
+        "profile_kind": "gpu_queue_followup",
+        "allowed_runner": str(task.get("allowed_runner") or "").strip().lower() or "gpu",
+        "command_profile": str(task.get("command_profile") or safe_name(task_id)),
+        "route_id": str((route_canonical or {}).get("route_id") or ""),
+        "route_epoch": str((route_canonical or {}).get("route_epoch") or ""),
+        "expected_outputs": task.get("expected_outputs") if isinstance(task.get("expected_outputs"), list) else [],
+    }
+
+def should_synthesize_successor_queue_request(task):
+    return isinstance(task, dict) and str(task.get("kind") or "").strip().lower() == "queue_enqueue"
+
+def synthesize_successor_queue_request(route_canonical, task_box, task):
+    if not should_synthesize_successor_queue_request(task):
+        return {}
+    task_id = str(task.get("task_id") or "").strip()
+    if not task_id:
+        return {}
+    return {
+        "task_id": task_id,
+        "runner": str(task.get("allowed_runner") or "").strip().lower() or "gpu",
+        "queue_target": str(task.get("queue_target") or infer_successor_queue_target(task_box, route_canonical)),
+        "command_profile": str(task.get("command_profile") or safe_name(task_id)),
+        "expected_outputs": task.get("expected_outputs") if isinstance(task.get("expected_outputs"), list) else infer_successor_output_paths(task_id, str(task.get("allowed_runner") or "").strip().lower() or "gpu", str(task.get("workspace_mode") or "readonly"), {}),
+        "max_runtime_minutes": int(task.get("max_runtime_minutes") or infer_successor_runtime_minutes(route_canonical, True, str(task.get("allowed_runner") or "").strip().lower() or "gpu")),
+        "budget_contract": str(task.get("budget_contract") or infer_successor_budget_contract(route_canonical, True, str(task.get("allowed_runner") or "").strip().lower() or "gpu")),
     }
 
 def write_task_profile_draft(draft, fallback_task_id):
@@ -10017,7 +10141,13 @@ if task_box_update:
 next_action = data.get("next_safe_action") or {}
 
 if not successor_task_draft and route_canonical.get("successor_contract_required") is True:
-    successor_task_draft = synthesize_successor_task(route_canonical, next_action, queue_request_draft, task_profile_draft)
+    successor_task_draft = synthesize_successor_task(route_canonical, task_box, next_action, queue_request_draft, task_profile_draft)
+
+if not task_profile_draft and should_synthesize_successor_profile(successor_task_draft):
+    task_profile_draft = synthesize_successor_profile_draft(route_canonical, successor_task_draft)
+
+if not queue_request_draft and should_synthesize_successor_queue_request(successor_task_draft):
+    queue_request_draft = synthesize_successor_queue_request(route_canonical, task_box, successor_task_draft)
 
 next_task_draft_path = ""
 if successor_task_draft:
@@ -10326,6 +10456,9 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "route_capability": route.get("route_capability"),
     "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
     "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
+    "successor_contract_generated": bool(next_task_draft_path or task_profile_path or queue_request_draft_path),
+    "exact_next_task_id": route_canonical.get("exact_next_task_id"),
+    "exact_next_object_path": exact_next_object_path,
     "task_box_id": task_box.get("task_box_id"),
     "input_paths": [],
     "output_paths": [
