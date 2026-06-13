@@ -8,6 +8,7 @@ const os = require("os");
 const crypto = require("crypto");
 const cp = require("child_process");
 const packageMetadata = require("./package.json");
+const { createGuardLifecycle } = require("./guardLifecycle");
 const {
   bootstrapArchiveDir,
   bootstrapChangePreviewPath,
@@ -41,6 +42,7 @@ let controlPanel;
 let statusBarItem;
 let statusBarRefresh;
 let panelOperationState;
+let guardCommands;
 
 const PROJECT_ROOT_KEY = "projectRoot";
 const STATUS_REFRESH_MS = 60000;
@@ -70,6 +72,26 @@ function activate(context) {
   output = vscode.window.createOutputChannel("Codex Watchdog");
   context.subscriptions.push(output);
 
+  guardCommands = createGuardLifecycle({
+    vscode,
+    output,
+    getProjectRoot,
+    ensureDir,
+    prepareProjectForGuard,
+    confirmTaskInstantiatedIfNeeded,
+    ensureCodexHome,
+    confirmLoginIfNeeded,
+    runLogged,
+    watchdogCommandEnv,
+    watchdogCommandTimeoutMs,
+    setPanelOperationState,
+    clearPanelOperationState,
+    updateStatusBar,
+    unitNames,
+    getTimerStatus,
+    openDocument
+  });
+
   register(context, "codexWatchdog.openControlPanel", openControlPanelCommand);
   register(context, "codexWatchdog.selectProjectRoot", selectProjectRootCommand);
   register(context, "codexWatchdog.bootstrapProject", bootstrapProjectCommand);
@@ -78,15 +100,15 @@ function activate(context) {
   register(context, "codexWatchdog.refreshGeneratedFiles", refreshGeneratedFilesCommand);
   register(context, "codexWatchdog.prepareEveningHandoff", prepareEveningHandoffCommand);
   register(context, "codexWatchdog.openMorningBrief", openMorningBriefCommand);
-  register(context, "codexWatchdog.startGuard", startGuardCommand);
-  register(context, "codexWatchdog.pauseGuard", pauseGuardCommand);
-  register(context, "codexWatchdog.resumeGuard", resumeGuardCommand);
-  register(context, "codexWatchdog.stopGuard", stopGuardCommand);
-  register(context, "codexWatchdog.runOnce", runOnceCommand);
-  register(context, "codexWatchdog.startTimer", startTimerCommand);
-  register(context, "codexWatchdog.stopTimer", stopTimerCommand);
-  register(context, "codexWatchdog.showTimerStatus", showTimerStatusCommand);
-  register(context, "codexWatchdog.openLatestReport", openLatestReportCommand);
+  register(context, "codexWatchdog.startGuard", guardCommands.startGuardCommand);
+  register(context, "codexWatchdog.pauseGuard", guardCommands.pauseGuardCommand);
+  register(context, "codexWatchdog.resumeGuard", guardCommands.resumeGuardCommand);
+  register(context, "codexWatchdog.stopGuard", guardCommands.stopGuardCommand);
+  register(context, "codexWatchdog.runOnce", guardCommands.runOnceCommand);
+  register(context, "codexWatchdog.startTimer", guardCommands.startTimerCommand);
+  register(context, "codexWatchdog.stopTimer", guardCommands.stopTimerCommand);
+  register(context, "codexWatchdog.showTimerStatus", guardCommands.showTimerStatusCommand);
+  register(context, "codexWatchdog.openLatestReport", guardCommands.openLatestReportCommand);
   register(context, "codexWatchdog.acceptStateUpdate", acceptStateUpdateCommand);
 
   initializeStatusBar(context);
@@ -596,49 +618,49 @@ async function handleControlPanelMessage(message) {
   }
 
   if (command === "runOnce") {
-    await runOnceCommand();
+    await guardCommands.runOnceCommand();
     await updateControlPanel();
     return;
   }
 
   if (command === "startGuard") {
-    await startGuardCommand();
+    await guardCommands.startGuardCommand();
     await updateControlPanel();
     return;
   }
 
   if (command === "pauseGuard") {
-    await pauseGuardCommand();
+    await guardCommands.pauseGuardCommand();
     await updateControlPanel();
     return;
   }
 
   if (command === "resumeGuard") {
-    await resumeGuardCommand();
+    await guardCommands.resumeGuardCommand();
     await updateControlPanel();
     return;
   }
 
   if (command === "stopGuard") {
-    await stopGuardCommand();
+    await guardCommands.stopGuardCommand();
     await updateControlPanel();
     return;
   }
 
   if (command === "startTimer") {
-    await startTimerCommand();
+    await guardCommands.startTimerCommand();
     await updateControlPanel();
     return;
   }
 
   if (command === "stopTimer") {
-    await stopTimerCommand();
+    await guardCommands.stopTimerCommand();
     await updateControlPanel();
     return;
   }
 
   if (command === "openLatest") {
-    await openLatestReportCommand();
+    await guardCommands.openLatestReportCommand();
     await updateControlPanel();
     return;
   }
@@ -1594,120 +1616,6 @@ async function openMorningBriefCommand() {
   }
 }
 
-async function startGuardCommand() {
-  const root = await getProjectRoot();
-  if (!root) {
-    return;
-  }
-
-  await vscode.window.withProgress({
-    location: vscode.ProgressLocation.Notification,
-    title: "Starting Codex Watchdog guard",
-    cancellable: false
-  }, async (progress) => {
-    const startedAt = new Date().toISOString();
-    try {
-      progress.report({ message: "Preparing generated files" });
-      await setPanelOperationState({
-        title: "Starting guard",
-        detail: "Refreshing generated watchdog files and checking project readiness...",
-        startedAt
-      });
-      await prepareProjectForGuard(root);
-      const taskReady = await confirmTaskInstantiatedIfNeeded(root);
-      if (!taskReady) {
-        return;
-      }
-
-      progress.report({ message: "Preparing Codex home" });
-      await setPanelOperationState({
-        title: "Starting guard",
-        detail: "Checking CODEX_HOME and login state before unattended mode starts...",
-        startedAt
-      });
-      await ensureCodexHome(root);
-      const canContinue = await confirmLoginIfNeeded(root);
-      if (!canContinue) {
-        return;
-      }
-
-      progress.report({ message: "Running one wakeup, then starting timer" });
-      await setPanelOperationState({
-        title: "Starting guard",
-        detail: "Running one immediate watchdog wakeup, then enabling the repeating timer...",
-        startedAt
-      });
-      output.show(true);
-      output.appendLine(`\n# ${new Date().toISOString()} Start Guard`);
-      output.appendLine(`Project root: ${root}`);
-      await runLogged(path.join(root, "agent", "bin", "watchdog"), ["start"], {
-        cwd: root,
-        env: await watchdogCommandEnv(root),
-        timeout: watchdogCommandTimeoutMs(root)
-      });
-
-      vscode.window.showInformationMessage("Codex Watchdog guard started. Future operations can use ./agent/bin/watchdog.");
-      await updateStatusBar();
-    } finally {
-      await clearPanelOperationState();
-    }
-  });
-}
-
-async function pauseGuardCommand() {
-  const root = await getProjectRoot();
-  if (!root) {
-    return;
-  }
-  await ensureDir(path.join(root, "agent", "control"));
-  const pauseFile = path.join(root, "agent", "control", "PAUSE");
-  await fsp.writeFile(pauseFile, [
-    `Paused at: ${new Date().toISOString()}`,
-    "Reason: paused from VSCode control panel",
-    ""
-  ].join("\n"));
-  vscode.window.showInformationMessage("Codex Watchdog guard paused. Timer may still fire, but run_watchdog.sh will not call Codex while PAUSE exists.");
-  await updateStatusBar();
-}
-
-async function resumeGuardCommand() {
-  const root = await getProjectRoot();
-  if (!root) {
-    return;
-  }
-  const pauseFile = path.join(root, "agent", "control", "PAUSE");
-  if (fs.existsSync(pauseFile)) {
-    await fsp.unlink(pauseFile);
-  }
-  vscode.window.showInformationMessage("Codex Watchdog guard resumed.");
-  await updateStatusBar();
-}
-
-async function stopGuardCommand() {
-  const root = await getProjectRoot();
-  if (!root) {
-    return;
-  }
-
-  const cli = path.join(root, "agent", "bin", "watchdog");
-  if (fs.existsSync(cli)) {
-    output.show(true);
-    output.appendLine(`\n# ${new Date().toISOString()} Stop Guard`);
-    output.appendLine(`Project root: ${root}`);
-    const result = await runLogged(cli, ["stop"], {
-      cwd: root,
-      env: await watchdogCommandEnv(root),
-      allowFailure: true,
-      timeout: 60000
-    });
-    await showStopOutcome(root, result, "guard");
-    await updateStatusBar();
-    return;
-  }
-
-  await stopTimerCommand();
-}
-
 async function prepareProjectForGuard(root) {
   await prepareProjectForInstantiation(root);
 }
@@ -1860,144 +1768,6 @@ async function renderWatchdogEnv(root) {
     `WATCHDOG_SERVICE_PREFIX=${shellQuote(settings.servicePrefix)}`,
     ""
   ].join("\n");
-}
-
-async function runOnceCommand() {
-  const root = await getProjectRoot();
-  if (!root) {
-    return;
-  }
-  await prepareProjectForGuard(root);
-  const taskReady = await confirmTaskInstantiatedIfNeeded(root);
-  if (!taskReady) {
-    return;
-  }
-  await ensureCodexHome(root);
-  const canContinue = await confirmLoginIfNeeded(root);
-  if (!canContinue) {
-    return;
-  }
-  const settings = await effectiveWatchdogSettings(root);
-  const terminal = vscode.window.createTerminal({
-    name: "Codex Watchdog",
-    cwd: root,
-    env: {
-      CODEX_BIN: settings.codexBin,
-      CODEX_HOME: settings.codexHome,
-      CODEX_SANDBOX_MODE: settings.sandboxMode,
-      WATCHDOG_INTERVAL_MINUTES: String(settings.intervalMinutes),
-      WATCHDOG_TIMEOUT_MINUTES: String(settings.timeoutMinutes),
-      WATCHDOG_COMPACT_EVERY_RUNS: String(settings.compactEveryRuns),
-      WATCHDOG_ROLE: settings.role,
-      WATCHDOG_PHASE_OFFSET_MINUTES: String(settings.phaseOffsetMinutes),
-      WATCHDOG_SUPERVISOR_LIGHT_FOLLOWUP: settings.supervisorLightFollowup ? "1" : "0",
-      WATCHDOG_SUPERVISOR_AUDIT_EVERY_RUNNER_RUNS: String(settings.supervisorAuditEveryRunnerRuns),
-      WATCHDOG_SERVICE_PREFIX: settings.servicePrefix,
-      CUDA_VISIBLE_DEVICES: ""
-    }
-  });
-  terminal.show();
-  terminal.sendText("./agent/bin/watchdog run-once");
-}
-
-async function startTimerCommand() {
-  const root = await getProjectRoot();
-  if (!root) {
-    return;
-  }
-  await vscode.window.withProgress({
-    location: vscode.ProgressLocation.Notification,
-    title: "Running Codex Watchdog once, then starting timer",
-    cancellable: false
-  }, async () => {
-    const startedAt = new Date().toISOString();
-    try {
-      await setPanelOperationState({
-        title: "Run once and start timer",
-        detail: "Refreshing the project, checking login, then launching one wakeup before the timer starts...",
-        startedAt
-      });
-      await prepareProjectForGuard(root);
-      const taskReady = await confirmTaskInstantiatedIfNeeded(root);
-      if (!taskReady) {
-        return;
-      }
-      await ensureCodexHome(root);
-      const canContinue = await confirmLoginIfNeeded(root);
-      if (!canContinue) {
-        return;
-      }
-      await setPanelOperationState({
-        title: "Run once and start timer",
-        detail: "Executing one immediate watchdog cycle and enabling the repeating timer...",
-        startedAt
-      });
-      output.show(true);
-      output.appendLine(`\n# ${new Date().toISOString()} Run Once And Start Timer`);
-      output.appendLine(`Project root: ${root}`);
-      await runLogged(path.join(root, "agent", "bin", "watchdog"), ["start"], {
-        cwd: root,
-        env: await watchdogCommandEnv(root),
-        timeout: watchdogCommandTimeoutMs(root)
-      });
-      vscode.window.showInformationMessage("Codex Watchdog immediate wakeup succeeded and timer started.");
-      await updateStatusBar();
-    } finally {
-      await clearPanelOperationState();
-    }
-  });
-}
-
-async function stopTimerCommand() {
-  const root = await getProjectRoot();
-  if (!root) {
-    return;
-  }
-  const units = unitNames(root);
-  const result = await runLogged("systemctl", ["--user", "disable", "--now", units.timer], { allowFailure: true });
-  await showStopOutcome(root, result, "timer");
-  await updateStatusBar();
-}
-
-async function showStopOutcome(root, result, label) {
-  const timer = await getTimerStatus(root);
-  if (result && result.error) {
-    vscode.window.showWarningMessage(`Codex Watchdog ${label} stop command reported an error. Check the Codex Watchdog output channel.`);
-    return;
-  }
-  if (timer.isActive || timer.isEnabled) {
-    vscode.window.showWarningMessage(`Codex Watchdog ${label} may still be active or enabled. Check timer status in the output channel.`);
-    output.show(true);
-    output.appendLine(timer.text);
-    return;
-  }
-  vscode.window.showInformationMessage(`Codex Watchdog ${label} stopped.`);
-}
-
-async function showTimerStatusCommand() {
-  const root = await getProjectRoot();
-  if (!root) {
-    return;
-  }
-  const units = unitNames(root);
-  output.show(true);
-  output.appendLine(`\n# ${new Date().toISOString()} ${units.timer}`);
-  await runLogged("systemctl", ["--user", "status", units.timer, "--no-pager"], { allowFailure: true });
-  await runLogged("systemctl", ["--user", "list-timers", units.timer, "--no-pager"], { allowFailure: true });
-}
-
-async function openLatestReportCommand() {
-  const root = await getProjectRoot();
-  if (!root) {
-    return;
-  }
-  const latest = path.join(root, "agent", "reports", "latest.md");
-  if (!fs.existsSync(latest)) {
-    vscode.window.showWarningMessage("No latest report exists yet. Run Codex Watchdog once first.");
-    return;
-  }
-  const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(latest));
-  await vscode.window.showTextDocument(doc, { preview: false });
 }
 
 async function acceptStateUpdateCommand() {
