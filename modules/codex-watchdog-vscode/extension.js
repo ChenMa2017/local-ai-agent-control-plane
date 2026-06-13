@@ -4780,6 +4780,7 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     route_id: "bootstrap-route",
     route_epoch: "bootstrap-000",
     active_task_id: null,
+    route_task_id: null,
     active_branch: null,
     tasks: [],
     latest_completed_job: null,
@@ -4813,6 +4814,8 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     recommend_pause: false,
     route_id: "bootstrap-route",
     route_epoch: "bootstrap-000",
+    active_task_id: null,
+    route_task_id: null,
     task_box_id: "bootstrap-taskbox",
     exact_next_task_id: null,
     exact_profile_path: null,
@@ -4838,6 +4841,7 @@ Read the current snapshot, compare it with agent/PLAN.md and agent/TODO.md, and 
     current_allowed_step: "bootstrap",
     successor_contract_required: false,
     active_task_id: null,
+    route_task_id: null,
     exact_next_task_id: null,
     exact_profile_path: null,
     exact_queue_draft_path: null,
@@ -6109,6 +6113,7 @@ The final output must follow the JSON schema.
       mode: { type: "string", enum: ["observer", "project-local-worker", "gpu-queue-worker", "maintainer"] },
       requires_review: { type: "boolean" },
       active_task_id: { type: ["string", "null"] },
+      route_task_id: { type: ["string", "null"] },
       active_branch: { type: ["string", "null"] },
       tasks: {
         type: "array",
@@ -6174,6 +6179,7 @@ The final output must follow the JSON schema.
       current_allowed_step: { type: ["string", "null"] },
       successor_contract_required: { type: "boolean" },
       active_task_id: { type: ["string", "null"] },
+      route_task_id: { type: ["string", "null"] },
       exact_next_task_id: { type: ["string", "null"] },
       exact_profile_path: { type: ["string", "null"] },
       exact_queue_draft_path: { type: ["string", "null"] },
@@ -9779,6 +9785,14 @@ def validate_state():
         errors.append("agent/STATE.json mode is invalid")
     if not isinstance(state.get("requires_review"), bool):
         errors.append("agent/STATE.json requires_review must be boolean")
+    for key in ("updated_utc", "route_id", "route_epoch", "active_task_id", "route_task_id", "active_branch", "allowed_next_action", "exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status", "task_box_id", "owner_mode", "current_allowed_step", "project_question", "decision_relevance", "claim_scope", "diagnosis_target"):
+        if key in state and state.get(key) is not None and not isinstance(state.get(key), str):
+            errors.append(f"agent/STATE.json {key} must be string or null")
+    for key in ("successor_contract_required", "experiment_decision_gate_required", "experiment_decision_gate_blocking", "derived_from_route_canonical"):
+        if key in state and not isinstance(state.get(key), bool):
+            errors.append(f"agent/STATE.json {key} must be boolean")
+    if "important_paths" in state and not isinstance(state.get("important_paths"), list):
+        errors.append("agent/STATE.json important_paths must be an array")
     tasks = state.get("tasks")
     if not isinstance(tasks, list):
         errors.append("agent/STATE.json tasks must be an array")
@@ -9854,7 +9868,7 @@ def validate_task_box():
     gate_policy = task_box.get("gate_policy")
     if gate_policy is not None and not isinstance(gate_policy, dict):
         errors.append("agent/TASK_BOX.json gate_policy must be an object")
-    for key in ("owner_mode", "current_allowed_step", "active_task_id", "exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
+    for key in ("owner_mode", "current_allowed_step", "active_task_id", "route_task_id", "exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
         if key in task_box and task_box.get(key) is not None and not isinstance(task_box.get(key), str):
             errors.append(f"agent/TASK_BOX.json {key} must be string or null")
     for key in ("successor_contract_required", "experiment_decision_gate_required", "experiment_decision_gate_blocking"):
@@ -10232,7 +10246,7 @@ def ensure_task_box(existing, route_canonical):
             box["route_epoch"] = route_canonical.get("route_epoch")
         if isinstance(route_canonical.get("requires_review"), bool):
             box["requires_review"] = route_canonical.get("requires_review")
-        for key in ("owner_mode", "current_allowed_step", "active_task_id", "exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
+        for key in ("owner_mode", "current_allowed_step", "active_task_id", "route_task_id", "exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
             if key in route_canonical:
                 box[key] = route_canonical.get(key)
         for key in ("successor_contract_required", "experiment_decision_gate_required", "experiment_decision_gate_blocking"):
@@ -10980,6 +10994,7 @@ task_box["owner_mode"] = route_canonical.get("owner_mode") or task_box.get("owne
 task_box["current_allowed_step"] = route_canonical.get("current_allowed_step") or task_box.get("current_allowed_step")
 task_box["successor_contract_required"] = bool(resolved_exact_contract.get("successor_contract_required"))
 task_box["active_task_id"] = resolved_exact_contract.get("exact_next_task_id")
+task_box["route_task_id"] = resolved_route_task_id
 task_box["exact_next_task_id"] = resolved_exact_contract.get("exact_next_task_id")
 task_box["exact_profile_path"] = resolved_exact_contract.get("exact_profile_path")
 task_box["exact_queue_draft_path"] = resolved_exact_contract.get("exact_queue_draft_path")

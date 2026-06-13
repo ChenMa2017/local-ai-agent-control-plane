@@ -207,6 +207,7 @@ async function main() {
   assert.ok(initialTaskBox.project_question);
   assert.ok(initialTaskBox.decision_relevance);
   assert.ok(initialTaskBox.claim_scope);
+  assert.strictEqual(initialTaskBox.route_task_id, null);
   assert.ok(Array.isArray(initialTaskBox.forbidden_conclusions));
   assert.strictEqual(initialTaskBox.gate_policy.topic_alignment_check, true);
   assert.strictEqual(initialTaskBox.gate_policy.claim_scope_gate, true);
@@ -216,6 +217,10 @@ async function main() {
   const initialRouteCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
   assert.strictEqual(initialRouteCanonical.successor_contract_required, false);
   assert.strictEqual(initialRouteCanonical.exact_next_object_path, null);
+  const initialStateJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.strictEqual(initialStateJson.route_task_id, null);
+  const initialProgressJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "PROGRESS_STATE.json"), "utf8"));
+  assert.strictEqual(initialProgressJson.route_task_id, null);
 
   await api.writeBootstrapConversation(projectRoot, {
     updated_at: "2026-06-04T12:00:00Z",
@@ -1781,6 +1786,7 @@ async function main() {
   const gateBlockedTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
   assert.strictEqual(gateBlockedTaskBox.experiment_gate_status, "blocked");
   assert.strictEqual(gateBlockedTaskBox.successor_materialization_status, "blocked_by_experiment_gate");
+  assert.strictEqual(gateBlockedTaskBox.route_task_id, "route_fallback_gpu_after_gate");
   assert.strictEqual(gateBlockedTaskBox.exact_profile_path, null);
   assert.strictEqual(gateBlockedTaskBox.exact_queue_draft_path, null);
   assert.strictEqual(gateBlockedTaskBox.exact_next_object_path, null);
@@ -1900,6 +1906,7 @@ async function main() {
   assert.strictEqual(gateReadyTaskBox.experiment_gate_status, "required_ready");
   assert.strictEqual(gateReadyTaskBox.successor_materialization_status, "queue_exact");
   assert.strictEqual(gateReadyTaskBox.successor_contract_required, false);
+  assert.strictEqual(gateReadyTaskBox.route_task_id, "route_fallback_gpu_after_gate");
   assert.strictEqual(gateReadyTaskBox.exact_profile_path, "agent/task_profiles/route_fallback_gpu_after_gate.json");
   assert.strictEqual(gateReadyTaskBox.exact_queue_draft_path, "agent/queue/drafts/route_fallback_gpu_after_gate.json");
   const gateReadyState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
@@ -2073,8 +2080,10 @@ async function main() {
   assert.strictEqual(canonicalCpuDraft.kind, "bounded_cpu_eval");
   assert.strictEqual(canonicalCpuDraft.exact_contract_rehydrated, true);
   const canonicalCpuTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
+  assert.strictEqual(canonicalCpuTaskBox.route_task_id, "canonical_cpu_only_followup");
   assert.ok(canonicalCpuTaskBox.tasks.some((task) => task.task_id === "canonical_cpu_only_followup"));
   const canonicalCpuState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.strictEqual(canonicalCpuState.route_task_id, "canonical_cpu_only_followup");
   assert.ok(canonicalCpuState.tasks.some((task) => task.task_id === "canonical_cpu_only_followup"));
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
@@ -2216,8 +2225,10 @@ async function main() {
   assert.strictEqual(canonicalLocalDraft.kind, "local_workspace_copy");
   assert.strictEqual(canonicalLocalDraft.exact_contract_rehydrated, true);
   const canonicalLocalTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
+  assert.strictEqual(canonicalLocalTaskBox.route_task_id, "canonical_local_workspace_followup");
   assert.ok(canonicalLocalTaskBox.tasks.some((task) => task.task_id === "canonical_local_workspace_followup"));
   const canonicalLocalState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
+  assert.strictEqual(canonicalLocalState.route_task_id, "canonical_local_workspace_followup");
   assert.ok(canonicalLocalState.tasks.some((task) => task.task_id === "canonical_local_workspace_followup"));
 
   writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
