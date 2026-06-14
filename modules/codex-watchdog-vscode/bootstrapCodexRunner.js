@@ -1,7 +1,11 @@
 "use strict";
 
 const fs = require("fs");
-const fsp = fs.promises;
+const { runBootstrapCodexJsonCall } = require("./bootstrapCodexExec");
+const {
+  createBootstrapDiscussionLatestResult,
+  createBootstrapDraftLatestResult
+} = require("./bootstrapLatestResult");
 
 function createBootstrapCodexRunner({
   resolveCodexBin,
@@ -37,26 +41,16 @@ function createBootstrapCodexRunner({
 
     const resultFile = bootstrapLastResultPath(root);
     const prompt = bootstrapConversationPromptText(root, conversation);
-    const args = [
-      "--ask-for-approval", "never",
-      "exec",
-      "--cd", root,
-      "--skip-git-repo-check",
-      "--sandbox", "read-only",
-      "--output-schema", bootstrapConversationTurnSchemaPath(root),
-      "--output-last-message", resultFile,
-      "-"
-    ];
-    await runLoggedWithInput(codexBin, args, prompt, {
-      cwd: root,
-      env: {
-        CODEX_HOME: codexHome,
-        CUDA_VISIBLE_DEVICES: ""
-      },
-      timeout: watchdogCommandTimeoutMs(root)
+    const parsed = await runBootstrapCodexJsonCall({
+      root,
+      codexBin,
+      codexHome,
+      schemaPath: bootstrapConversationTurnSchemaPath(root),
+      resultFile,
+      prompt,
+      runLoggedWithInput,
+      watchdogCommandTimeoutMs
     });
-
-    const parsed = JSON.parse(await fsp.readFile(resultFile, "utf8"));
     await clearBootstrapDraftArtifacts(root);
 
     conversation.turns.push({
@@ -67,13 +61,7 @@ function createBootstrapCodexRunner({
     });
     conversation.draft_input = "";
     conversation.updated_at = new Date().toISOString();
-    conversation.latest_result = {
-      ready_for_start_guard: false,
-      open_questions: Array.isArray(parsed.open_questions) ? parsed.open_questions.map((item) => String(item || "").trim()).filter(Boolean) : [],
-      suggested_next_step: String(parsed.suggested_next_step || ""),
-      has_draft: false,
-      applied_at: ""
-    };
+    conversation.latest_result = createBootstrapDiscussionLatestResult(parsed);
     await writeBootstrapConversation(root, conversation);
     return parsed;
   }
@@ -84,35 +72,20 @@ function createBootstrapCodexRunner({
     const conversation = await readBootstrapConversation(root);
     const resultFile = bootstrapLastResultPath(root);
     const prompt = bootstrapInstantiationPromptText(root, conversation);
-    const args = [
-      "--ask-for-approval", "never",
-      "exec",
-      "--cd", root,
-      "--skip-git-repo-check",
-      "--sandbox", "read-only",
-      "--output-schema", bootstrapResultSchemaPath(root),
-      "--output-last-message", resultFile,
-      "-"
-    ];
-    await runLoggedWithInput(codexBin, args, prompt, {
-      cwd: root,
-      env: {
-        CODEX_HOME: codexHome,
-        CUDA_VISIBLE_DEVICES: ""
-      },
-      timeout: watchdogCommandTimeoutMs(root)
+    const parsed = await runBootstrapCodexJsonCall({
+      root,
+      codexBin,
+      codexHome,
+      schemaPath: bootstrapResultSchemaPath(root),
+      resultFile,
+      prompt,
+      runLoggedWithInput,
+      watchdogCommandTimeoutMs
     });
-    const parsed = JSON.parse(await fsp.readFile(resultFile, "utf8"));
     await stageBootstrapDraftFiles(root, parsed);
     const latestConversation = await readBootstrapConversation(root);
     latestConversation.updated_at = new Date().toISOString();
-    latestConversation.latest_result = {
-      ready_for_start_guard: Boolean(parsed.ready_for_start_guard),
-      open_questions: Array.isArray(parsed.open_questions) ? parsed.open_questions.map((item) => String(item || "").trim()).filter(Boolean) : [],
-      suggested_next_step: String(parsed.suggested_next_step || ""),
-      has_draft: true,
-      applied_at: ""
-    };
+    latestConversation.latest_result = createBootstrapDraftLatestResult(parsed);
     await writeBootstrapConversation(root, latestConversation);
     return parsed;
   }

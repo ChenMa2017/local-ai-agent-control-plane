@@ -2,18 +2,7 @@
 
 const fs = require("fs");
 const fsp = fs.promises;
-
-function normalizeLatestResult(parsed, appliedAt) {
-  return {
-    ready_for_start_guard: Boolean(parsed.ready_for_start_guard),
-    open_questions: Array.isArray(parsed.open_questions)
-      ? parsed.open_questions.map((item) => String(item || "").trim()).filter(Boolean)
-      : [],
-    suggested_next_step: String(parsed.suggested_next_step || ""),
-    has_draft: true,
-    applied_at: appliedAt || ""
-  };
-}
+const { createBootstrapDraftLatestResult } = require("./bootstrapLatestResult");
 
 function createBootstrapInstantiationFlow({
   vscode,
@@ -94,7 +83,7 @@ function createBootstrapInstantiationFlow({
     const conversation = await readBootstrapConversation(root);
     const appliedAt = new Date().toISOString();
     conversation.updated_at = appliedAt;
-    conversation.latest_result = normalizeLatestResult(result, appliedAt);
+    conversation.latest_result = createBootstrapDraftLatestResult(result, appliedAt);
     await writeBootstrapConversation(root, conversation);
 
     const changedCount = changes.filter((change) => change.changed).length;
@@ -130,6 +119,5 @@ function createBootstrapInstantiationFlow({
 }
 
 module.exports = {
-  normalizeLatestResult,
   createBootstrapInstantiationFlow
 };
