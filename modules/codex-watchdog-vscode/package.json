@@ -13,8 +13,9 @@
   "scripts": {
     "test:generated": "node tests/generated-template.test.js",
     "test:host-utils": "node tests/extension-host-utils.test.js",
+    "test:runtime-watcher-home": "node tests/runtime-watcher-home.test.js",
     "test:smoke": "node tests/refactor-smoke.test.js",
-    "test": "npm run test:generated && npm run test:host-utils && npm run test:smoke"
+    "test": "npm run test:generated && npm run test:host-utils && npm run test:runtime-watcher-home && npm run test:smoke"
   },
   "activationEvents": [
     "onStartupFinished",
