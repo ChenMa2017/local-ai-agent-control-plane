@@ -5,6 +5,8 @@ const assert = require("assert");
 const { createServiceAssemblyBridges } = require("../serviceBridges");
 const { createServiceControlPanelFactory } = require("../serviceControlPanelFactory");
 const { createServiceRuntimeFactory } = require("../serviceRuntimeFactory");
+const { createServiceProjectFactory } = require("../serviceProjectFactory");
+const { createServiceAssembly } = require("../serviceAssembly");
 const {
   createBaseControlPanelState,
   applyResolvedRuntimeState,
@@ -354,12 +356,255 @@ async function testRuntimeFactoryCaching() {
   assert.strictEqual(updateStatusBarCount, 1);
 }
 
+async function testProjectFactoryCaching() {
+  let setupCount = 0;
+  let workflowCount = 0;
+  let generatedCount = 0;
+  let scaffoldingCount = 0;
+  let commandsCount = 0;
+  let guardCount = 0;
+  let timeoutProbe;
+  let guardTimeoutProbe;
+
+  const projectFactory = createServiceProjectFactory({
+    createProjectSetupHelpers: () => ({
+      kind: `setup-${++setupCount}`,
+      prepareProjectForGuard() {},
+      confirmTaskInstantiatedIfNeeded() {},
+      ensureBootstrapConversationReady() {},
+      taskLooksInstantiated() { return true; }
+    }),
+    createBootstrapWorkflowHelpers: (args) => {
+      timeoutProbe = args.watchdogCommandTimeoutMs;
+      return { kind: `workflow-${++workflowCount}` };
+    },
+    createGeneratedFilesHelpers: () => ({
+      kind: `generated-${++generatedCount}`,
+      refreshGeneratedWatcherFiles() {}
+    }),
+    createBootstrapScaffoldingHelpers: () => ({
+      kind: `scaffolding-${++scaffoldingCount}`
+    }),
+    createProjectCommands: () => ({
+      kind: `commands-${++commandsCount}`,
+      watchdogCommandTimeoutMs: () => 12345,
+      watchdogCommandEnv: async () => ({}),
+      isGuardPaused: () => false
+    }),
+    createGuardLifecycle: (args) => {
+      guardTimeoutProbe = args.watchdogCommandTimeoutMs();
+      return { kind: `guard-${++guardCount}` };
+    },
+    vscode: {},
+    fs: {},
+    fsp: {},
+    path: {},
+    crypto: {},
+    packageVersion: "0.1.47",
+    templates: {},
+    ensureDir: async () => {},
+    getOutput: () => ({ appendLine() {} }),
+    openDocument: async () => {},
+    getRuntimeConfigHelpers: () => ({
+      codexHomeSetting: () => "/tmp/home"
+    }),
+    bridges: {
+      bootstrapProject: async () => ({}),
+      showBootstrapResult: () => {},
+      ensureCodexHome: async () => {},
+      renderWatchdogEnv: async () => "",
+      resolveCodexBin: async () => "/usr/bin/codex",
+      updateControlPanel: async () => {},
+      confirmLoginIfNeeded: async () => true,
+      getProjectRoot: async () => "/tmp/project",
+      selectProjectRoot: async () => "/tmp/project",
+      rememberProjectRoot: async () => {},
+      effectiveWatchdogSettings: async () => ({}),
+      setPanelOperationState: async () => {},
+      clearPanelOperationState: async () => {},
+      updateStatusBar: async () => {},
+      getTimerStatus: async () => ({})
+    },
+    bootstrapConversationTurnSchemaPath: () => "/tmp/turn.schema.json",
+    bootstrapResultSchemaPath: () => "/tmp/result.schema.json",
+    bootstrapLastResultPath: () => "/tmp/last.json",
+    bootstrapConversationPromptText: () => "prompt",
+    bootstrapInstantiationPromptText: () => "instantiate",
+    bootstrapConversationMarkdownPath: () => "/tmp/conversation.md",
+    bootstrapChangePreviewPath: () => "/tmp/preview.md",
+    readBootstrapConversation: async () => ({}),
+    writeBootstrapConversation: async () => {},
+    clearBootstrapDraftArtifacts: async () => {},
+    runLoggedWithInput: async () => {},
+    createNonce: () => "nonce",
+    stageBootstrapDraftFiles: async () => {},
+    applyBootstrapDraftFiles: async () => [],
+    writeBootstrapRuntimeState: async () => {},
+    emptyBootstrapRuntimeState: () => ({}),
+    extensionSetting: () => undefined,
+    defaultTimeoutMinutes: 25,
+    isWatchdogInitialized: () => true,
+    isEffectivelyEmptyDir: () => false,
+    runLogged: async () => {},
+    unitNames: () => ({}),
+    getControlPanelController: () => ({
+      setPanelOperationState: async () => {},
+      clearPanelOperationState: async () => {}
+    })
+  });
+
+  assert.strictEqual(projectFactory.getProjectSetupHelpers().kind, "setup-1");
+  assert.strictEqual(projectFactory.getProjectSetupHelpers().kind, "setup-1");
+  assert.strictEqual(projectFactory.getGeneratedFilesHelpers().kind, "generated-1");
+  assert.strictEqual(projectFactory.getGeneratedFilesHelpers().kind, "generated-1");
+  assert.strictEqual(projectFactory.getBootstrapScaffoldingHelpers().kind, "scaffolding-1");
+  assert.strictEqual(projectFactory.getProjectCommands().kind, "commands-1");
+  assert.strictEqual(projectFactory.getBootstrapWorkflowHelpers().kind, "workflow-1");
+  assert.strictEqual(projectFactory.getGuardCommands().kind, "guard-1");
+  assert.strictEqual(timeoutProbe("/tmp/project"), 12345);
+  assert.strictEqual(guardTimeoutProbe, 12345);
+  assert.strictEqual(setupCount, 1);
+  assert.strictEqual(workflowCount, 1);
+  assert.strictEqual(generatedCount, 1);
+  assert.strictEqual(scaffoldingCount, 1);
+  assert.strictEqual(commandsCount, 1);
+  assert.strictEqual(guardCount, 1);
+}
+
+async function testServiceAssemblySmoke() {
+  const registeredCommands = [];
+  const context = {
+    subscriptions: [],
+    globalState: {
+      get() {
+        return undefined;
+      },
+      async update() {}
+    }
+  };
+  const vscode = {
+    StatusBarAlignment: { Left: 1 },
+    ProgressLocation: { Notification: 1 },
+    ViewColumn: { One: 1 },
+    Disposable: class Disposable {
+      constructor(fn) {
+        this.dispose = fn;
+      }
+    },
+    Uri: {
+      file(fsPath) {
+        return { fsPath };
+      }
+    },
+    workspace: {
+      workspaceFolders: []
+    },
+    commands: {
+      registerCommand(name, handler) {
+        registeredCommands.push(name);
+        return { dispose() {}, handler };
+      }
+    },
+    window: {
+      createStatusBarItem() {
+        return {
+          show() {},
+          hide() {},
+          dispose() {},
+          text: "",
+          tooltip: "",
+          backgroundColor: undefined,
+          command: "",
+          name: ""
+        };
+      },
+      showErrorMessage() {},
+      showWarningMessage: async () => undefined,
+      showInformationMessage: async () => undefined,
+      createWebviewPanel() {
+        return {
+          webview: {
+            html: "",
+            onDidReceiveMessage() {}
+          },
+          onDidDispose() {},
+          reveal() {}
+        };
+      }
+    }
+  };
+
+  const assembly = createServiceAssembly({
+    vscode,
+    fs: require("fs"),
+    fsp: require("fs/promises"),
+    path: require("path"),
+    os: require("os"),
+    crypto: require("crypto"),
+    getOutput: () => ({ appendLine() {} }),
+    getExtensionContext: () => context,
+    projectRootKey: "codexWatchdog.projectRoot",
+    statusRefreshMs: 1_000,
+    defaultIntervalMinutes: 30,
+    defaultTimeoutMinutes: 25,
+    defaultCompactEveryRuns: 6,
+    defaultPhaseOffsetMinutes: 10,
+    defaultWatchdogRole: "runner",
+    defaultSupervisorAuditEveryRunnerRuns: 4,
+    defaultSupervisorLightFollowup: true,
+    defaultServicePrefix: "codex-watchdog",
+    loginReadyRe: /ready/i,
+    emptyPanelOperationState: () => ({ status: "idle" }),
+    nextPanelOperationState: (_, next) => next || { status: "idle" },
+    templates: {},
+    ensureDir: async () => {},
+    openDocument: async () => {},
+    extensionSetting: (_key, fallback) => fallback,
+    extensionSettingWithSource: (_key, fallback) => ({ value: fallback, source: "extension" }),
+    projectSetting: (_root, _key, fallback) => fallback,
+    projectSettingWithSource: (_root, _key, fallback) => ({ value: fallback, source: "project" }),
+    expandHome: (value) => value,
+    isExistingDirectory: () => false,
+    isSafeProjectRootPath: () => true,
+    validateProjectRootPath: () => true,
+    requireExistingDirectory: async (value) => value,
+    resolveCodexBin: async () => "/usr/bin/codex",
+    runLogged: async () => ({ stdout: "", stderr: "" }),
+    runLoggedWithInput: async () => ({ stdout: "", stderr: "" }),
+    createNonce: () => "nonce",
+    updateProjectSetting: async () => {},
+    run: async () => ({ stdout: "", stderr: "" }),
+    unitNames: () => ({
+      service: "codex-watchdog.service",
+      timer: "codex-watchdog.timer",
+      wakeupService: "codex-watchdog-wakeup.service"
+    }),
+    systemdQuote: (value) => value,
+    systemdPathValue: (value) => value,
+    systemdEnvValue: (value) => value,
+    shellQuote: (value) => value,
+    readFilePrefix: () => "",
+    isWatchdogInitialized: () => false,
+    isEffectivelyEmptyDir: () => true
+  });
+
+  assert.strictEqual(typeof assembly.activate, "function");
+  assert.strictEqual(typeof assembly.getProjectCommands, "function");
+  assembly.activate(context);
+  assert(registeredCommands.includes("codexWatchdog.openControlPanel"));
+  assert(registeredCommands.includes("codexWatchdog.startGuard"));
+  assert(registeredCommands.includes("codexWatchdog.acceptStateUpdate"));
+  assembly.deactivate();
+}
+
 async function main() {
   await testServiceBridges();
   testControlPanelStateModel();
   testRenderer();
   await testControlPanelFactoryCaching();
   await testRuntimeFactoryCaching();
+  await testProjectFactoryCaching();
+  await testServiceAssemblySmoke();
   console.log("refactor smoke test passed");
 }
 

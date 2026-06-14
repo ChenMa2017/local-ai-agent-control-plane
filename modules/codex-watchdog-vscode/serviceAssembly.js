@@ -17,6 +17,7 @@ const { activateWatchdogServices, registerWatchdogCommand } = require("./service
 const { createServiceAssemblyBridges } = require("./serviceBridges");
 const { createServiceControlPanelFactory } = require("./serviceControlPanelFactory");
 const { createServiceRuntimeFactory } = require("./serviceRuntimeFactory");
+const { createServiceProjectFactory } = require("./serviceProjectFactory");
 const {
   bootstrapChangePreviewPath,
   bootstrapConversationMarkdownPath,
@@ -85,13 +86,8 @@ function createServiceAssembly({
   isWatchdogInitialized,
   isEffectivelyEmptyDir
 }) {
-  let guardCommands;
-  let projectSetupHelpers;
-  let bootstrapWorkflowHelpers;
-  let generatedFilesHelpers;
-  let bootstrapScaffoldingHelpers;
-  let projectCommands;
   let controlPanelServices;
+  let projectServices;
   const runtimeServices = createServiceRuntimeFactory({
     createProjectRootManager,
     createRuntimeConfigHelpers,
@@ -139,6 +135,8 @@ function createServiceAssembly({
   const getProjectRootManager = runtimeServices.getProjectRootManager;
   const getRuntimeConfigHelpers = runtimeServices.getRuntimeConfigHelpers;
   const getRuntimeHelpers = runtimeServices.getRuntimeHelpers;
+  const getProjectSetupHelpers = () => projectServices.getProjectSetupHelpers();
+  const getBootstrapScaffoldingHelpers = () => projectServices.getBootstrapScaffoldingHelpers();
   const bridges = createServiceAssemblyBridges({
     getProjectRootManager,
     getRuntimeHelpers,
@@ -148,6 +146,49 @@ function createServiceAssembly({
     resolveCodexBin,
     updateProjectSetting,
     archiveAndResetBootstrapConversation
+  });
+  projectServices = createServiceProjectFactory({
+    createProjectSetupHelpers,
+    createBootstrapWorkflowHelpers,
+    createGeneratedFilesHelpers,
+    createBootstrapScaffoldingHelpers,
+    createProjectCommands,
+    createGuardLifecycle,
+    vscode,
+    fs,
+    fsp,
+    path,
+    crypto,
+    packageVersion: packageMetadata.version,
+    templates,
+    ensureDir,
+    getOutput,
+    openDocument,
+    getRuntimeConfigHelpers,
+    bridges,
+    bootstrapConversationTurnSchemaPath,
+    bootstrapResultSchemaPath,
+    bootstrapLastResultPath,
+    bootstrapConversationPromptText,
+    bootstrapInstantiationPromptText,
+    bootstrapConversationMarkdownPath,
+    bootstrapChangePreviewPath,
+    readBootstrapConversation,
+    writeBootstrapConversation,
+    clearBootstrapDraftArtifacts,
+    runLoggedWithInput,
+    createNonce,
+    stageBootstrapDraftFiles,
+    applyBootstrapDraftFiles,
+    writeBootstrapRuntimeState,
+    emptyBootstrapRuntimeState,
+    extensionSetting,
+    defaultTimeoutMinutes,
+    isWatchdogInitialized,
+    isEffectivelyEmptyDir,
+    runLogged,
+    unitNames,
+    getControlPanelController: () => controlPanelServices.getControlPanelController()
   });
   controlPanelServices = createServiceControlPanelFactory({
     createControlPanelStateHelpers,
@@ -163,159 +204,15 @@ function createServiceAssembly({
     defaultCompactEveryRuns,
     extensionSetting,
     isWatchdogInitialized,
-    getProjectSetupHelpers,
-    getProjectCommands,
+    getProjectSetupHelpers: projectServices.getProjectSetupHelpers,
+    getProjectCommands: projectServices.getProjectCommands,
     getRuntimeConfigHelpers,
-    getBootstrapWorkflowHelpers,
-    getGuardCommands,
+    getBootstrapWorkflowHelpers: projectServices.getBootstrapWorkflowHelpers,
+    getGuardCommands: projectServices.getGuardCommands,
     bridges,
     getBootstrapConversationState,
     readFilePrefix
   });
-
-  function getProjectSetupHelpers() {
-    if (!projectSetupHelpers) {
-      projectSetupHelpers = createProjectSetupHelpers({
-        vscode,
-        ensureDir,
-        bootstrapProject: bridges.bootstrapProject,
-        showBootstrapResult: bridges.showBootstrapResult,
-        refreshGeneratedWatcherFiles: (root) => getGeneratedFilesHelpers().refreshGeneratedWatcherFiles(root),
-        bootstrapResultSchemaPath,
-        bootstrapConversationTurnSchemaPath,
-        openDocument
-      });
-    }
-    return projectSetupHelpers;
-  }
-
-  function getBootstrapWorkflowHelpers() {
-    if (!bootstrapWorkflowHelpers) {
-      const runtimeConfig = getRuntimeConfigHelpers();
-      bootstrapWorkflowHelpers = createBootstrapWorkflowHelpers({
-        vscode,
-        projectSetupHelpers: getProjectSetupHelpers(),
-        resolveCodexBin,
-        codexHomeSetting: runtimeConfig.codexHomeSetting,
-        readBootstrapConversation,
-        writeBootstrapConversation,
-        clearBootstrapDraftArtifacts,
-        bootstrapLastResultPath,
-        bootstrapConversationPromptText,
-        bootstrapConversationTurnSchemaPath,
-        runLoggedWithInput,
-        watchdogCommandTimeoutMs,
-        createNonce,
-        bootstrapInstantiationPromptText,
-        bootstrapResultSchemaPath,
-        stageBootstrapDraftFiles,
-        applyBootstrapDraftFiles,
-        openDocument,
-        bootstrapConversationMarkdownPath,
-        bootstrapChangePreviewPath,
-        ensureCodexHome: bridges.ensureCodexHome,
-        writeBootstrapRuntimeState,
-        emptyBootstrapRuntimeState,
-        updateControlPanel: bridges.updateControlPanel,
-        confirmLoginIfNeeded: bridges.confirmLoginIfNeeded
-      });
-    }
-    return bootstrapWorkflowHelpers;
-  }
-
-  function getGeneratedFilesHelpers() {
-    if (!generatedFilesHelpers) {
-      generatedFilesHelpers = createGeneratedFilesHelpers({
-        fs,
-        fsp,
-        path,
-        crypto,
-        packageVersion: packageMetadata.version,
-        templates,
-        ensureDir,
-        output: getOutput(),
-        ensureCodexHome: bridges.ensureCodexHome,
-        renderWatchdogEnv: bridges.renderWatchdogEnv
-      });
-    }
-    return generatedFilesHelpers;
-  }
-
-  function getBootstrapScaffoldingHelpers() {
-    if (!bootstrapScaffoldingHelpers) {
-      bootstrapScaffoldingHelpers = createBootstrapScaffoldingHelpers({
-        fs,
-        fsp,
-        path,
-        vscode,
-        templates,
-        output: getOutput(),
-        ensureDir,
-        generatedFilesHelpers: getGeneratedFilesHelpers(),
-        getProjectSetupHelpers,
-        isWatchdogInitialized,
-        isEffectivelyEmptyDir
-      });
-    }
-    return bootstrapScaffoldingHelpers;
-  }
-
-  function getProjectCommands() {
-    if (!projectCommands) {
-      projectCommands = createProjectCommands({
-        vscode,
-        fs,
-        fsp,
-        path,
-        getProjectRoot: bridges.getProjectRoot,
-        selectProjectRoot: bridges.selectProjectRoot,
-        rememberProjectRoot: bridges.rememberProjectRoot,
-        ensureCodexHome: bridges.ensureCodexHome,
-        confirmLoginIfNeeded: bridges.confirmLoginIfNeeded,
-        effectiveWatchdogSettings: bridges.effectiveWatchdogSettings,
-        positiveNumberSetting,
-        extensionSetting,
-        defaultTimeoutMinutes,
-        getBootstrapScaffoldingHelpers,
-        getGeneratedFilesHelpers,
-        getProjectSetupHelpers,
-        getBootstrapWorkflowHelpers,
-        writeBootstrapRuntimeState,
-        emptyBootstrapRuntimeState,
-        setPanelOperationState: bridges.setPanelOperationState,
-        clearPanelOperationState: bridges.clearPanelOperationState,
-        updateControlPanel: bridges.updateControlPanel,
-        openDocument
-      });
-    }
-    return projectCommands;
-  }
-
-  function getGuardCommands() {
-    if (!guardCommands) {
-      const commands = getProjectCommands();
-      guardCommands = createGuardLifecycle({
-        vscode,
-        output: getOutput(),
-        getProjectRoot: bridges.getProjectRoot,
-        ensureDir,
-        prepareProjectForGuard: getProjectSetupHelpers().prepareProjectForGuard,
-        confirmTaskInstantiatedIfNeeded: getProjectSetupHelpers().confirmTaskInstantiatedIfNeeded,
-        ensureCodexHome: bridges.ensureCodexHome,
-        confirmLoginIfNeeded: bridges.confirmLoginIfNeeded,
-        runLogged,
-        watchdogCommandEnv: commands.watchdogCommandEnv,
-        watchdogCommandTimeoutMs: commands.watchdogCommandTimeoutMs,
-        setPanelOperationState: (data) => getControlPanelController().setPanelOperationState(data),
-        clearPanelOperationState: () => getControlPanelController().clearPanelOperationState(),
-        updateStatusBar: () => bridges.updateStatusBar(),
-        unitNames,
-        getTimerStatus: bridges.getTimerStatus,
-        openDocument
-      });
-    }
-    return guardCommands;
-  }
 
   function getControlPanelStateHelpers() {
     return controlPanelServices.getControlPanelStateHelpers();
@@ -330,11 +227,11 @@ function createServiceAssembly({
   }
 
   function activate(context) {
-    projectSetupHelpers = getProjectSetupHelpers();
-    bootstrapWorkflowHelpers = getBootstrapWorkflowHelpers();
-    projectCommands = getProjectCommands();
-    guardCommands = getGuardCommands();
-    bootstrapScaffoldingHelpers = getBootstrapScaffoldingHelpers();
+    projectServices.getProjectSetupHelpers();
+    projectServices.getBootstrapWorkflowHelpers();
+    projectServices.getProjectCommands();
+    projectServices.getGuardCommands();
+    projectServices.getBootstrapScaffoldingHelpers();
     getControlPanelStateHelpers();
     getControlPanelMessageHandler();
     getControlPanelController();
@@ -348,8 +245,8 @@ function createServiceAssembly({
       }, command, handler),
       initializeStatusBar: () => bridges.initializeStatusBar(context),
       openControlPanelCommand: bridges.openControlPanelCommand,
-      projectCommands,
-      guardCommands
+      projectCommands: projectServices.getProjectCommands(),
+      guardCommands: projectServices.getGuardCommands()
     });
   }
 
@@ -361,15 +258,15 @@ function createServiceAssembly({
     activate,
     deactivate,
     ...bridges,
-    getProjectSetupHelpers,
+    getProjectSetupHelpers: projectServices.getProjectSetupHelpers,
     getProjectRootManager,
-    getBootstrapWorkflowHelpers,
-    getGeneratedFilesHelpers,
-    getBootstrapScaffoldingHelpers,
+    getBootstrapWorkflowHelpers: projectServices.getBootstrapWorkflowHelpers,
+    getGeneratedFilesHelpers: projectServices.getGeneratedFilesHelpers,
+    getBootstrapScaffoldingHelpers: projectServices.getBootstrapScaffoldingHelpers,
     getRuntimeConfigHelpers,
     getRuntimeHelpers,
-    getProjectCommands,
-    getGuardCommands,
+    getProjectCommands: projectServices.getProjectCommands,
+    getGuardCommands: projectServices.getGuardCommands,
     getControlPanelStateHelpers,
     getControlPanelMessageHandler,
     getControlPanelController
