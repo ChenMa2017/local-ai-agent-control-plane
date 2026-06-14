@@ -13,6 +13,7 @@ const { createGuardLifecycle } = require("./guardLifecycle");
 const { createControlPanelStateHelpers } = require("./controlPanelState");
 const { createControlPanelActionHandler } = require("./controlPanelActions");
 const { createControlPanelController } = require("./controlPanelController");
+const { activateWatchdogServices, registerWatchdogCommand } = require("./serviceActivation");
 const {
   bootstrapChangePreviewPath,
   bootstrapConversationMarkdownPath,
@@ -413,46 +414,24 @@ function createServiceAssembly({
     controlPanelMessageHandler = getControlPanelMessageHandler();
     controlPanelController = getControlPanelController();
 
-    register(context, "codexWatchdog.openControlPanel", openControlPanelCommand);
-    register(context, "codexWatchdog.selectProjectRoot", projectCommands.selectProjectRootCommand);
-    register(context, "codexWatchdog.bootstrapProject", projectCommands.bootstrapProjectCommand);
-    register(context, "codexWatchdog.createDemoProjectTemplate", projectCommands.createDemoProjectTemplateCommand);
-    register(context, "codexWatchdog.prepareProject", projectCommands.prepareProjectCommand);
-    register(context, "codexWatchdog.refreshGeneratedFiles", projectCommands.refreshGeneratedFilesCommand);
-    register(context, "codexWatchdog.prepareEveningHandoff", projectCommands.prepareEveningHandoffCommand);
-    register(context, "codexWatchdog.openMorningBrief", projectCommands.openMorningBriefCommand);
-    register(context, "codexWatchdog.startGuard", guardCommands.startGuardCommand);
-    register(context, "codexWatchdog.pauseGuard", guardCommands.pauseGuardCommand);
-    register(context, "codexWatchdog.resumeGuard", guardCommands.resumeGuardCommand);
-    register(context, "codexWatchdog.stopGuard", guardCommands.stopGuardCommand);
-    register(context, "codexWatchdog.runOnce", guardCommands.runOnceCommand);
-    register(context, "codexWatchdog.startTimer", guardCommands.startTimerCommand);
-    register(context, "codexWatchdog.stopTimer", guardCommands.stopTimerCommand);
-    register(context, "codexWatchdog.showTimerStatus", guardCommands.showTimerStatusCommand);
-    register(context, "codexWatchdog.openLatestReport", guardCommands.openLatestReportCommand);
-    register(context, "codexWatchdog.acceptStateUpdate", projectCommands.acceptStateUpdateCommand);
-
-    initializeStatusBar(context);
+    activateWatchdogServices({
+      registerCommand: (command, handler) => registerWatchdogCommand({
+        context,
+        vscode,
+        output: getOutput(),
+        updateStatusBar: () => getControlPanelController().updateStatusBar()
+      }, command, handler),
+      initializeStatusBar: () => initializeStatusBar(context),
+      openControlPanelCommand,
+      projectCommands,
+      guardCommands
+    });
   }
 
   function deactivate() {
     if (controlPanelController) {
       controlPanelController.deactivate();
     }
-  }
-
-  function register(context, command, handler) {
-    context.subscriptions.push(vscode.commands.registerCommand(command, async () => {
-      try {
-        await handler();
-      } catch (error) {
-        const message = error && error.message ? error.message : String(error);
-        getOutput().appendLine(`[error] ${message}`);
-        vscode.window.showErrorMessage(`Codex Watchdog: ${message}`);
-      } finally {
-        await getControlPanelController().updateStatusBar();
-      }
-    }));
   }
 
   function initializeStatusBar(context) {
