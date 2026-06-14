@@ -1,6 +1,6 @@
 "use strict";
 
-const { createBootstrapConversationFlow } = require("./bootstrapConversationFlow");
+const { createBootstrapConversationFlow } = require("../bootstrap/bootstrapConversationFlow");
 const { createProjectFlowOperationRunner } = require("./projectFlowOperationRunner");
 
 function createProjectCommandFlows({

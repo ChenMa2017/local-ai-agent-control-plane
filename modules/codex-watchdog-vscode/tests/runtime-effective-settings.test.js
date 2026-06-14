@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const { createRuntimeEffectiveSettingsResolver } = require("../runtimeEffectiveSettings");
+const { createRuntimeEffectiveSettingsResolver } = require("../runtime/runtimeEffectiveSettings");
 
 async function testEffectiveWatchdogSettings() {
   const calls = [];

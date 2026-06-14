@@ -1,18 +1,18 @@
 "use strict";
 
-const packageMetadata = require("./package.json");
-const { createProjectRootManager } = require("./projectRootManager");
-const { createRuntimeConfigHelpers } = require("./runtimeConfig");
-const { createRuntimeHelpers } = require("./runtimeHelpers");
-const { createProjectCommands } = require("./projectCommands");
-const { createProjectSetupHelpers } = require("./projectSetup");
-const { createBootstrapWorkflowHelpers } = require("./bootstrapWorkflow");
-const { createGeneratedFilesHelpers } = require("./generatedFiles");
-const { createBootstrapScaffoldingHelpers } = require("./bootstrapScaffolding");
-const { createGuardLifecycle } = require("./guardLifecycle");
-const { createControlPanelStateHelpers } = require("./controlPanelState");
-const { createControlPanelActionHandler } = require("./controlPanelActions");
-const { createControlPanelController } = require("./controlPanelController");
+const packageMetadata = require("../package.json");
+const { createProjectRootManager } = require("../project/projectRootManager");
+const { createRuntimeConfigHelpers } = require("../runtime/runtimeConfig");
+const { createRuntimeHelpers } = require("../runtime/runtimeHelpers");
+const { createProjectCommands } = require("../project/projectCommands");
+const { createProjectSetupHelpers } = require("../project/projectSetup");
+const { createBootstrapWorkflowHelpers } = require("../bootstrap/bootstrapWorkflow");
+const { createGeneratedFilesHelpers } = require("../project/generatedFiles");
+const { createBootstrapScaffoldingHelpers } = require("../bootstrap/bootstrapScaffolding");
+const { createGuardLifecycle } = require("../guard/guardLifecycle");
+const { createControlPanelStateHelpers } = require("../controlPanel/controlPanelState");
+const { createControlPanelActionHandler } = require("../controlPanel/controlPanelActions");
+const { createControlPanelController } = require("../controlPanel/controlPanelController");
 const { createServiceAssemblyBridges } = require("./serviceBridges");
 const { createServiceControlPanelFactory } = require("./serviceControlPanelFactory");
 const { createServiceRuntimeFactory } = require("./serviceRuntimeFactory");
@@ -39,7 +39,7 @@ const {
   stageBootstrapDraftFiles,
   applyBootstrapDraftFiles,
   archiveAndResetBootstrapConversation
-} = require("./bootstrapConversation");
+} = require("../bootstrap/bootstrapConversation");
 
 function buildServiceAssemblyGraph({
   vscode,

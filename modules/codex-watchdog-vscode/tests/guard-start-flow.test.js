@@ -2,7 +2,7 @@
 
 const assert = require("assert");
 const path = require("path");
-const { createGuardStartFlow } = require("../guardStartFlow");
+const { createGuardStartFlow } = require("../guard/guardStartFlow");
 
 async function testGuardStartFlowSuccess() {
   const calls = [];

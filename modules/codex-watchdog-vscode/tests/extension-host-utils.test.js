@@ -6,7 +6,7 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const cp = require("child_process");
-const { createExtensionHostUtils } = require("../extensionHostUtils");
+const { createExtensionHostUtils } = require("../extensionSupport/extensionHostUtils");
 
 async function main() {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-host-utils-"));

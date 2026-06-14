@@ -5,7 +5,7 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const os = require("os");
 const path = require("path");
-const { createRuntimeConfigHelpers } = require("../runtimeConfig");
+const { createRuntimeConfigHelpers } = require("../runtime/runtimeConfig");
 
 async function withTempDir(run) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-watchdog-runtime-config-"));

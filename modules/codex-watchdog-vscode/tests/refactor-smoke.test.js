@@ -2,19 +2,19 @@
 
 const assert = require("assert");
 
-const { createServiceAssemblyBridges } = require("../serviceBridges");
-const { createServiceControlPanelFactory } = require("../serviceControlPanelFactory");
-const { createServiceRuntimeFactory } = require("../serviceRuntimeFactory");
-const { createServiceProjectFactory } = require("../serviceProjectFactory");
-const { createServiceAssembly } = require("../serviceAssembly");
+const { createServiceAssemblyBridges } = require("../services/serviceBridges");
+const { createServiceControlPanelFactory } = require("../services/serviceControlPanelFactory");
+const { createServiceRuntimeFactory } = require("../services/serviceRuntimeFactory");
+const { createServiceProjectFactory } = require("../services/serviceProjectFactory");
+const { createServiceAssembly } = require("../services/serviceAssembly");
 const {
   createBaseControlPanelState,
   applyResolvedRuntimeState,
   applyConfigurationErrorState,
   createOperationState,
   applyLatestReportState
-} = require("../controlPanelStateModel");
-const { renderControlPanel } = require("../controlPanelRenderer");
+} = require("../controlPanel/controlPanelStateModel");
+const { renderControlPanel } = require("../controlPanel/controlPanelRenderer");
 
 async function testServiceBridges() {
   const calls = [];

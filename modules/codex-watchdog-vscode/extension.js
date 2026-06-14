@@ -7,19 +7,19 @@ const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
 const cp = require("child_process");
-const { createServiceAssembly } = require("./serviceAssembly");
-const { createExtensionHostUtils } = require("./extensionHostUtils");
-const { createExtensionServiceDelegates } = require("./extensionServiceDelegates");
-const { createExtensionHostDelegates } = require("./extensionHostDelegates");
+const { createServiceAssembly } = require("./services/serviceAssembly");
+const { createExtensionHostUtils } = require("./extensionSupport/extensionHostUtils");
+const { createExtensionServiceDelegates } = require("./extensionSupport/extensionServiceDelegates");
+const { createExtensionHostDelegates } = require("./extensionSupport/extensionHostDelegates");
 const {
   buildHostUtilsArgs,
   buildServiceAssemblyArgs
-} = require("./extensionArgBuilders");
+} = require("./extensionSupport/extensionArgBuilders");
 const { templates } = require("./templates");
 const {
   emptyPanelOperationState: emptyControlPanelOperationState,
   nextPanelOperationState
-} = require("./controlPanelState");
+} = require("./controlPanel/controlPanelState");
 const {
   bootstrapArchiveDir,
   bootstrapChangePreviewPath,
@@ -45,7 +45,7 @@ const {
   stageBootstrapDraftFiles,
   applyBootstrapDraftFiles,
   archiveAndResetBootstrapConversation
-} = require("./bootstrapConversation");
+} = require("./bootstrap/bootstrapConversation");
 
 let output;
 let extensionContext;

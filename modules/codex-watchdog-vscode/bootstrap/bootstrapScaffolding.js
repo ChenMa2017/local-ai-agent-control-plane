@@ -4,7 +4,7 @@ const {
   bootstrapScaffoldEntries,
   demoProjectOverlayEntries,
   demoProjectSeedEntries
-} = require("./templateEntries");
+} = require("../templates/templateEntries");
 
 function createBootstrapScaffoldingHelpers({
   fs,

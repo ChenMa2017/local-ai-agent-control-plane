@@ -5,7 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { createRuntimeSystemdHelpers } = require("../runtimeSystemd");
+const { createRuntimeSystemdHelpers } = require("../runtime/runtimeSystemd");
 
 async function testRenderAndWriteSystemdUnits() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-runtime-systemd-"));

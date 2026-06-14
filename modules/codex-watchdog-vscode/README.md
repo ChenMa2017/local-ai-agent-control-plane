@@ -22,12 +22,15 @@ Current implementation shape:
 
 ```text
 extension.js                       thin activation / wiring entry
-serviceAssembly*.js               service graph and factory wiring
-controlPanel*.js                  control-panel state, rendering, actions, and webview flow
-bootstrap*.js                     bootstrap conversation, draft staging, and Codex runner flow
-runtime*.js                       codexHome, login, timer, runtime clarity, and effective settings
-guard*.js / project*Flow*.js      start/pause/resume/stop and project command flows
-template*.js                      generated docs, scripts, schemas, prompts, and demo assets
+bootstrap/                         bootstrap conversation, draft staging, instantiation, and Codex bootstrap flow
+controlPanel/                      control-panel state, rendering, actions, status bar, and webview flow
+extensionSupport/                  extension-facing delegates and arg builders
+guard/                             start/pause/resume/stop guard lifecycle helpers
+host/                              filesystem, codex binary, systemd, and settings helpers
+project/                           project-root selection, setup, generation, and command flows
+runtime/                           codexHome, login, timer, runtime clarity, and effective settings
+services/                          service graph, assembly wiring, and accessor factories
+templates/                         generated docs, scripts, schemas, prompts, state JSON, and demo assets
 tests/*.test.js                   focused module tests plus refactor smoke coverage
 ```
 
@@ -39,16 +42,18 @@ If you are debugging or extending the plugin, this is the quickest mental model:
 
 - `extension.js`
   Activates the extension and assembles the service graph.
-- `serviceAssembly.js` and related `service*` files
+- `services/`
   Compose project helpers, runtime helpers, control panel factories, and generated-file bridges.
-- `controlPanelRenderer.js`, `controlPanelRenderSections.js`, `controlPanelBootstrapRender.js`, `controlPanelStyles.js`, `controlPanelClientScript.js`
+- `controlPanel/`
   Build the webview HTML, workflow sections, bootstrap conversation UI, CSS, and button/event script.
-- `bootstrapConversation*.js`, `bootstrapCodexRunner.js`, `bootstrapDraftFileOps.js`
+- `bootstrap/`
   Keep the setup transcript, synthesize candidate handoff drafts, preview changes, and instantiate the final project files.
-- `runtime*.js`
+- `runtime/`
   Resolve and validate watcher runtime settings such as `codexBin`, `codexHome`, login/bootstrap state, timer drift, and runtime clarity.
-- `template*.js`
+- `templates/`
   Hold generated project assets. The template entry files are thin aggregators; the larger content now lives in topic-specific modules.
+- `project/`, `host/`, `guard/`, `extensionSupport/`
+  Keep project command flow, local host helpers, guard lifecycle, and extension-only assembly glue out of the root directory.
 
 ## Commands
 

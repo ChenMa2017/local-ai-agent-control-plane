@@ -5,7 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { createRuntimeWatcherHomeHelpers } = require("../runtimeWatcherHome");
+const { createRuntimeWatcherHomeHelpers } = require("../runtime/runtimeWatcherHome");
 
 async function testEnsureCodexHomeMigration() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-runtime-home-"));

@@ -5,10 +5,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const bootstrapConversation = require("../bootstrapConversation");
-const pathsApi = require("../bootstrapConversationPaths");
-const storeApi = require("../bootstrapConversationStore");
-const draftsApi = require("../bootstrapConversationDrafts");
+const bootstrapConversation = require("../bootstrap/bootstrapConversation");
+const pathsApi = require("../bootstrap/bootstrapConversationPaths");
+const storeApi = require("../bootstrap/bootstrapConversationStore");
+const draftsApi = require("../bootstrap/bootstrapConversationDrafts");
 
 function writeFile(root, relativePath, content) {
   const target = path.join(root, relativePath);

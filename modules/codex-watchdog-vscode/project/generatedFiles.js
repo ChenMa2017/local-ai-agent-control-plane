@@ -4,7 +4,7 @@ const {
   collaborationHandoffEntries,
   dailyHandoffEntries,
   generatedWatcherEntries
-} = require("./templateEntries");
+} = require("../templates/templateEntries");
 
 function createGeneratedFilesHelpers({
   fs,

@@ -18,12 +18,15 @@ Current implementation shape:
 
 ```text
 extension.js                       thin activation / wiring entry
-serviceAssembly*.js               service graph and helper factories
-controlPanel*.js                  state, rendering, actions, and webview flow
-bootstrap*.js                     setup transcript, candidate drafts, and instantiation flow
-runtime*.js                       codexHome, login, timer, and runtime clarity helpers
-guard*.js / project*Flow*.js      guard lifecycle and project command flows
-template*.js                      generated docs, prompts, scripts, schemas, and demo assets
+bootstrap/                         setup transcript, candidate drafts, and instantiation flow
+controlPanel/                      state, rendering, actions, and webview flow
+extensionSupport/                  extension-facing delegates and arg builders
+guard/                             guard lifecycle and start/stop helpers
+host/                              codex resolver, host file/systemd helpers, and settings readers
+project/                           project command flows, generation, and setup helpers
+runtime/                           codexHome, login, timer, and runtime clarity helpers
+services/                          service graph, accessors, factories, and assembly wiring
+templates/                         generated docs, prompts, scripts, schemas, state JSON, and demo assets
 tests/*.test.js                   focused tests plus refactor smoke coverage
 ```
 

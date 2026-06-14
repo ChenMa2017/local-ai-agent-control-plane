@@ -5,7 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { createRuntimeClarityHelpers } = require("../runtimeClarity");
+const { createRuntimeClarityHelpers } = require("../runtime/runtimeClarity");
 
 function writeFile(root, relativePath, content) {
   const target = path.join(root, relativePath);

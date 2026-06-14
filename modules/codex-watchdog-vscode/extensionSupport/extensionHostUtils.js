@@ -1,11 +1,11 @@
 "use strict";
 
-const { createHostCommandRunner } = require("./hostCommandRunner");
-const { createHostCodexResolver } = require("./hostCodexResolver");
-const { createHostPathUtils } = require("./hostPathUtils");
-const { createHostProjectSettings } = require("./hostProjectSettings");
-const { createHostSystemdUtils } = require("./hostSystemdUtils");
-const { createHostFileUtils } = require("./hostFileUtils");
+const { createHostCommandRunner } = require("../host/hostCommandRunner");
+const { createHostCodexResolver } = require("../host/hostCodexResolver");
+const { createHostPathUtils } = require("../host/hostPathUtils");
+const { createHostProjectSettings } = require("../host/hostProjectSettings");
+const { createHostSystemdUtils } = require("../host/hostSystemdUtils");
+const { createHostFileUtils } = require("../host/hostFileUtils");
 
 function createExtensionHostUtils({
   vscode,
