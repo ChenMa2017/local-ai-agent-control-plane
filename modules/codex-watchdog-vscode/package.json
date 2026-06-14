@@ -10,6 +10,11 @@
   "categories": [
     "Other"
   ],
+  "scripts": {
+    "test:generated": "node tests/generated-template.test.js",
+    "test:smoke": "node tests/refactor-smoke.test.js",
+    "test": "npm run test:generated && npm run test:smoke"
+  },
   "activationEvents": [
     "onStartupFinished",
     "onCommand:codexWatchdog.openControlPanel",

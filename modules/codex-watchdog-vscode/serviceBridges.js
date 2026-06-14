@@ -5,7 +5,10 @@ function createServiceAssemblyBridges({
   getRuntimeHelpers,
   getBootstrapScaffoldingHelpers,
   getControlPanelController,
-  getProjectSetupHelpers
+  getProjectSetupHelpers,
+  resolveCodexBin,
+  updateProjectSetting,
+  archiveAndResetBootstrapConversation
 }) {
   return {
     async updateStatusBar() {
@@ -124,6 +127,10 @@ function createServiceAssemblyBridges({
       return getRuntimeHelpers().openLoginTerminal(root);
     },
 
+    resolveCodexBin(root) {
+      return resolveCodexBin(root);
+    },
+
     async getTimerStatus(root) {
       return getRuntimeHelpers().getTimerStatus(root);
     },
@@ -134,6 +141,14 @@ function createServiceAssemblyBridges({
 
     inspectProjectRuntimeClarity(root) {
       return getRuntimeHelpers().inspectProjectRuntimeClarity(root);
+    },
+
+    async updateProjectSetting(root, key, value) {
+      return updateProjectSetting(root, key, value);
+    },
+
+    async archiveAndResetBootstrapConversation(root) {
+      return archiveAndResetBootstrapConversation(root);
     },
 
     taskLooksInstantiated(root) {

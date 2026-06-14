@@ -15,6 +15,7 @@ const { createControlPanelActionHandler } = require("./controlPanelActions");
 const { createControlPanelController } = require("./controlPanelController");
 const { activateWatchdogServices, registerWatchdogCommand } = require("./serviceActivation");
 const { createServiceAssemblyBridges } = require("./serviceBridges");
+const { createServiceControlPanelFactory } = require("./serviceControlPanelFactory");
 const {
   bootstrapChangePreviewPath,
   bootstrapConversationMarkdownPath,
@@ -92,15 +93,38 @@ function createServiceAssembly({
   let runtimeConfigHelpers;
   let runtimeHelpers;
   let projectCommands;
-  let controlPanelStateHelpers;
-  let controlPanelMessageHandler;
-  let controlPanelController;
   const bridges = createServiceAssemblyBridges({
     getProjectRootManager,
     getRuntimeHelpers,
     getBootstrapScaffoldingHelpers,
     getControlPanelController,
-    getProjectSetupHelpers
+    getProjectSetupHelpers,
+    resolveCodexBin,
+    updateProjectSetting,
+    archiveAndResetBootstrapConversation
+  });
+  const controlPanelServices = createServiceControlPanelFactory({
+    createControlPanelStateHelpers,
+    createControlPanelActionHandler,
+    createControlPanelController,
+    vscode,
+    getOutput,
+    statusRefreshMs,
+    emptyPanelOperationState,
+    nextPanelOperationState,
+    defaultTimeoutMinutes,
+    defaultIntervalMinutes,
+    defaultCompactEveryRuns,
+    extensionSetting,
+    isWatchdogInitialized,
+    getProjectSetupHelpers,
+    getProjectCommands,
+    getRuntimeConfigHelpers,
+    getBootstrapWorkflowHelpers,
+    getGuardCommands,
+    bridges,
+    getBootstrapConversationState,
+    readFilePrefix
   });
 
   function getProjectSetupHelpers() {
@@ -335,81 +359,15 @@ function createServiceAssembly({
   }
 
   function getControlPanelStateHelpers() {
-    if (!controlPanelStateHelpers) {
-      const runtimeConfig = getRuntimeConfigHelpers();
-      const commands = getProjectCommands();
-      controlPanelStateHelpers = createControlPanelStateHelpers({
-        getKnownProjectRoot: bridges.getKnownProjectRoot,
-        isWatchdogInitialized,
-        getProjectSetupHelpers,
-        isGuardPaused: commands.isGuardPaused,
-        codexHomePlan: runtimeConfig.codexHomePlan,
-        resolveCodexBin,
-        sandboxModeSetting: runtimeConfig.sandboxModeSetting,
-        positiveNumberSetting: runtimeConfig.positiveNumberSetting,
-        extensionSetting,
-        DEFAULT_TIMEOUT_MINUTES: defaultTimeoutMinutes,
-        DEFAULT_INTERVAL_MINUTES: defaultIntervalMinutes,
-        DEFAULT_COMPACT_EVERY_RUNS: defaultCompactEveryRuns,
-        getCodexLoginStatus: bridges.getCodexLoginStatus,
-        getTimerStatus: bridges.getTimerStatus,
-        inspectProjectRuntimeClarity: bridges.inspectProjectRuntimeClarity,
-        effectiveWatchdogSettings: bridges.effectiveWatchdogSettings,
-        readWatcherUnitDrift: bridges.readWatcherUnitDrift,
-        getBootstrapConversationState,
-        readFilePrefix
-      });
-    }
-    return controlPanelStateHelpers;
+    return controlPanelServices.getControlPanelStateHelpers();
   }
 
   function getControlPanelMessageHandler() {
-    if (!controlPanelMessageHandler) {
-      const commands = getProjectCommands();
-      controlPanelMessageHandler = createControlPanelActionHandler({
-        vscode,
-        getProjectRoot: bridges.getProjectRoot,
-        selectProjectRoot: bridges.selectProjectRoot,
-        rememberProjectRoot: bridges.rememberProjectRoot,
-        showProjectRootSelected: commands.showProjectRootSelected,
-        browseExistingProjectRoot: bridges.browseExistingProjectRoot,
-        normalizeProjectRootInput: bridges.normalizeProjectRootInput,
-        clearRememberedProjectRoot: bridges.clearRememberedProjectRoot,
-        updateProjectSetting,
-        readWatcherUnitDrift: bridges.readWatcherUnitDrift,
-        effectiveWatchdogSettings: bridges.effectiveWatchdogSettings,
-        updateControlPanel: bridges.updateControlPanel,
-        openLoginTerminal: bridges.openLoginTerminal,
-        prepareProjectCommand: commands.prepareProjectCommand,
-        generateBootstrapConversationCommand: commands.generateBootstrapConversationCommand,
-        getBootstrapWorkflowHelpers,
-        getProjectSetupHelpers,
-        archiveAndResetBootstrapConversation,
-        getGuardCommands,
-        openMorningBriefCommand: commands.openMorningBriefCommand,
-        refreshGeneratedFilesCommand: commands.refreshGeneratedFilesCommand
-      });
-    }
-    return controlPanelMessageHandler;
+    return controlPanelServices.getControlPanelMessageHandler();
   }
 
   function getControlPanelController() {
-    if (!controlPanelController) {
-      const commands = getProjectCommands();
-      controlPanelController = createControlPanelController({
-        vscode,
-        output: getOutput(),
-        statusRefreshMs,
-        emptyPanelOperationState,
-        nextPanelOperationState,
-        getKnownProjectRoot: bridges.getKnownProjectRoot,
-        isGuardPaused: commands.isGuardPaused,
-        getTimerStatus: bridges.getTimerStatus,
-        getControlPanelStateHelpers,
-        getControlPanelMessageHandler
-      });
-    }
-    return controlPanelController;
+    return controlPanelServices.getControlPanelController();
   }
 
   function activate(context) {
@@ -418,9 +376,9 @@ function createServiceAssembly({
     projectCommands = getProjectCommands();
     guardCommands = getGuardCommands();
     bootstrapScaffoldingHelpers = getBootstrapScaffoldingHelpers();
-    controlPanelStateHelpers = getControlPanelStateHelpers();
-    controlPanelMessageHandler = getControlPanelMessageHandler();
-    controlPanelController = getControlPanelController();
+    getControlPanelStateHelpers();
+    getControlPanelMessageHandler();
+    getControlPanelController();
 
     activateWatchdogServices({
       registerCommand: (command, handler) => registerWatchdogCommand({
@@ -437,9 +395,7 @@ function createServiceAssembly({
   }
 
   function deactivate() {
-    if (controlPanelController) {
-      controlPanelController.deactivate();
-    }
+    controlPanelServices.deactivate();
   }
 
   return {
