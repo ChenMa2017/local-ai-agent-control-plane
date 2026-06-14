@@ -1,5 +1,11 @@
 "use strict";
 
+const {
+  buildControlPanelStateHelpersArgs,
+  buildControlPanelMessageHandlerArgs,
+  buildControlPanelControllerArgs
+} = require("./serviceControlPanelArgBuilders");
+
 function createServiceControlPanelAccessors({
   createControlPanelStateHelpers,
   createControlPanelActionHandler,
@@ -29,78 +35,50 @@ function createServiceControlPanelAccessors({
 
   function getControlPanelStateHelpers() {
     if (!controlPanelStateHelpers) {
-      const runtimeConfig = getRuntimeConfigHelpers();
-      const commands = getProjectCommands();
-      controlPanelStateHelpers = createControlPanelStateHelpers({
-        getKnownProjectRoot: bridges.getKnownProjectRoot,
+      controlPanelStateHelpers = createControlPanelStateHelpers(buildControlPanelStateHelpersArgs({
+        getRuntimeConfigHelpers,
+        getProjectCommands,
+        bridges,
         isWatchdogInitialized,
         getProjectSetupHelpers,
-        isGuardPaused: commands.isGuardPaused,
-        codexHomePlan: runtimeConfig.codexHomePlan,
-        resolveCodexBin: bridges.resolveCodexBin,
-        sandboxModeSetting: runtimeConfig.sandboxModeSetting,
-        positiveNumberSetting: runtimeConfig.positiveNumberSetting,
         extensionSetting,
-        DEFAULT_TIMEOUT_MINUTES: defaultTimeoutMinutes,
-        DEFAULT_INTERVAL_MINUTES: defaultIntervalMinutes,
-        DEFAULT_COMPACT_EVERY_RUNS: defaultCompactEveryRuns,
-        getCodexLoginStatus: bridges.getCodexLoginStatus,
-        getTimerStatus: bridges.getTimerStatus,
-        inspectProjectRuntimeClarity: bridges.inspectProjectRuntimeClarity,
-        effectiveWatchdogSettings: bridges.effectiveWatchdogSettings,
-        readWatcherUnitDrift: bridges.readWatcherUnitDrift,
+        defaultTimeoutMinutes,
+        defaultIntervalMinutes,
+        defaultCompactEveryRuns,
         getBootstrapConversationState,
         readFilePrefix
-      });
+      }));
     }
     return controlPanelStateHelpers;
   }
 
   function getControlPanelMessageHandler() {
     if (!controlPanelMessageHandler) {
-      const commands = getProjectCommands();
-      controlPanelMessageHandler = createControlPanelActionHandler({
+      controlPanelMessageHandler = createControlPanelActionHandler(buildControlPanelMessageHandlerArgs({
         vscode,
-        getProjectRoot: bridges.getProjectRoot,
-        selectProjectRoot: bridges.selectProjectRoot,
-        rememberProjectRoot: bridges.rememberProjectRoot,
-        showProjectRootSelected: commands.showProjectRootSelected,
-        browseExistingProjectRoot: bridges.browseExistingProjectRoot,
-        normalizeProjectRootInput: bridges.normalizeProjectRootInput,
-        clearRememberedProjectRoot: bridges.clearRememberedProjectRoot,
-        updateProjectSetting: bridges.updateProjectSetting,
-        readWatcherUnitDrift: bridges.readWatcherUnitDrift,
-        effectiveWatchdogSettings: bridges.effectiveWatchdogSettings,
-        updateControlPanel: bridges.updateControlPanel,
-        openLoginTerminal: bridges.openLoginTerminal,
-        prepareProjectCommand: commands.prepareProjectCommand,
-        generateBootstrapConversationCommand: commands.generateBootstrapConversationCommand,
+        getProjectCommands,
+        bridges,
         getBootstrapWorkflowHelpers,
         getProjectSetupHelpers,
-        archiveAndResetBootstrapConversation: bridges.archiveAndResetBootstrapConversation,
-        getGuardCommands,
-        openMorningBriefCommand: commands.openMorningBriefCommand,
-        refreshGeneratedFilesCommand: commands.refreshGeneratedFilesCommand
-      });
+        getGuardCommands
+      }));
     }
     return controlPanelMessageHandler;
   }
 
   function getControlPanelController() {
     if (!controlPanelController) {
-      const commands = getProjectCommands();
-      controlPanelController = createControlPanelController({
+      controlPanelController = createControlPanelController(buildControlPanelControllerArgs({
         vscode,
-        output: getOutput(),
+        getOutput,
         statusRefreshMs,
         emptyPanelOperationState,
         nextPanelOperationState,
-        getKnownProjectRoot: bridges.getKnownProjectRoot,
-        isGuardPaused: commands.isGuardPaused,
-        getTimerStatus: bridges.getTimerStatus,
+        bridges,
+        getProjectCommands,
         getControlPanelStateHelpers,
         getControlPanelMessageHandler
-      });
+      }));
     }
     return controlPanelController;
   }
