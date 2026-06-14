@@ -1,6 +1,6 @@
 # Codex Watchdog Review Brief
 
-Reviewed source version: `0.1.39`.
+Reviewed source version: `0.1.47`.
 
 Expected source layout:
 
@@ -12,6 +12,19 @@ REVIEW_BRIEF.md
 scripts/install-local.sh
 scripts/package-local.js
 scripts/package-local.sh
+```
+
+Current implementation shape:
+
+```text
+extension.js                       thin activation / wiring entry
+serviceAssembly*.js               service graph and helper factories
+controlPanel*.js                  state, rendering, actions, and webview flow
+bootstrap*.js                     setup transcript, candidate drafts, and instantiation flow
+runtime*.js                       codexHome, login, timer, and runtime clarity helpers
+guard*.js / project*Flow*.js      guard lifecycle and project command flows
+template*.js                      generated docs, prompts, scripts, schemas, and demo assets
+tests/*.test.js                   focused tests plus refactor smoke coverage
 ```
 
 ## Goal
@@ -203,7 +216,7 @@ Note: with the bundled `codex-cli 0.130.0-alpha.5`, approval policy is a top-lev
 
 Please review:
 
-1. Whether `extension.js` writes only expected project files and systemd user unit files.
+1. Whether the extension writes only expected project files and systemd user unit files through the intended helper layers, and whether `extension.js` remains a thin activation/wiring entry.
 2. Whether generated shell scripts avoid destructive operations.
 3. Whether `run_watchdog.sh` actually invokes `codex exec` on a timer rather than saving prompts.
 4. Whether the default `read-only` sandbox and `CUDA_VISIBLE_DEVICES=""` are appropriate.
@@ -212,7 +225,7 @@ Please review:
 7. Whether `RUNTIME_STATE.md` is an acceptable low-risk continuity file while `STATE.md` remains human-approved.
 8. Whether `Refresh Generated Watcher Files` overwrites only generated files and leaves user-owned daily-mode files untouched.
 9. Whether render failure handling gives enough information without leaking excessive log content.
-10. Whether the source package preserves the expected file names and contents listed above.
+10. Whether the source package preserves the expected file names and contents listed above while keeping the new modular structure coherent.
 11. Whether the daily/watchdog ownership boundary is clear enough: daily mode owns plan/state/safety/handoff, while watchdog mode owns runtime/morning/report/pending outputs.
 12. Whether collector failure handling is robust enough that pre-Codex failures are visible in `agent/reports/latest.md`.
 13. Whether folder-picker bootstrap uses the selected target root consistently and never falls back to the current workspace while writing files.

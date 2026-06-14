@@ -18,6 +18,38 @@ scripts/package-local.js
 scripts/package-local.sh
 ```
 
+Current implementation shape:
+
+```text
+extension.js                       thin activation / wiring entry
+serviceAssembly*.js               service graph and factory wiring
+controlPanel*.js                  control-panel state, rendering, actions, and webview flow
+bootstrap*.js                     bootstrap conversation, draft staging, and Codex runner flow
+runtime*.js                       codexHome, login, timer, runtime clarity, and effective settings
+guard*.js / project*Flow*.js      start/pause/resume/stop and project command flows
+template*.js                      generated docs, scripts, schemas, prompts, and demo assets
+tests/*.test.js                   focused module tests plus refactor smoke coverage
+```
+
+The important architectural change is that `extension.js` is now a thin entry point rather than the place where bootstrap flow, runtime helpers, control-panel rendering, and generated template payloads all live together.
+
+## Module Map
+
+If you are debugging or extending the plugin, this is the quickest mental model:
+
+- `extension.js`
+  Activates the extension and assembles the service graph.
+- `serviceAssembly.js` and related `service*` files
+  Compose project helpers, runtime helpers, control panel factories, and generated-file bridges.
+- `controlPanelRenderer.js`, `controlPanelRenderSections.js`, `controlPanelBootstrapRender.js`, `controlPanelStyles.js`, `controlPanelClientScript.js`
+  Build the webview HTML, workflow sections, bootstrap conversation UI, CSS, and button/event script.
+- `bootstrapConversation*.js`, `bootstrapCodexRunner.js`, `bootstrapDraftFileOps.js`
+  Keep the setup transcript, synthesize candidate handoff drafts, preview changes, and instantiate the final project files.
+- `runtime*.js`
+  Resolve and validate watcher runtime settings such as `codexBin`, `codexHome`, login/bootstrap state, timer drift, and runtime clarity.
+- `template*.js`
+  Hold generated project assets. The template entry files are thin aggregators; the larger content now lives in topic-specific modules.
+
 ## Commands
 
 - `Codex Watchdog: Bootstrap Project`
