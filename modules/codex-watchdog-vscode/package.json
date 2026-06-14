@@ -13,12 +13,13 @@
   "scripts": {
     "test:bootstrap-conversation": "node tests/bootstrap-conversation.test.js",
     "test:generated": "node tests/generated-template.test.js",
+    "test:guard-start-flow": "node tests/guard-start-flow.test.js",
     "test:host-utils": "node tests/extension-host-utils.test.js",
     "test:runtime-clarity": "node tests/runtime-clarity.test.js",
     "test:runtime-systemd": "node tests/runtime-systemd.test.js",
     "test:runtime-watcher-home": "node tests/runtime-watcher-home.test.js",
     "test:smoke": "node tests/refactor-smoke.test.js",
-    "test": "npm run test:bootstrap-conversation && npm run test:generated && npm run test:host-utils && npm run test:runtime-clarity && npm run test:runtime-systemd && npm run test:runtime-watcher-home && npm run test:smoke"
+    "test": "npm run test:bootstrap-conversation && npm run test:generated && npm run test:guard-start-flow && npm run test:host-utils && npm run test:runtime-clarity && npm run test:runtime-systemd && npm run test:runtime-watcher-home && npm run test:smoke"
   },
   "activationEvents": [
     "onStartupFinished",

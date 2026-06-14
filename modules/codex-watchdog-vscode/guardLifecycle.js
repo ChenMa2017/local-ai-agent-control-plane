@@ -3,6 +3,7 @@
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
+const { createGuardStartFlow } = require("./guardStartFlow");
 
 function createGuardLifecycle({
   vscode,
@@ -23,63 +24,38 @@ function createGuardLifecycle({
   getTimerStatus,
   openDocument
 }) {
+  const guardStartFlow = createGuardStartFlow({
+    vscode,
+    output,
+    prepareProjectForGuard,
+    confirmTaskInstantiatedIfNeeded,
+    ensureCodexHome,
+    confirmLoginIfNeeded,
+    runLogged,
+    watchdogCommandEnv,
+    watchdogCommandTimeoutMs,
+    setPanelOperationState,
+    clearPanelOperationState,
+    updateStatusBar,
+    path
+  });
+
   async function startGuardCommand() {
     const root = await getProjectRoot();
     if (!root) {
       return;
     }
-
-    await vscode.window.withProgress({
-      location: vscode.ProgressLocation.Notification,
-      title: "Starting Codex Watchdog guard",
-      cancellable: false
-    }, async (progress) => {
-      const startedAt = new Date().toISOString();
-      try {
-        progress.report({ message: "Preparing generated files" });
-        await setPanelOperationState({
-          title: "Starting guard",
-          detail: "Refreshing generated watchdog files and checking project readiness...",
-          startedAt
-        });
-        await prepareProjectForGuard(root);
-        const taskReady = await confirmTaskInstantiatedIfNeeded(root);
-        if (!taskReady) {
-          return;
-        }
-
-        progress.report({ message: "Preparing Codex home" });
-        await setPanelOperationState({
-          title: "Starting guard",
-          detail: "Checking CODEX_HOME and login state before unattended mode starts...",
-          startedAt
-        });
-        await ensureCodexHome(root);
-        const canContinue = await confirmLoginIfNeeded(root);
-        if (!canContinue) {
-          return;
-        }
-
-        progress.report({ message: "Running one wakeup, then starting timer" });
-        await setPanelOperationState({
-          title: "Starting guard",
-          detail: "Running one immediate watchdog wakeup, then enabling the repeating timer...",
-          startedAt
-        });
-        output.show(true);
-        output.appendLine(`\n# ${new Date().toISOString()} Start Guard`);
-        output.appendLine(`Project root: ${root}`);
-        await runLogged(path.join(root, "agent", "bin", "watchdog"), ["start"], {
-          cwd: root,
-          env: await watchdogCommandEnv(root),
-          timeout: watchdogCommandTimeoutMs(root)
-        });
-
-        vscode.window.showInformationMessage("Codex Watchdog guard started. Future operations can use ./agent/bin/watchdog.");
-        await updateStatusBar();
-      } finally {
-        await clearPanelOperationState();
-      }
+    await guardStartFlow.runGuardStartFlow({
+      root,
+      progressTitle: "Starting Codex Watchdog guard",
+      prepareMessage: "Preparing generated files",
+      prepareDetail: "Refreshing generated watchdog files and checking project readiness...",
+      codexHomeMessage: "Preparing Codex home",
+      codexHomeDetail: "Checking CODEX_HOME and login state before unattended mode starts...",
+      startMessage: "Running one wakeup, then starting timer",
+      startDetail: "Running one immediate watchdog wakeup, then enabling the repeating timer...",
+      logHeading: "Start Guard",
+      successMessage: "Codex Watchdog guard started. Future operations can use ./agent/bin/watchdog."
     });
   }
 
@@ -166,46 +142,17 @@ function createGuardLifecycle({
     if (!root) {
       return;
     }
-    await vscode.window.withProgress({
-      location: vscode.ProgressLocation.Notification,
-      title: "Running Codex Watchdog once, then starting timer",
-      cancellable: false
-    }, async () => {
-      const startedAt = new Date().toISOString();
-      try {
-        await setPanelOperationState({
-          title: "Run once and start timer",
-          detail: "Refreshing the project, checking login, then launching one wakeup before the timer starts...",
-          startedAt
-        });
-        await prepareProjectForGuard(root);
-        const taskReady = await confirmTaskInstantiatedIfNeeded(root);
-        if (!taskReady) {
-          return;
-        }
-        await ensureCodexHome(root);
-        const canContinue = await confirmLoginIfNeeded(root);
-        if (!canContinue) {
-          return;
-        }
-        await setPanelOperationState({
-          title: "Run once and start timer",
-          detail: "Executing one immediate watchdog cycle and enabling the repeating timer...",
-          startedAt
-        });
-        output.show(true);
-        output.appendLine(`\n# ${new Date().toISOString()} Run Once And Start Timer`);
-        output.appendLine(`Project root: ${root}`);
-        await runLogged(path.join(root, "agent", "bin", "watchdog"), ["start"], {
-          cwd: root,
-          env: await watchdogCommandEnv(root),
-          timeout: watchdogCommandTimeoutMs(root)
-        });
-        vscode.window.showInformationMessage("Codex Watchdog immediate wakeup succeeded and timer started.");
-        await updateStatusBar();
-      } finally {
-        await clearPanelOperationState();
-      }
+    await guardStartFlow.runGuardStartFlow({
+      root,
+      progressTitle: "Running Codex Watchdog once, then starting timer",
+      prepareMessage: "Refreshing project state",
+      prepareDetail: "Refreshing the project, checking login, then launching one wakeup before the timer starts...",
+      codexHomeMessage: "Preparing Codex home",
+      codexHomeDetail: "Checking CODEX_HOME and login state before the timer starts unattended runs...",
+      startMessage: "Executing immediate wakeup",
+      startDetail: "Executing one immediate watchdog cycle and enabling the repeating timer...",
+      logHeading: "Run Once And Start Timer",
+      successMessage: "Codex Watchdog immediate wakeup succeeded and timer started."
     });
   }
 
