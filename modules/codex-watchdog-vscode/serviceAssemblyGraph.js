@@ -18,6 +18,11 @@ const { createServiceControlPanelFactory } = require("./serviceControlPanelFacto
 const { createServiceRuntimeFactory } = require("./serviceRuntimeFactory");
 const { createServiceProjectFactory } = require("./serviceProjectFactory");
 const {
+  buildRuntimeServicesArgs,
+  buildProjectServicesArgs,
+  buildControlPanelServicesArgs
+} = require("./serviceAssemblyGraphArgBuilders");
+const {
   bootstrapChangePreviewPath,
   bootstrapConversationMarkdownPath,
   bootstrapConversationPromptText,
@@ -100,7 +105,7 @@ function buildServiceAssemblyGraph({
     return controlPanelServices.getControlPanelController();
   }
 
-  const runtimeServices = createServiceRuntimeFactory({
+  const runtimeServices = createServiceRuntimeFactory(buildRuntimeServicesArgs({
     createProjectRootManager,
     createRuntimeConfigHelpers,
     createRuntimeHelpers,
@@ -143,7 +148,7 @@ function buildServiceAssemblyGraph({
     updateStatusBar: () => controlPanelServices
       ? controlPanelServices.getControlPanelController().updateStatusBar()
       : Promise.resolve()
-  });
+  }));
   const getProjectRootManager = runtimeServices.getProjectRootManager;
   const getRuntimeConfigHelpers = runtimeServices.getRuntimeConfigHelpers;
   const getRuntimeHelpers = runtimeServices.getRuntimeHelpers;
@@ -159,7 +164,7 @@ function buildServiceAssemblyGraph({
     archiveAndResetBootstrapConversation
   });
 
-  projectServices = createServiceProjectFactory({
+  projectServices = createServiceProjectFactory(buildProjectServicesArgs({
     createProjectSetupHelpers,
     createBootstrapWorkflowHelpers,
     createGeneratedFilesHelpers,
@@ -201,9 +206,9 @@ function buildServiceAssemblyGraph({
     runLogged,
     unitNames,
     getControlPanelController: () => controlPanelServices.getControlPanelController()
-  });
+  }));
 
-  controlPanelServices = createServiceControlPanelFactory({
+  controlPanelServices = createServiceControlPanelFactory(buildControlPanelServicesArgs({
     createControlPanelStateHelpers,
     createControlPanelActionHandler,
     createControlPanelController,
@@ -225,7 +230,7 @@ function buildServiceAssemblyGraph({
     bridges,
     getBootstrapConversationState,
     readFilePrefix
-  });
+  }));
 
   return {
     bridges,

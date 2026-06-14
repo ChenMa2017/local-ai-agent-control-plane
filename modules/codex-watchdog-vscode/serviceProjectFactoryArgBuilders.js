@@ -1,19 +1,10 @@
 "use strict";
 
-const { createServiceProjectHelperAccessors } = require("./serviceProjectHelperAccessors");
-const { createServiceProjectCommandAccessors } = require("./serviceProjectCommandAccessors");
-const {
-  buildHelperAccessorsArgs,
-  buildCommandAccessorsArgs
-} = require("./serviceProjectFactoryArgBuilders");
-
-function createServiceProjectFactory({
+function buildHelperAccessorsArgs({
   createProjectSetupHelpers,
   createBootstrapWorkflowHelpers,
   createGeneratedFilesHelpers,
   createBootstrapScaffoldingHelpers,
-  createProjectCommands,
-  createGuardLifecycle,
   vscode,
   fs,
   fsp,
@@ -42,16 +33,11 @@ function createServiceProjectFactory({
   applyBootstrapDraftFiles,
   writeBootstrapRuntimeState,
   emptyBootstrapRuntimeState,
-  extensionSetting,
-  defaultTimeoutMinutes,
   isWatchdogInitialized,
   isEffectivelyEmptyDir,
-  runLogged,
-  unitNames,
-  getControlPanelController
+  getProjectCommands
 }) {
-  let commandAccessors;
-  const helperAccessors = createServiceProjectHelperAccessors(buildHelperAccessorsArgs({
+  return {
     createProjectSetupHelpers,
     createBootstrapWorkflowHelpers,
     createGeneratedFilesHelpers,
@@ -86,9 +72,35 @@ function createServiceProjectFactory({
     emptyBootstrapRuntimeState,
     isWatchdogInitialized,
     isEffectivelyEmptyDir,
-    getProjectCommands: () => commandAccessors.getProjectCommands()
-  }));
-  commandAccessors = createServiceProjectCommandAccessors(buildCommandAccessorsArgs({
+    getProjectCommands
+  };
+}
+
+function buildCommandAccessorsArgs({
+  createProjectCommands,
+  createGuardLifecycle,
+  vscode,
+  fs,
+  fsp,
+  path,
+  ensureDir,
+  getOutput,
+  openDocument,
+  getRuntimeConfigHelpers,
+  bridges,
+  writeBootstrapRuntimeState,
+  emptyBootstrapRuntimeState,
+  extensionSetting,
+  defaultTimeoutMinutes,
+  runLogged,
+  unitNames,
+  getControlPanelController,
+  getProjectSetupHelpers,
+  getBootstrapWorkflowHelpers,
+  getGeneratedFilesHelpers,
+  getBootstrapScaffoldingHelpers
+}) {
+  return {
     createProjectCommands,
     createGuardLifecycle,
     vscode,
@@ -107,22 +119,14 @@ function createServiceProjectFactory({
     runLogged,
     unitNames,
     getControlPanelController,
-    getProjectSetupHelpers: helperAccessors.getProjectSetupHelpers,
-    getBootstrapWorkflowHelpers: helperAccessors.getBootstrapWorkflowHelpers,
-    getGeneratedFilesHelpers: helperAccessors.getGeneratedFilesHelpers,
-    getBootstrapScaffoldingHelpers: helperAccessors.getBootstrapScaffoldingHelpers
-  }));
-
-  return {
-    getProjectSetupHelpers: helperAccessors.getProjectSetupHelpers,
-    getBootstrapWorkflowHelpers: helperAccessors.getBootstrapWorkflowHelpers,
-    getGeneratedFilesHelpers: helperAccessors.getGeneratedFilesHelpers,
-    getBootstrapScaffoldingHelpers: helperAccessors.getBootstrapScaffoldingHelpers,
-    getProjectCommands: commandAccessors.getProjectCommands,
-    getGuardCommands: commandAccessors.getGuardCommands
+    getProjectSetupHelpers,
+    getBootstrapWorkflowHelpers,
+    getGeneratedFilesHelpers,
+    getBootstrapScaffoldingHelpers
   };
 }
 
 module.exports = {
-  createServiceProjectFactory
+  buildHelperAccessorsArgs,
+  buildCommandAccessorsArgs
 };
