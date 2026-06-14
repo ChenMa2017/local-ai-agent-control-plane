@@ -4,6 +4,7 @@ const assert = require("assert");
 
 const { createServiceAssemblyBridges } = require("../serviceBridges");
 const { createServiceControlPanelFactory } = require("../serviceControlPanelFactory");
+const { createServiceRuntimeFactory } = require("../serviceRuntimeFactory");
 const {
   createBaseControlPanelState,
   applyResolvedRuntimeState,
@@ -261,11 +262,104 @@ async function testControlPanelFactoryCaching() {
   factory.deactivate();
 }
 
+async function testRuntimeFactoryCaching() {
+  let rootManagerCount = 0;
+  let runtimeConfigCount = 0;
+  let runtimeHelpersCount = 0;
+  let updateStatusBarCount = 0;
+
+  const runtimeFactory = createServiceRuntimeFactory({
+    createProjectRootManager: ({ updateStatusBar }) => ({
+      kind: `root-${++rootManagerCount}`,
+      getKnownProjectRoot: () => "/tmp/project",
+      getWorkspaceRoot: () => "/tmp/workspace",
+      getProjectRoot: async () => "/tmp/project",
+      selectProjectRoot: async () => "/tmp/project",
+      browseExistingProjectRoot: async () => "/tmp/project",
+      normalizeProjectRootInput: async () => "/tmp/project",
+      rememberProjectRoot: async () => {},
+      clearRememberedProjectRoot: async () => {},
+      pokeStatus: async () => updateStatusBar()
+    }),
+    createRuntimeConfigHelpers: () => ({
+      kind: `config-${++runtimeConfigCount}`,
+      codexHomeSetting: () => "/tmp/home",
+      codexHomePlan: () => ({ effectivePath: "/tmp/home" }),
+      sandboxModeSetting: () => "read-only",
+      positiveNumberSetting: () => 30,
+      watchdogRoleSetting: () => "runner",
+      booleanSetting: () => true,
+      servicePrefixSetting: () => "codex-watchdog",
+      watcherProfileModelDefaults: {},
+      mergeWatcherConfigText: () => "",
+      hasTomlAssignment: () => false,
+      parseTomlBasicString: () => ""
+    }),
+    createRuntimeHelpers: ({ getProjectRoot }) => ({
+      kind: `runtime-${++runtimeHelpersCount}`,
+      getProjectRoot
+    }),
+    vscode: {},
+    fs: {},
+    fsp: {},
+    path: {},
+    os: {},
+    getOutput: () => ({ appendLine() {} }),
+    getExtensionContext: () => ({ subscriptions: [] }),
+    projectRootKey: "root",
+    extensionSetting: () => undefined,
+    extensionSettingWithSource: () => undefined,
+    projectSetting: () => undefined,
+    projectSettingWithSource: () => undefined,
+    expandHome: (value) => value,
+    isExistingDirectory: () => true,
+    isSafeProjectRootPath: () => true,
+    validateProjectRootPath: () => true,
+    ensureDir: async () => {},
+    requireExistingDirectory: async () => {},
+    defaultWatchdogRole: "runner",
+    defaultServicePrefix: "codex-watchdog",
+    loginReadyRe: /ready/,
+    resolveCodexBin: async () => "/usr/bin/codex",
+    updateProjectSetting: async () => {},
+    defaultTimeoutMinutes: 25,
+    defaultIntervalMinutes: 30,
+    defaultCompactEveryRuns: 6,
+    defaultPhaseOffsetMinutes: 10,
+    defaultSupervisorLightFollowup: true,
+    defaultSupervisorAuditEveryRunnerRuns: 4,
+    run: async () => {},
+    unitNames: () => ({}),
+    systemdQuote: (value) => value,
+    systemdPathValue: (value) => value,
+    systemdEnvValue: (value) => value,
+    shellQuote: (value) => value,
+    readFilePrefix: () => "",
+    updateStatusBar: async () => {
+      updateStatusBarCount += 1;
+    }
+  });
+
+  assert.strictEqual(runtimeFactory.getProjectRootManager().kind, "root-1");
+  assert.strictEqual(runtimeFactory.getProjectRootManager().kind, "root-1");
+  assert.strictEqual(runtimeFactory.getRuntimeConfigHelpers().kind, "config-1");
+  assert.strictEqual(runtimeFactory.getRuntimeConfigHelpers().kind, "config-1");
+  assert.strictEqual(runtimeFactory.getRuntimeHelpers().kind, "runtime-1");
+  assert.strictEqual(runtimeFactory.getRuntimeHelpers().kind, "runtime-1");
+  assert.strictEqual(await runtimeFactory.getRuntimeHelpers().getProjectRoot(), "/tmp/project");
+  await runtimeFactory.getProjectRootManager().pokeStatus();
+  assert.strictEqual(rootManagerCount, 1);
+  assert.strictEqual(runtimeConfigCount, 1);
+  assert.strictEqual(runtimeHelpersCount, 1);
+  assert.strictEqual(updateStatusBarCount, 1);
+}
+
 async function main() {
   await testServiceBridges();
   testControlPanelStateModel();
   testRenderer();
   await testControlPanelFactoryCaching();
+  await testRuntimeFactoryCaching();
   console.log("refactor smoke test passed");
 }
 
