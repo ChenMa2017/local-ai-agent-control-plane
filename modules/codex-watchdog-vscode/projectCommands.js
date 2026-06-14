@@ -2,6 +2,7 @@
 
 const { createProjectCommandFlows } = require("./projectCommandFlows");
 const { createProjectBootstrapCommands } = require("./projectBootstrapCommands");
+const { createProjectFlowCommands } = require("./projectFlowCommands");
 const { createProjectRuntimeCommands } = require("./projectRuntimeCommands");
 
 function createProjectCommands({
@@ -63,39 +64,19 @@ function createProjectCommands({
     extensionSetting,
     defaultTimeoutMinutes
   });
-
-  async function withProjectRoot(run) {
-    const root = await getProjectRoot();
-    if (!root) {
-      return;
-    }
-    await run(root);
-  }
-
-  async function prepareProjectCommand() {
-    await withProjectRoot((root) => projectCommandFlows.prepareProject(root));
-  }
-
-  async function generateBootstrapConversationCommand(rawText) {
-    await withProjectRoot((root) => projectCommandFlows.generateBootstrapConversation(root, rawText));
-  }
-
-  async function refreshGeneratedFilesCommand() {
-    await withProjectRoot((root) => projectCommandFlows.refreshGeneratedFiles(root));
-  }
-
-  async function prepareEveningHandoffCommand() {
-    await withProjectRoot((root) => projectCommandFlows.prepareEveningHandoff(root));
-  }
+  const projectFlowCommands = createProjectFlowCommands({
+    getProjectRoot,
+    projectCommandFlows
+  });
 
   return {
     selectProjectRootCommand: projectBootstrapCommands.selectProjectRootCommand,
     bootstrapProjectCommand: projectBootstrapCommands.bootstrapProjectCommand,
     createDemoProjectTemplateCommand: projectBootstrapCommands.createDemoProjectTemplateCommand,
-    prepareProjectCommand,
-    generateBootstrapConversationCommand,
-    refreshGeneratedFilesCommand,
-    prepareEveningHandoffCommand,
+    prepareProjectCommand: projectFlowCommands.prepareProjectCommand,
+    generateBootstrapConversationCommand: projectFlowCommands.generateBootstrapConversationCommand,
+    refreshGeneratedFilesCommand: projectFlowCommands.refreshGeneratedFilesCommand,
+    prepareEveningHandoffCommand: projectFlowCommands.prepareEveningHandoffCommand,
     openMorningBriefCommand: projectRuntimeCommands.openMorningBriefCommand,
     acceptStateUpdateCommand: projectRuntimeCommands.acceptStateUpdateCommand,
     showProjectRootSelected: projectBootstrapCommands.showProjectRootSelected,
