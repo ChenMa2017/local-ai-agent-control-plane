@@ -1,5 +1,10 @@
 "use strict";
 
+const {
+  buildProjectCommandsArgs,
+  buildGuardLifecycleArgs
+} = require("./serviceProjectCommandArgBuilders");
+
 function createServiceProjectCommandAccessors({
   createProjectCommands,
   createGuardLifecycle,
@@ -30,18 +35,13 @@ function createServiceProjectCommandAccessors({
   function getProjectCommands() {
     if (!projectCommands) {
       const runtimeConfig = getRuntimeConfigHelpers();
-      projectCommands = createProjectCommands({
+      projectCommands = createProjectCommands(buildProjectCommandsArgs({
         vscode,
         fs,
         fsp,
         path,
-        getProjectRoot: bridges.getProjectRoot,
-        selectProjectRoot: bridges.selectProjectRoot,
-        rememberProjectRoot: bridges.rememberProjectRoot,
-        ensureCodexHome: bridges.ensureCodexHome,
-        confirmLoginIfNeeded: bridges.confirmLoginIfNeeded,
-        effectiveWatchdogSettings: bridges.effectiveWatchdogSettings,
-        positiveNumberSetting: runtimeConfig.positiveNumberSetting,
+        bridges,
+        runtimeConfig,
         extensionSetting,
         defaultTimeoutMinutes,
         getBootstrapScaffoldingHelpers,
@@ -50,11 +50,8 @@ function createServiceProjectCommandAccessors({
         getBootstrapWorkflowHelpers,
         writeBootstrapRuntimeState,
         emptyBootstrapRuntimeState,
-        setPanelOperationState: bridges.setPanelOperationState,
-        clearPanelOperationState: bridges.clearPanelOperationState,
-        updateControlPanel: bridges.updateControlPanel,
         openDocument
-      });
+      }));
     }
     return projectCommands;
   }
@@ -62,25 +59,20 @@ function createServiceProjectCommandAccessors({
   function getGuardCommands() {
     if (!guardCommands) {
       const commands = getProjectCommands();
-      guardCommands = createGuardLifecycle({
+      const guardLifecycle = buildGuardLifecycleArgs({
+        createGuardLifecycle,
         vscode,
-        output: getOutput(),
-        getProjectRoot: bridges.getProjectRoot,
+        getOutput,
+        bridges,
         ensureDir,
-        prepareProjectForGuard: getProjectSetupHelpers().prepareProjectForGuard,
-        confirmTaskInstantiatedIfNeeded: getProjectSetupHelpers().confirmTaskInstantiatedIfNeeded,
-        ensureCodexHome: bridges.ensureCodexHome,
-        confirmLoginIfNeeded: bridges.confirmLoginIfNeeded,
+        getProjectSetupHelpers,
         runLogged,
-        watchdogCommandEnv: commands.watchdogCommandEnv,
-        watchdogCommandTimeoutMs: commands.watchdogCommandTimeoutMs,
-        setPanelOperationState: (data) => getControlPanelController().setPanelOperationState(data),
-        clearPanelOperationState: () => getControlPanelController().clearPanelOperationState(),
-        updateStatusBar: () => bridges.updateStatusBar(),
+        commands,
+        getControlPanelController,
         unitNames,
-        getTimerStatus: bridges.getTimerStatus,
         openDocument
       });
+      guardCommands = guardLifecycle.createGuardLifecycle(guardLifecycle.args);
     }
     return guardCommands;
   }
