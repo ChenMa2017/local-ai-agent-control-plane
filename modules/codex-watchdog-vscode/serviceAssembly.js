@@ -4,6 +4,10 @@ const { activateWatchdogServices, registerWatchdogCommand } = require("./service
 const { createServiceAssemblyControlPanelAccessors } = require("./serviceAssemblyControlPanelAccessors");
 const { activateServiceAssembly } = require("./serviceAssemblyActivation");
 const { buildServiceAssemblyGraph } = require("./serviceAssemblyGraph");
+const {
+  buildServiceAssemblyGraphArgs,
+  buildServiceAssemblyActivationArgs
+} = require("./serviceAssemblyArgBuilders");
 
 function createServiceAssembly({
   vscode,
@@ -62,7 +66,7 @@ function createServiceAssembly({
     getProjectRootManager,
     getRuntimeConfigHelpers,
     getRuntimeHelpers
-  } = buildServiceAssemblyGraph({
+  } = buildServiceAssemblyGraph(buildServiceAssemblyGraphArgs({
     vscode,
     fs,
     fsp,
@@ -110,7 +114,7 @@ function createServiceAssembly({
     readFilePrefix,
     isWatchdogInitialized,
     isEffectivelyEmptyDir
-  });
+  }));
   const controlPanelAccessors = createServiceAssemblyControlPanelAccessors({
     getControlPanelServices: () => controlPanelServices
   });
@@ -128,7 +132,7 @@ function createServiceAssembly({
   }
 
   function activate(context) {
-    activateServiceAssembly({
+    activateServiceAssembly(buildServiceAssemblyActivationArgs({
       context,
       projectServices,
       controlPanelAccessors,
@@ -137,7 +141,7 @@ function createServiceAssembly({
       vscode,
       getOutput,
       bridges
-    });
+    }));
   }
 
   function deactivate() {
