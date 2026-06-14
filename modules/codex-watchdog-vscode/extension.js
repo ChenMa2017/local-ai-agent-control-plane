@@ -11,6 +11,10 @@ const { createServiceAssembly } = require("./serviceAssembly");
 const { createExtensionHostUtils } = require("./extensionHostUtils");
 const { createExtensionServiceDelegates } = require("./extensionServiceDelegates");
 const { createExtensionHostDelegates } = require("./extensionHostDelegates");
+const {
+  buildHostUtilsArgs,
+  buildServiceAssemblyArgs
+} = require("./extensionArgBuilders");
 const { templates } = require("./templates");
 const {
   emptyPanelOperationState: emptyControlPanelOperationState,
@@ -66,7 +70,7 @@ function emptyPanelOperationState() {
 
 function getHostUtils() {
   if (!hostUtils) {
-    hostUtils = createExtensionHostUtils({
+    hostUtils = createExtensionHostUtils(buildHostUtilsArgs({
       vscode,
       fs,
       fsp,
@@ -76,7 +80,7 @@ function getHostUtils() {
       cp,
       getOutput: () => output,
       getRuntimeConfigHelpers
-    });
+    }));
   }
   return hostUtils;
 }
@@ -127,7 +131,7 @@ const unitNames = hostDelegates.unitNames;
 
 function getServiceAssembly() {
   if (!serviceAssembly) {
-    serviceAssembly = createServiceAssembly({
+    serviceAssembly = createServiceAssembly(buildServiceAssemblyArgs({
       vscode,
       fs,
       fsp,
@@ -150,32 +154,9 @@ function getServiceAssembly() {
       emptyPanelOperationState,
       nextPanelOperationState,
       templates,
-      ensureDir: hostDelegates.ensureDir,
-      openDocument: hostDelegates.openDocument,
-      extensionSetting: hostDelegates.extensionSetting,
-      extensionSettingWithSource: hostDelegates.extensionSettingWithSource,
-      projectSetting: hostDelegates.projectSetting,
-      projectSettingWithSource: hostDelegates.projectSettingWithSource,
-      expandHome: hostDelegates.expandHome,
-      isExistingDirectory: hostDelegates.isExistingDirectory,
-      isSafeProjectRootPath: hostDelegates.isSafeProjectRootPath,
-      validateProjectRootPath: hostDelegates.validateProjectRootPath,
-      requireExistingDirectory: hostDelegates.requireExistingDirectory,
-      resolveCodexBin: hostDelegates.resolveCodexBin,
-      runLogged: hostDelegates.runLogged,
-      runLoggedWithInput: hostDelegates.runLoggedWithInput,
-      createNonce: serviceDelegates.createNonce,
-      updateProjectSetting: hostDelegates.updateProjectSetting,
-      run: hostDelegates.run,
-      unitNames: hostDelegates.unitNames,
-      systemdQuote: hostDelegates.systemdQuote,
-      systemdPathValue: hostDelegates.systemdPathValue,
-      systemdEnvValue: hostDelegates.systemdEnvValue,
-      shellQuote: hostDelegates.shellQuote,
-      readFilePrefix: hostDelegates.readFilePrefix,
-      isWatchdogInitialized: hostDelegates.isWatchdogInitialized,
-      isEffectivelyEmptyDir: hostDelegates.isEffectivelyEmptyDir
-    });
+      hostDelegates,
+      serviceDelegates
+    }));
   }
   return serviceAssembly;
 }
