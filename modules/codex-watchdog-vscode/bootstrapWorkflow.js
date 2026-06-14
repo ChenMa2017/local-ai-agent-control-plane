@@ -1,8 +1,12 @@
 "use strict";
 
-const fs = require("fs");
 const { createBootstrapCodexRunner } = require("./bootstrapCodexRunner");
 const { createBootstrapInstantiationFlow } = require("./bootstrapInstantiationFlow");
+const { createBootstrapTranscriptCommands } = require("./bootstrapTranscriptCommands");
+const {
+  buildBootstrapCodexRunnerArgs,
+  buildBootstrapInstantiationFlowArgs
+} = require("./bootstrapWorkflowArgBuilders");
 
 function createBootstrapWorkflowHelpers({
   vscode,
@@ -31,7 +35,7 @@ function createBootstrapWorkflowHelpers({
   updateControlPanel,
   confirmLoginIfNeeded
 }) {
-  const bootstrapCodexRunner = createBootstrapCodexRunner({
+  const bootstrapCodexRunner = createBootstrapCodexRunner(buildBootstrapCodexRunnerArgs({
     resolveCodexBin,
     codexHomeSetting,
     readBootstrapConversation,
@@ -46,8 +50,8 @@ function createBootstrapWorkflowHelpers({
     bootstrapInstantiationPromptText,
     bootstrapResultSchemaPath,
     stageBootstrapDraftFiles
-  });
-  const bootstrapInstantiationFlow = createBootstrapInstantiationFlow({
+  }));
+  const bootstrapInstantiationFlow = createBootstrapInstantiationFlow(buildBootstrapInstantiationFlowArgs({
     vscode,
     projectSetupHelpers,
     bootstrapCodexRunner,
@@ -62,6 +66,11 @@ function createBootstrapWorkflowHelpers({
     readBootstrapConversation,
     writeBootstrapConversation,
     openDocument
+  }));
+  const bootstrapTranscriptCommands = createBootstrapTranscriptCommands({
+    vscode,
+    openDocument,
+    bootstrapConversationMarkdownPath
   });
 
   async function runBootstrapConversationTurn(root, userText) {
@@ -81,12 +90,7 @@ function createBootstrapWorkflowHelpers({
   }
 
   async function openBootstrapTranscriptCommand(root) {
-    const file = bootstrapConversationMarkdownPath(root);
-    if (!fs.existsSync(file)) {
-      vscode.window.showWarningMessage("No bootstrap conversation transcript exists yet. Generate drafts first.");
-      return;
-    }
-    await openDocument(file, false);
+    return bootstrapTranscriptCommands.openBootstrapTranscriptCommand(root);
   }
 
   async function openBootstrapChangePreviewCommand(root) {
