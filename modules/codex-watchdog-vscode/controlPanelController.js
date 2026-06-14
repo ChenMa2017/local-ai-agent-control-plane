@@ -1,11 +1,7 @@
 "use strict";
 
-const crypto = require("crypto");
 const { createControlPanelStatusBar } = require("./controlPanelStatusBar");
-
-function createNonce() {
-  return crypto.randomBytes(16).toString("base64");
-}
+const { createControlPanelWebview } = require("./controlPanelWebview");
 
 function createControlPanelController({
   vscode,
@@ -19,7 +15,6 @@ function createControlPanelController({
   getControlPanelStateHelpers,
   getControlPanelMessageHandler
 }) {
-  let controlPanel;
   let panelOperationState = emptyPanelOperationState();
   const statusBar = createControlPanelStatusBar({
     vscode,
@@ -28,57 +23,23 @@ function createControlPanelController({
     isGuardPaused,
     getTimerStatus
   });
-
-  async function openControlPanel() {
-    if (controlPanel) {
-      controlPanel.reveal(vscode.ViewColumn.One);
-      await updateControlPanel();
-      return;
-    }
-
-    controlPanel = vscode.window.createWebviewPanel(
-      "codexWatchdogControl",
-      "Codex Watchdog",
-      vscode.ViewColumn.One,
-      { enableScripts: true }
-    );
-    controlPanel.onDidDispose(() => {
-      controlPanel = undefined;
-    });
-    controlPanel.webview.onDidReceiveMessage(async (message) => {
-      try {
-        await getControlPanelMessageHandler()(message);
-      } catch (error) {
-        const text = error && error.message ? error.message : String(error);
-        vscode.window.showErrorMessage(`Codex Watchdog: ${text}`);
-        output.appendLine(`[control-panel error] ${text}`);
-        await updateControlPanel();
-      }
-    });
-
-    await updateControlPanel();
-  }
-
-  async function updateControlPanel() {
-    if (!controlPanel) {
-      await updateStatusBar();
-      return;
-    }
-    controlPanel.webview.html = getControlPanelStateHelpers().renderControlPanel(
-      await getControlPanelStateHelpers().getControlPanelState(panelOperationState),
-      createNonce()
-    );
-    await updateStatusBar();
-  }
+  const webview = createControlPanelWebview({
+    vscode,
+    output,
+    getControlPanelStateHelpers,
+    getControlPanelMessageHandler,
+    updateStatusBar,
+    getPanelOperationState: () => panelOperationState
+  });
 
   async function setPanelOperationState(data) {
     panelOperationState = nextPanelOperationState(panelOperationState, data);
-    await updateControlPanel();
+    await webview.updateControlPanel();
   }
 
   async function clearPanelOperationState() {
     panelOperationState = emptyPanelOperationState();
-    await updateControlPanel();
+    await webview.updateControlPanel();
   }
 
   function initializeStatusBar(context) {
@@ -94,8 +55,8 @@ function createControlPanelController({
   }
 
   return {
-    openControlPanel,
-    updateControlPanel,
+    openControlPanel: webview.openControlPanel,
+    updateControlPanel: webview.updateControlPanel,
     setPanelOperationState,
     clearPanelOperationState,
     initializeStatusBar,
