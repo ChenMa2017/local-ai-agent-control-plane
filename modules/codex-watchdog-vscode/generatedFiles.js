@@ -1,5 +1,11 @@
 "use strict";
 
+const {
+  collaborationHandoffEntries,
+  dailyHandoffEntries,
+  generatedWatcherEntries
+} = require("./templateEntries");
+
 function createGeneratedFilesHelpers({
   fs,
   fsp,
@@ -38,54 +44,9 @@ function createGeneratedFilesHelpers({
     await ensureDir(path.join(root, "research", "analysis"));
   }
 
-  function generatedSkillFiles() {
-    return [
-      ["agent/SKILL_ROUTER.md", templates.skillRouter()],
-      ["agent/skills/watchdog-orchestrator/SKILL.md", templates.skillOrchestrator()],
-      ["agent/skills/watchdog-job-queue/SKILL.md", templates.skillJobQueue()],
-      ["agent/skills/watchdog-gate-evaluator/SKILL.md", templates.skillGateEvaluator()],
-      ["agent/skills/watchdog-report-curator/SKILL.md", templates.skillReportCurator()],
-      ["agent/skills/watchdog-permission-guardian/SKILL.md", templates.skillPermissionGuardian()],
-      ["agent/skills/watchdog-handoff-writer/SKILL.md", templates.skillHandoffWriter()],
-      ["agent/skills/watchdog-cleanup-auditor/SKILL.md", templates.skillCleanupAuditor()],
-      ["agent/skills/project-secondary-example/SKILL.example.md", templates.projectSecondarySkillExample()]
-    ];
-  }
-
   async function generatedWatcherFileEntries(root) {
     const watchdogEnv = await renderWatchdogEnv(root);
-    const files = [
-      ["agent/watchdog.env", watchdogEnv, 0o644],
-      ["README.codex-watchdog.md", templates.watchdogReadme(), 0o644],
-      ["agent/CODEX_TAKEOVER.md", templates.codexTakeover(), 0o644],
-      ["agent/WATCHDOG_PROTOCOL.md", templates.watchdogProtocol(), 0o644],
-      ["agent/prompts/wakeup.md", templates.wakeup(), 0o644],
-      ["agent/schemas/watch_decision.schema.json", templates.schema(), 0o644],
-      ["agent/schemas/bootstrap_conversation_turn.schema.json", templates.bootstrapConversationTurnSchema(), 0o644],
-      ["agent/schemas/bootstrap_instantiation.schema.json", templates.bootstrapInstantiationSchema(), 0o644],
-      ["agent/schemas/state.schema.json", templates.stateSchema(), 0o644],
-      ["agent/schemas/task_box.schema.json", templates.taskBoxSchema(), 0o644],
-      ["agent/schemas/route_canonical.schema.json", templates.routeCanonicalSchema(), 0o644],
-      ["agent/schemas/secondary_skills.schema.json", templates.secondarySkillsSchema(), 0o644],
-      ["agent/schemas/job.schema.json", templates.jobSchema(), 0o644],
-      ["agent/schemas/gate.schema.json", templates.gateSchema(), 0o644],
-      ["agent/TASK_BOX.json", templates.taskBoxJson(), 0o644],
-      ["agent/ROUTE_CANONICAL.json", templates.routeCanonicalJson(), 0o644],
-      ["agent/EVIDENCE_LEDGER.jsonl", templates.evidenceLedgerJsonl(), 0o644],
-      ["agent/SECONDARY_SKILLS.example.json", templates.secondarySkillsExample(), 0o644],
-      ["agent/bin/collect_status.sh", templates.collectStatus(root), 0o755],
-      ["agent/bin/make_prompt.sh", templates.makePrompt(root), 0o755],
-      ["agent/bin/run_watchdog.sh", templates.runWatchdog(root), 0o755],
-      ["agent/bin/watchdog", templates.watchdogCli(root), 0o755],
-      ["agent/bin/watchdog_timer.sh", templates.watchdogTimer(root), 0o755],
-      ["agent/bin/watchdog_guard.sh", templates.watchdogGuard(root), 0o755],
-      ["agent/bin/render_report.py", templates.renderReport(), 0o755],
-      ["agent/bin/route_skill.py", templates.routeSkill(), 0o755],
-      ["agent/bin/validate_runtime.py", templates.validateRuntime(), 0o755]
-    ];
-    for (const [rel, content] of generatedSkillFiles()) {
-      files.push([rel, content, 0o644]);
-    }
+    const files = generatedWatcherEntries(root, templates, watchdogEnv);
     return files.map(([rel, content, mode]) => ({
       rel,
       file: path.join(root, rel),
@@ -191,18 +152,7 @@ function createGeneratedFilesHelpers({
   }
 
   async function ensureCollaborationHandoffFiles(root) {
-    const files = [
-      ["agent/CURRENT_STATE.md", templates.currentState()],
-      ["agent/RUN_STATE.json", templates.runStateJson()],
-      ["agent/TASK_BOX.json", templates.taskBoxJson()],
-      ["agent/ROUTE_CANONICAL.json", templates.routeCanonicalJson()],
-      ["agent/NEXT_ACTION.md", templates.nextAction()],
-      ["agent/BLOCKERS.md", templates.blockers()],
-      ["agent/REVIEW_PENDING.md", templates.reviewPending()],
-      ["agent/ANTI_SNOWBALL.md", templates.antiSnowball()],
-      ["agent/EXPERIMENT_LEDGER.md", templates.experimentLedger()],
-      ["agent/EVIDENCE_LEDGER.jsonl", templates.evidenceLedgerJsonl()]
-    ];
+    const files = collaborationHandoffEntries(templates);
     for (const [rel, content] of files) {
       const file = path.join(root, rel);
       if (!fs.existsSync(file)) {
@@ -214,16 +164,12 @@ function createGeneratedFilesHelpers({
   }
 
   async function ensureHandoffFiles(root) {
-    const dailyHandoff = path.join(root, "agent", "DAILY_HANDOFF.md");
-    if (!fs.existsSync(dailyHandoff)) {
-      await fsp.writeFile(dailyHandoff, templates.dailyHandoff());
-      output.appendLine("Created agent/DAILY_HANDOFF.md");
-    }
-
-    const morningBrief = path.join(root, "agent", "MORNING_BRIEF.md");
-    if (!fs.existsSync(morningBrief)) {
-      await fsp.writeFile(morningBrief, templates.morningBrief());
-      output.appendLine("Created agent/MORNING_BRIEF.md");
+    for (const [rel, content] of dailyHandoffEntries(templates)) {
+      const file = path.join(root, rel);
+      if (!fs.existsSync(file)) {
+        await fsp.writeFile(file, content);
+        output.appendLine(`Created ${rel}`);
+      }
     }
   }
 

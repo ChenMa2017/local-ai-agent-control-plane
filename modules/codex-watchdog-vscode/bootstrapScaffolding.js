@@ -1,5 +1,11 @@
 "use strict";
 
+const {
+  bootstrapScaffoldEntries,
+  demoProjectOverlayEntries,
+  demoProjectSeedEntries
+} = require("./templateEntries");
+
 function createBootstrapScaffoldingHelpers({
   fs,
   fsp,
@@ -19,39 +25,12 @@ function createBootstrapScaffoldingHelpers({
 
     await generatedFilesHelpers.ensureGeneratedDirs(root);
 
-    await writeIfAbsent(root, path.join(root, "README.codex-watchdog.md"), templates.watchdogReadme(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "AGENTS.md"), templates.agents(), created, skipped);
+    for (const [rel, content] of bootstrapScaffoldEntries(templates)) {
+      await writeIfAbsent(root, path.join(root, rel), content, created, skipped);
+    }
     if (skipped.includes("AGENTS.md")) {
       await writeIfAbsent(root, path.join(root, "agent", "AGENTS.watchdog.example.md"), templates.agents(), created, skipped);
     }
-    await writeIfAbsent(root, path.join(root, "agent", "CODEX_TAKEOVER.md"), templates.codexTakeover(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "WATCHDOG_PROTOCOL.md"), templates.watchdogProtocol(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "TASK_REQUEST.md"), templates.taskRequest(), created, skipped);
-
-    await writeIfAbsent(root, path.join(root, "agent", "PLAN.md"), templates.plan(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "STATE.md"), templates.state(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "STATE.json"), templates.stateJson(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "TASK_BOX.json"), templates.taskBoxJson(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "ROUTE_CANONICAL.json"), templates.routeCanonicalJson(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "PROGRESS_STATE.json"), templates.progressStateJson(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "CURRENT_STATE.md"), templates.currentState(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "RUN_STATE.json"), templates.runStateJson(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "NEXT_ACTION.md"), templates.nextAction(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "BLOCKERS.md"), templates.blockers(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "REVIEW_PENDING.md"), templates.reviewPending(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "ANTI_SNOWBALL.md"), templates.antiSnowball(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "EXPERIMENT_LEDGER.md"), templates.experimentLedger(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "RUNTIME_STATE.md"), templates.runtimeState(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "DAILY_HANDOFF.md"), templates.dailyHandoff(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "MORNING_BRIEF.md"), templates.morningBrief(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "SAFETY.md"), templates.safety(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "TODO.md"), templates.todo(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "workspace_write_policy.example.json"), templates.workspaceWritePolicyExample(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "SECONDARY_SKILLS.example.json"), templates.secondarySkillsExample(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "status", "QUEUE_STATUS.md"), templates.queueStatus(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "agent", "EVIDENCE_LEDGER.jsonl"), templates.evidenceLedgerJsonl(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "research", "RESEARCH_LEDGER.md"), templates.researchLedger(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "research", "LEDGER_NOTES.md"), templates.ledgerNotes(), created, skipped);
 
     const generatedFiles = await generatedFilesHelpers.generatedWatcherFileEntries(root);
     for (const entry of generatedFiles) {
@@ -82,18 +61,17 @@ function createBootstrapScaffoldingHelpers({
 
     await ensureDir(root);
     await ensureDir(path.join(root, "logs"));
-    await writeIfAbsent(root, path.join(root, "README.md"), templates.demoReadme(), created, skipped);
-    await writeIfAbsent(root, path.join(root, "logs", "train.log"), templates.demoTrainLog(), created, skipped);
+    for (const [rel, content] of demoProjectSeedEntries(templates)) {
+      await writeIfAbsent(root, path.join(root, rel), content, created, skipped);
+    }
 
     const bootstrapResult = await bootstrapProject(root);
     created.push(...bootstrapResult.created);
     skipped.push(...bootstrapResult.skipped);
 
-    await writeDemoFileIfFreshOrTemplate(root, "agent/DAILY_HANDOFF.md", templates.demoDailyHandoff(), bootstrapResult.created, created);
-    await writeDemoFileIfFreshOrTemplate(root, "agent/PLAN.md", templates.demoPlan(), bootstrapResult.created, created);
-    await writeDemoFileIfFreshOrTemplate(root, "agent/TODO.md", templates.demoTodo(), bootstrapResult.created, created);
-    await writeDemoFileIfFreshOrTemplate(root, "agent/STATE.md", templates.demoState(), bootstrapResult.created, created);
-    await writeDemoFileIfFreshOrTemplate(root, "agent/SAFETY.md", templates.demoSafety(), bootstrapResult.created, created);
+    for (const [rel, content] of demoProjectOverlayEntries(templates)) {
+      await writeDemoFileIfFreshOrTemplate(root, rel, content, bootstrapResult.created, created);
+    }
     await writeDemoStateJsonIfFreshOrDefault(root, "agent/STATE.json", templates.demoStateJson(), bootstrapResult.created, created);
 
     return { created, skipped };
