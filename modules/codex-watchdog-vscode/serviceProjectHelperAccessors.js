@@ -1,5 +1,12 @@
 "use strict";
 
+const {
+  buildProjectSetupHelperArgs,
+  buildBootstrapWorkflowHelperArgs,
+  buildGeneratedFilesHelperArgs,
+  buildBootstrapScaffoldingHelperArgs
+} = require("./serviceProjectHelperArgBuilders");
+
 function createServiceProjectHelperAccessors({
   createProjectSetupHelpers,
   createBootstrapWorkflowHelpers,
@@ -44,16 +51,15 @@ function createServiceProjectHelperAccessors({
 
   function getProjectSetupHelpers() {
     if (!projectSetupHelpers) {
-      projectSetupHelpers = createProjectSetupHelpers({
+      projectSetupHelpers = createProjectSetupHelpers(buildProjectSetupHelperArgs({
         vscode,
         ensureDir,
-        bootstrapProject: bridges.bootstrapProject,
-        showBootstrapResult: bridges.showBootstrapResult,
-        refreshGeneratedWatcherFiles: (root) => getGeneratedFilesHelpers().refreshGeneratedWatcherFiles(root),
+        bridges,
+        getGeneratedFilesHelpers,
         bootstrapResultSchemaPath,
         bootstrapConversationTurnSchemaPath,
         openDocument
-      });
+      }));
     }
     return projectSetupHelpers;
   }
@@ -61,11 +67,11 @@ function createServiceProjectHelperAccessors({
   function getBootstrapWorkflowHelpers() {
     if (!bootstrapWorkflowHelpers) {
       const runtimeConfig = getRuntimeConfigHelpers();
-      bootstrapWorkflowHelpers = createBootstrapWorkflowHelpers({
+      bootstrapWorkflowHelpers = createBootstrapWorkflowHelpers(buildBootstrapWorkflowHelperArgs({
         vscode,
-        projectSetupHelpers: getProjectSetupHelpers(),
-        resolveCodexBin: bridges.resolveCodexBin,
-        codexHomeSetting: runtimeConfig.codexHomeSetting,
+        getProjectSetupHelpers,
+        bridges,
+        runtimeConfig,
         readBootstrapConversation,
         writeBootstrapConversation,
         clearBootstrapDraftArtifacts,
@@ -73,7 +79,7 @@ function createServiceProjectHelperAccessors({
         bootstrapConversationPromptText,
         bootstrapConversationTurnSchemaPath,
         runLoggedWithInput,
-        watchdogCommandTimeoutMs: (root) => getProjectCommands().watchdogCommandTimeoutMs(root),
+        getProjectCommands,
         createNonce,
         bootstrapInstantiationPromptText,
         bootstrapResultSchemaPath,
@@ -82,19 +88,16 @@ function createServiceProjectHelperAccessors({
         openDocument,
         bootstrapConversationMarkdownPath,
         bootstrapChangePreviewPath,
-        ensureCodexHome: bridges.ensureCodexHome,
         writeBootstrapRuntimeState,
-        emptyBootstrapRuntimeState,
-        updateControlPanel: bridges.updateControlPanel,
-        confirmLoginIfNeeded: bridges.confirmLoginIfNeeded
-      });
+        emptyBootstrapRuntimeState
+      }));
     }
     return bootstrapWorkflowHelpers;
   }
 
   function getGeneratedFilesHelpers() {
     if (!generatedFilesHelpers) {
-      generatedFilesHelpers = createGeneratedFilesHelpers({
+      generatedFilesHelpers = createGeneratedFilesHelpers(buildGeneratedFilesHelperArgs({
         fs,
         fsp,
         path,
@@ -102,29 +105,28 @@ function createServiceProjectHelperAccessors({
         packageVersion,
         templates,
         ensureDir,
-        output: getOutput(),
-        ensureCodexHome: bridges.ensureCodexHome,
-        renderWatchdogEnv: bridges.renderWatchdogEnv
-      });
+        getOutput,
+        bridges
+      }));
     }
     return generatedFilesHelpers;
   }
 
   function getBootstrapScaffoldingHelpers() {
     if (!bootstrapScaffoldingHelpers) {
-      bootstrapScaffoldingHelpers = createBootstrapScaffoldingHelpers({
+      bootstrapScaffoldingHelpers = createBootstrapScaffoldingHelpers(buildBootstrapScaffoldingHelperArgs({
         fs,
         fsp,
         path,
         vscode,
         templates,
-        output: getOutput(),
+        getOutput,
         ensureDir,
-        generatedFilesHelpers: getGeneratedFilesHelpers(),
+        getGeneratedFilesHelpers,
         getProjectSetupHelpers,
         isWatchdogInitialized,
         isEffectivelyEmptyDir
-      });
+      }));
     }
     return bootstrapScaffoldingHelpers;
   }
