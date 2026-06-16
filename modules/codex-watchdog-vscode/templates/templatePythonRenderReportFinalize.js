@@ -25,6 +25,182 @@ const renderReportFinalize = `def blocker_type(blocked_items, requires_review, h
 
 def write_lines(path, lines):
     atomic_write_text(path, "\\n".join(lines).rstrip() + "\\n")
+
+def load_json_default(path, default):
+    target = Path(path)
+    if not target.exists():
+        return default
+    try:
+        return json.loads(target.read_text())
+    except Exception:
+        return default
+
+def load_jsonl_records(path):
+    target = Path(path)
+    if not target.exists():
+        return []
+    records = []
+    for line in target.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+    return records
+
+def parse_timestamp_or_none(value):
+    if value in (None, ""):
+        return None
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+def records_by_id(records, key):
+    result = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        record_id = str(record.get(key) or "").strip()
+        if record_id:
+            result[record_id] = record
+    return result
+
+def research_conclusion_policy(program):
+    evidence_policy = program.get("evidence_policy") if isinstance(program.get("evidence_policy"), dict) else {}
+    conclusion_policy = program.get("conclusion_policy") if isinstance(program.get("conclusion_policy"), dict) else {}
+    return {
+        "allowed_conclusion_statuses": set(normalized_string_list(conclusion_policy.get("allowed_conclusion_statuses"))),
+        "publish_only_after_review": conclusion_policy.get("publish_only_after_review") is True,
+        "require_staleness_tracking": conclusion_policy.get("require_staleness_tracking") is True,
+        "require_invalidation_path": conclusion_policy.get("require_invalidation_path") is True,
+        "require_primary_evidence_for_confirmed_claims": evidence_policy.get("require_primary_evidence_for_confirmed_claims") is True,
+        "require_index_entry_for_cited_files": evidence_policy.get("require_index_entry_for_cited_files") is True,
+    }
+
+def validate_current_conclusion_update(update, docs_by_id, experiments_by_id, policy):
+    errors = []
+    if not update:
+        return errors
+    for field in ("topic_id", "topic", "conclusion_status", "claim", "evidence_scope"):
+        if not isinstance(update.get(field), str) or not str(update.get(field) or "").strip():
+            errors.append(f"current_conclusion_update.{field} must be a nonempty string")
+    supporting_docs = update.get("supporting_docs")
+    supporting_experiments = update.get("supporting_experiments")
+    if not isinstance(supporting_docs, list):
+        errors.append("current_conclusion_update.supporting_docs must be an array")
+        supporting_docs = []
+    if not isinstance(supporting_experiments, list):
+        errors.append("current_conclusion_update.supporting_experiments must be an array")
+        supporting_experiments = []
+    if not isinstance(update.get("risk_flags"), list):
+        errors.append("current_conclusion_update.risk_flags must be an array")
+    try:
+        parse_timestamp_or_none(update.get("last_reviewed_at"))
+    except Exception:
+        errors.append("current_conclusion_update.last_reviewed_at must be ISO-8601 or null")
+    stale_after_days = update.get("stale_after_days")
+    if stale_after_days not in (None, "") and (not isinstance(stale_after_days, int) or stale_after_days < 0):
+        errors.append("current_conclusion_update.stale_after_days must be a nonnegative integer or null")
+    allowed_statuses = policy.get("allowed_conclusion_statuses") or set()
+    status = str(update.get("conclusion_status") or "").strip()
+    if allowed_statuses and status not in allowed_statuses:
+        errors.append(f"current_conclusion_update.conclusion_status is outside RESEARCH_PROGRAM allowed_conclusion_statuses: {status!r}")
+    if policy.get("require_staleness_tracking"):
+        if update.get("last_reviewed_at") in (None, ""):
+            errors.append("current_conclusion_update.last_reviewed_at is required by RESEARCH_PROGRAM conclusion_policy.require_staleness_tracking")
+        if stale_after_days in (None, ""):
+            errors.append("current_conclusion_update.stale_after_days is required by RESEARCH_PROGRAM conclusion_policy.require_staleness_tracking")
+    invalidated_by = str(update.get("invalidated_by") or "").strip()
+    if status == "invalidated" and policy.get("require_invalidation_path") and not invalidated_by:
+        errors.append("current_conclusion_update.invalidated_by is required for invalidated conclusions by RESEARCH_PROGRAM")
+    if policy.get("require_index_entry_for_cited_files"):
+        for doc_id in supporting_docs:
+            if str(doc_id or "").strip() not in docs_by_id:
+                errors.append(f"current_conclusion_update.supporting_docs references unknown doc_id: {doc_id}")
+        for experiment_id in supporting_experiments:
+            if str(experiment_id or "").strip() not in experiments_by_id:
+                errors.append(f"current_conclusion_update.supporting_experiments references unknown experiment_id: {experiment_id}")
+    support_scopes = []
+    for doc_id in supporting_docs:
+        record = docs_by_id.get(str(doc_id or "").strip())
+        if isinstance(record, dict):
+            support_scopes.append(str(record.get("evidence_scope") or ""))
+    for experiment_id in supporting_experiments:
+        record = experiments_by_id.get(str(experiment_id or "").strip())
+        if isinstance(record, dict):
+            support_scopes.append(str(record.get("evidence_scope") or ""))
+    if status == "confirmed":
+        if not supporting_docs and not supporting_experiments:
+            errors.append("current_conclusion_update confirmed conclusion must cite supporting_docs or supporting_experiments")
+        if policy.get("require_primary_evidence_for_confirmed_claims") and not any(
+            scope in {"primary_only", "mixed"} for scope in support_scopes
+        ):
+            errors.append("current_conclusion_update confirmed conclusion must include primary or mixed evidence per RESEARCH_PROGRAM")
+    return errors
+
+def upsert_current_conclusions(current_conclusions, update, updated_utc):
+    data = current_conclusions if isinstance(current_conclusions, dict) else {}
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    normalized_update = dict(update)
+    normalized_update["topic_id"] = str(update.get("topic_id") or "").strip()
+    replaced = False
+    next_items = []
+    for item in items:
+        if isinstance(item, dict) and str(item.get("topic_id") or "").strip() == normalized_update["topic_id"]:
+            next_items.append(normalized_update)
+            replaced = True
+        else:
+            next_items.append(item)
+    if not replaced:
+        next_items.append(normalized_update)
+    return {
+        "schema_version": "current_conclusions.v0.1",
+        "updated_at": updated_utc,
+        "items": next_items,
+    }
+
+current_conclusion_update = clean_object(data.get("current_conclusion_update"))
+current_conclusion_update_status = "none"
+current_conclusion_output_path = ""
+current_conclusion_proposal_path = ""
+current_conclusion_topic_id = str(current_conclusion_update.get("topic_id") or "").strip() if current_conclusion_update else ""
+if current_conclusion_update:
+    docs_by_id = records_by_id(load_jsonl_records("project_index/document_index.jsonl"), "doc_id")
+    experiments_by_id = records_by_id(load_jsonl_records("project_index/experiment_index.jsonl"), "experiment_id")
+    conclusion_policy = research_conclusion_policy(research_program if isinstance(research_program, dict) else {})
+    conclusion_errors = validate_current_conclusion_update(
+        current_conclusion_update,
+        docs_by_id,
+        experiments_by_id,
+        conclusion_policy,
+    )
+    if conclusion_errors:
+        raise SystemExit("current_conclusion_update violates RESEARCH_PROGRAM/current_conclusions policy: " + "; ".join(conclusion_errors))
+    if conclusion_policy.get("publish_only_after_review") and not bool(data.get("requires_human_review")):
+        raise SystemExit("current_conclusion_update requires requires_human_review=true because RESEARCH_PROGRAM conclusion_policy.publish_only_after_review=true")
+    if bool(data.get("requires_human_review")):
+        proposal_dir = Path("research/proposals/current_conclusions")
+        proposal_dir.mkdir(parents=True, exist_ok=True)
+        proposal_name = safe_name(data.get("timestamp_utc", updated))
+        current_conclusion_proposal_path = str(proposal_dir / f"{proposal_name}.json")
+        atomic_write_json(current_conclusion_proposal_path, {
+            "schema_version": 1,
+            "generated_at": updated,
+            "research_program_id": research_program_info.get("program_id"),
+            "publish_only_after_review": conclusion_policy.get("publish_only_after_review"),
+            "current_conclusion_update": current_conclusion_update,
+        })
+        current_conclusion_update_status = "review_required"
+    else:
+        current_conclusions = load_json_default("project_index/current_conclusions.json", {
+            "schema_version": "current_conclusions.v0.1",
+            "updated_at": None,
+            "items": [],
+        })
+        updated_current_conclusions = upsert_current_conclusions(current_conclusions, current_conclusion_update, updated)
+        current_conclusion_output_path = "project_index/current_conclusions.json"
+        atomic_write_json(current_conclusion_output_path, updated_current_conclusions)
+        current_conclusion_update_status = "applied"
+
 blocked_items = data.get("blocked_items") or []
 completed_items = data.get("completed_items") or []
 running_items = data.get("running_items") or []
@@ -73,6 +249,8 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Research autonomy mode: {research_program_info.get('autonomy_mode') or 'unknown'}",
     f"Research allowed areas: {', '.join(research_program_info.get('allowed_project_areas') or []) or 'unbounded'}",
     f"Research baseline required: {research_program_info.get('baseline_required')}",
+    f"Current conclusion update: {current_conclusion_update_status}",
+    f"Current conclusion topic: {current_conclusion_topic_id or 'none'}",
     "",
     "## Current Facts",
     "",
@@ -144,6 +322,10 @@ atomic_write_json("agent/RUN_STATE.json", {
     "research_autonomy_mode": research_program_info.get("autonomy_mode"),
     "research_allowed_project_areas": research_program_info.get("allowed_project_areas"),
     "research_baseline_required": research_program_info.get("baseline_required"),
+    "current_conclusion_update_status": current_conclusion_update_status,
+    "current_conclusion_topic_id": current_conclusion_topic_id or None,
+    "current_conclusion_output_path": current_conclusion_output_path or None,
+    "current_conclusion_proposal_path": current_conclusion_proposal_path or None,
     "evidence": evidence,
 })
 
@@ -189,6 +371,8 @@ write_lines("agent/NEXT_ACTION.md", [
     f"- Claim scope: {task_box.get('claim_scope') or 'none'}",
     f"- Research program: {research_program_info.get('program_id') or 'none'}",
     f"- Research domain: {research_program_info.get('domain_name') or 'none'}",
+    f"- Current conclusion update: {current_conclusion_update_status}",
+    f"- Current conclusion topic: {current_conclusion_topic_id or 'none'}",
     "",
     "## Stop Condition",
     "",
@@ -213,8 +397,9 @@ write_lines("agent/BLOCKERS.md", [
 ])
 
 proposal = data.get("proposal_markdown", "").strip()
-review_state = "pending_send" if proposal else "none"
-if requires_review and not proposal:
+review_bundle_present = bool(proposal or current_conclusion_proposal_path)
+review_state = "pending_send" if review_bundle_present else "none"
+if requires_review and not review_bundle_present:
     review_state = "review_required_no_bundle"
 next_kind = str(next_action.get("kind", "none") or "none").strip()
 review_scope = str(data.get("review_scope", "") or "").strip()
@@ -286,7 +471,12 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "experiment_decision_gate_required": experiment_gate_status in {"required_ready", "blocked"},
     "experiment_decision_gate_blocking": experiment_gate_status == "blocked",
     "task_box_id": task_box.get("task_box_id"),
-    "input_paths": ["research/RESEARCH_PROGRAM.json"],
+    "input_paths": [
+        "research/RESEARCH_PROGRAM.json",
+        *([ "project_index/current_conclusions.json" ] if current_conclusion_update else []),
+        *([ "project_index/document_index.jsonl" ] if current_conclusion_update else []),
+        *([ "project_index/experiment_index.jsonl" ] if current_conclusion_update else []),
+    ],
     "output_paths": [
         "agent/reports/latest.md",
         "agent/STATE.json",
@@ -295,6 +485,8 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
         "agent/PROGRESS_STATE.json",
         "agent/NEXT_ACTION.md",
         "agent/ROUTE_CANONICAL.json",
+        *( [current_conclusion_output_path] if current_conclusion_output_path else [] ),
+        *( [current_conclusion_proposal_path] if current_conclusion_proposal_path else [] ),
         *( [next_task_draft_path] if next_task_draft_path else [] ),
         *( [task_profile_path] if task_profile_path else [] ),
         *( [queue_request_draft_path] if queue_request_draft_path else [] ),
@@ -312,6 +504,8 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "research_autonomy_mode": research_program_info.get("autonomy_mode"),
     "research_allowed_project_areas": research_program_info.get("allowed_project_areas"),
     "research_baseline_required": research_program_info.get("baseline_required"),
+    "current_conclusion_update_status": current_conclusion_update_status,
+    "current_conclusion_topic_id": current_conclusion_topic_id or None,
     "fair_comparability": task_box.get("fair_comparability"),
     "value_of_information": task_box.get("value_of_information"),
 })

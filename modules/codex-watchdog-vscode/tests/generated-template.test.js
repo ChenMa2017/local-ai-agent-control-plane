@@ -192,6 +192,7 @@ async function main() {
   assert.ok(watchSchema.required.includes("review_scope"));
   assert.ok(watchSchema.required.includes("review_resolver"));
   assert.ok(watchSchema.required.includes("secondary_skills_consulted"));
+  assert.ok(watchSchema.required.includes("current_conclusion_update"));
   assert.ok(watchSchema.required.includes("successor_task_draft"));
   assert.ok(watchSchema.required.includes("task_profile_draft"));
   assert.ok(watchSchema.required.includes("queue_request_draft"));
@@ -1392,6 +1393,7 @@ async function main() {
     morning_brief_markdown: "",
     proposal_markdown: "",
     ledger_update_markdown: "",
+    current_conclusion_update: null,
     successor_task_draft: {
       task_id: "stage06_g1_followup",
       status: "pending",
@@ -1452,6 +1454,21 @@ async function main() {
     morning_brief_markdown: "",
     proposal_markdown: "",
     ledger_update_markdown: "",
+    current_conclusion_update: {
+      topic_id: "stage06_g1_route_status",
+      topic: "stage06 g1 route status",
+      conclusion_status: "tentative",
+      claim: "The stage06 route now has an exact successor contract, but execution still depends on the controlled queue boundary.",
+      evidence_scope: "mixed",
+      supporting_docs: ["doc_current_best"],
+      supporting_experiments: ["exp_model_a"],
+      last_reviewed_at: "2026-06-08T12:00:00Z",
+      stale_after_days: 14,
+      stale_severity: "warning",
+      owner: "watchdog",
+      invalidated_by: null,
+      risk_flags: ["needs_queue_execution"]
+    },
     successor_task_draft: {
       task_id: "stage06_g1_followup",
       status: "pending",
@@ -1525,6 +1542,8 @@ async function main() {
   assert.strictEqual(queueRunState.research_program_id, "replace_with_project_program_id");
   assert.strictEqual(queueRunState.research_domain, "replace_with_domain_name");
   assert.strictEqual(queueRunState.research_autonomy_mode, "domain_bounded");
+  assert.strictEqual(queueRunState.current_conclusion_update_status, "applied");
+  assert.strictEqual(queueRunState.current_conclusion_topic_id, "stage06_g1_route_status");
   const nextActionText = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
   assert.match(nextActionText, /Exact next task: stage06_g1_followup/);
   assert.match(nextActionText, /Exact profile path: agent\/task_profiles\/stage06_g1_followup\.json/);
@@ -1533,6 +1552,7 @@ async function main() {
   assert.match(nextActionText, /Successor materialization status: queue_exact/);
   assert.match(nextActionText, /Exact object path: agent\/queue\/drafts\/stage06_g1_followup\.json/);
   assert.match(nextActionText, /Research program: replace_with_project_program_id/);
+  assert.match(nextActionText, /Current conclusion update: applied/);
   const currentStateText = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
   assert.match(currentStateText, /Route ID: route-new/);
   assert.match(currentStateText, /Secondary skills: research-comparability/);
@@ -1541,17 +1561,155 @@ async function main() {
   assert.match(currentStateText, /Exact next object: agent\/queue\/drafts\/stage06_g1_followup\.json/);
   assert.match(currentStateText, /Research program: replace_with_project_program_id/);
   assert.match(currentStateText, /Research autonomy mode: domain_bounded/);
+  assert.match(currentStateText, /Current conclusion update: applied/);
+  const updatedConclusions = JSON.parse(fs.readFileSync(path.join(projectRoot, "project_index", "current_conclusions.json"), "utf8"));
+  assert.ok(updatedConclusions.items.some((item) => item.topic_id === "stage06_g1_route_status"));
   const evidenceLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
   const latestLedgerEntry = JSON.parse(evidenceLedgerLines[evidenceLedgerLines.length - 1]);
   assert.ok(latestLedgerEntry.input_paths.includes("research/RESEARCH_PROGRAM.json"));
+  assert.ok(latestLedgerEntry.input_paths.includes("project_index/current_conclusions.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/status/NEXT_TASK_DRAFT.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/task_profiles/stage06_g1_followup.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/queue/drafts/stage06_g1_followup.json"));
+  assert.ok(latestLedgerEntry.output_paths.includes("project_index/current_conclusions.json"));
   assert.deepStrictEqual(latestLedgerEntry.secondary_skills_consulted, ["research-comparability"]);
   assert.strictEqual(latestLedgerEntry.claim_scope, null);
   assert.strictEqual(latestLedgerEntry.successor_contract_generated, true);
   assert.strictEqual(latestLedgerEntry.exact_next_object_path, "agent/queue/drafts/stage06_g1_followup.json");
   assert.strictEqual(latestLedgerEntry.research_program_id, "replace_with_project_program_id");
+  assert.strictEqual(latestLedgerEntry.current_conclusion_update_status, "applied");
+  assert.strictEqual(latestLedgerEntry.current_conclusion_topic_id, "stage06_g1_route_status");
+
+  writeJson(projectRoot, "research/RESEARCH_PROGRAM.json", {
+    ...initialResearchProgram,
+    conclusion_policy: {
+      ...initialResearchProgram.conclusion_policy,
+      publish_only_after_review: true
+    }
+  });
+  assert.throws(() => runRender(projectRoot, {
+    timestamp_utc: "2026-06-08T12:30:00Z",
+    report_markdown: "# Report\n\nPrepared a durable conclusion update that now requires human review before publication.",
+    overall_status: "blocked",
+    report_type: "blocked",
+    primary_skill: "watchdog-orchestrator",
+    secondary_skills_consulted: ["research-comparability"],
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "A durable conclusion update is ready but RESEARCH_PROGRAM requires review before publication.",
+    blocked_items: ["review_required_for_conclusion_publication"],
+    completed_items: [],
+    running_items: [],
+    evidence: ["project_index/current_conclusions.json"],
+    progress_changed: true,
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "propose_review",
+      description: "Request review for the durable current-conclusion update.",
+      can_execute_automatically: false,
+      reason: "RESEARCH_PROGRAM conclusion_policy.publish_only_after_review requires a reviewer before publication."
+    },
+    skill_stop_condition: "Package one durable conclusion update for review and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    current_conclusion_update: {
+      topic_id: "review_required_route_conclusion",
+      topic: "review required route conclusion",
+      conclusion_status: "confirmed",
+      claim: "The controlled route is ready for the next bounded queue execution after review.",
+      evidence_scope: "primary_only",
+      supporting_docs: ["doc_current_best"],
+      supporting_experiments: ["exp_model_a"],
+      last_reviewed_at: "2026-06-08T12:30:00Z",
+      stale_after_days: 7,
+      stale_severity: "warning",
+      owner: "watchdog",
+      invalidated_by: null,
+      risk_flags: []
+    },
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {},
+    task_box_update: {}
+  }), /publish_only_after_review=true/);
+
+  runRender(projectRoot, {
+    timestamp_utc: "2026-06-08T12:31:00Z",
+    report_markdown: "# Report\n\nPrepared a durable conclusion update and packaged it for review instead of publishing it automatically.",
+    overall_status: "blocked",
+    report_type: "blocked",
+    primary_skill: "watchdog-orchestrator",
+    secondary_skills_consulted: ["research-comparability"],
+    supervisor_mode: "runner",
+    review_scope: "external_review",
+    review_resolver: "human",
+    review_pending_state: "pending_send",
+    work_cycle_summary: "A durable conclusion update is ready, but RESEARCH_PROGRAM requires review before publication.",
+    blocked_items: ["review_required_for_conclusion_publication"],
+    completed_items: ["Prepared the review bundle for the durable conclusion update"],
+    running_items: [],
+    evidence: ["project_index/current_conclusions.json", "research/RESEARCH_PROGRAM.json"],
+    progress_changed: true,
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    requires_human_review: true,
+    human_review_reason: "RESEARCH_PROGRAM conclusion_policy.publish_only_after_review requires review before durable publication.",
+    next_safe_action: {
+      kind: "propose_review",
+      description: "Send the durable conclusion update for human review.",
+      can_execute_automatically: false,
+      reason: "The conclusion is supported, but publication must wait for review."
+    },
+    skill_stop_condition: "Package one durable conclusion update for review and stop.",
+    state_update_markdown: "",
+    runtime_state_markdown: "",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    current_conclusion_update: {
+      topic_id: "review_required_route_conclusion",
+      topic: "review required route conclusion",
+      conclusion_status: "confirmed",
+      claim: "The controlled route is ready for the next bounded queue execution after review.",
+      evidence_scope: "primary_only",
+      supporting_docs: ["doc_current_best"],
+      supporting_experiments: ["exp_model_a"],
+      last_reviewed_at: "2026-06-08T12:31:00Z",
+      stale_after_days: 7,
+      stale_severity: "warning",
+      owner: "watchdog",
+      invalidated_by: null,
+      risk_flags: []
+    },
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {},
+    task_box_update: {}
+  });
+  const reviewOnlyConclusions = JSON.parse(fs.readFileSync(path.join(projectRoot, "project_index", "current_conclusions.json"), "utf8"));
+  assert.ok(!reviewOnlyConclusions.items.some((item) => item.topic_id === "review_required_route_conclusion"));
+  const reviewProposalDir = path.join(projectRoot, "research", "proposals", "current_conclusions");
+  const reviewProposalName = fs.readdirSync(reviewProposalDir).sort().at(-1);
+  const reviewProposal = JSON.parse(fs.readFileSync(path.join(reviewProposalDir, reviewProposalName), "utf8"));
+  assert.strictEqual(reviewProposal.current_conclusion_update.topic_id, "review_required_route_conclusion");
+  const reviewRunState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "RUN_STATE.json"), "utf8"));
+  assert.strictEqual(reviewRunState.current_conclusion_update_status, "review_required");
+  assert.strictEqual(reviewRunState.current_conclusion_topic_id, "review_required_route_conclusion");
+  const reviewLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
+  const reviewLedgerEntry = JSON.parse(reviewLedgerLines[reviewLedgerLines.length - 1]);
+  assert.strictEqual(reviewLedgerEntry.current_conclusion_update_status, "review_required");
+  assert.ok(reviewLedgerEntry.output_paths.some((item) => /research\/proposals\/current_conclusions\//.test(item)));
+  writeJson(projectRoot, "research/RESEARCH_PROGRAM.json", initialResearchProgram);
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
