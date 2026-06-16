@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Validate a watchdog project_index evidence store.")
+    parser = argparse.ArgumentParser(description="Validate a watchdog project evidence contract.")
     parser.add_argument("--project-root", default=".", help="Watchdog project root. Defaults to the current directory.")
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of plain text.")
     return parser.parse_args()
@@ -65,6 +65,59 @@ def is_relative_project_path(value):
     return not path.is_absolute() and ".." not in path.parts
 
 
+def is_safe_project_area(value):
+    if not isinstance(value, str) or not value.strip():
+        return False
+    return all(char.isalnum() or char in {"_", "-", "/", "."} for char in value)
+
+
+def require_nonempty_string(value, label, errors, allow_null=False):
+    if allow_null and value in (None, ""):
+        return
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"{label} must be a nonempty string")
+
+
+def require_boolean(value, label, errors):
+    if not isinstance(value, bool):
+        errors.append(f"{label} must be a boolean")
+
+
+def require_string_array(value, label, errors, allow_empty=True):
+    if not isinstance(value, list):
+        errors.append(f"{label} must be an array")
+        return []
+    cleaned = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            errors.append(f"{label}[{index}] must be a nonempty string")
+            continue
+        cleaned.append(item)
+    if not allow_empty and not cleaned:
+        errors.append(f"{label} must not be empty")
+    return cleaned
+
+
+def validate_metric_specs(value, label, errors, allow_empty=False):
+    if not isinstance(value, list):
+        errors.append(f"{label} must be an array")
+        return []
+    if not allow_empty and not value:
+        errors.append(f"{label} must not be empty")
+    validated = []
+    for index, metric in enumerate(value):
+        metric_label = f"{label}[{index}]"
+        if not isinstance(metric, dict):
+            errors.append(f"{metric_label} must be an object")
+            continue
+        require_nonempty_string(metric.get("name"), f"{metric_label}.name", errors)
+        require_boolean(metric.get("higher_is_better"), f"{metric_label}.higher_is_better", errors)
+        require_boolean(metric.get("required_for_claim"), f"{metric_label}.required_for_claim", errors)
+        if isinstance(metric.get("name"), str) and metric.get("name").strip():
+            validated.append(metric.get("name"))
+    return validated
+
+
 def add_warning_if_stale(conclusion, warnings):
     reviewed = conclusion.get("last_reviewed_at")
     stale_after = conclusion.get("stale_after_days")
@@ -83,11 +136,186 @@ def add_warning_if_stale(conclusion, warnings):
         warnings.append(f"current conclusion is stale: {conclusion.get('topic_id') or conclusion.get('topic')}")
 
 
+def validate_research_program(research_program, errors):
+    policy = {
+        "allowed_project_areas": set(),
+        "forbidden_project_areas": set(),
+        "baseline_required": False,
+        "allowed_conclusion_statuses": set(),
+        "require_primary_evidence_for_confirmed_claims": False,
+    }
+    if not isinstance(research_program, dict):
+        errors.append("research/RESEARCH_PROGRAM.json must be an object")
+        return policy
+    if research_program.get("schema_version") != "research_program.v0.1":
+        errors.append("research/RESEARCH_PROGRAM.json schema_version must be research_program.v0.1")
+    require_nonempty_string(research_program.get("program_id"), "research_program.program_id", errors)
+    for timestamp_field in ("created_at", "updated_at"):
+        try:
+            parse_timestamp(research_program.get(timestamp_field))
+        except Exception:
+            errors.append(f"research_program.{timestamp_field} must be ISO-8601 or null")
+
+    owner = research_program.get("owner")
+    if not isinstance(owner, dict):
+        errors.append("research_program.owner must be an object")
+    else:
+        require_nonempty_string(owner.get("human_owner"), "research_program.owner.human_owner", errors)
+        require_nonempty_string(owner.get("supervisor_role"), "research_program.owner.supervisor_role", errors)
+        require_nonempty_string(owner.get("default_runner_role"), "research_program.owner.default_runner_role", errors)
+
+    domain = research_program.get("domain")
+    if not isinstance(domain, dict):
+        errors.append("research_program.domain must be an object")
+    else:
+        require_nonempty_string(domain.get("name"), "research_program.domain.name", errors)
+        require_nonempty_string(domain.get("primary_question"), "research_program.domain.primary_question", errors)
+        allowed_areas = set(require_string_array(domain.get("allowed_project_areas"), "research_program.domain.allowed_project_areas", errors))
+        forbidden_areas = set(require_string_array(domain.get("forbidden_project_areas"), "research_program.domain.forbidden_project_areas", errors))
+        require_string_array(domain.get("out_of_scope_requests"), "research_program.domain.out_of_scope_requests", errors)
+        for area in allowed_areas | forbidden_areas:
+            if not is_safe_project_area(area):
+                errors.append(f"research_program.domain project area must use a safe label: {area!r}")
+        overlap = allowed_areas & forbidden_areas
+        if overlap:
+            errors.append(f"research_program.domain allowed_project_areas overlaps forbidden_project_areas: {sorted(overlap)!r}")
+        policy["allowed_project_areas"] = allowed_areas
+        policy["forbidden_project_areas"] = forbidden_areas
+
+    research_goal = research_program.get("research_goal")
+    if not isinstance(research_goal, dict):
+        errors.append("research_program.research_goal must be an object")
+    else:
+        require_nonempty_string(research_goal.get("primary_goal"), "research_program.research_goal.primary_goal", errors)
+        require_nonempty_string(research_goal.get("decision_target"), "research_program.research_goal.decision_target", errors)
+        require_string_array(research_goal.get("non_goals"), "research_program.research_goal.non_goals", errors)
+        require_string_array(research_goal.get("deliverables"), "research_program.research_goal.deliverables", errors)
+
+    metrics = research_program.get("metrics")
+    if not isinstance(metrics, dict):
+        errors.append("research_program.metrics must be an object")
+    else:
+        validate_metric_specs(metrics.get("primary"), "research_program.metrics.primary", errors, allow_empty=False)
+        validate_metric_specs(metrics.get("guardrail"), "research_program.metrics.guardrail", errors, allow_empty=True)
+
+    data_policy = research_program.get("data_policy")
+    if not isinstance(data_policy, dict):
+        errors.append("research_program.data_policy must be an object")
+    else:
+        require_string_array(data_policy.get("allowed_datasets"), "research_program.data_policy.allowed_datasets", errors)
+        require_string_array(data_policy.get("restricted_datasets"), "research_program.data_policy.restricted_datasets", errors)
+        require_nonempty_string(data_policy.get("evaluation_split_policy"), "research_program.data_policy.evaluation_split_policy", errors)
+        require_nonempty_string(data_policy.get("pii_policy"), "research_program.data_policy.pii_policy", errors)
+
+    baseline_policy = research_program.get("baseline_policy")
+    if not isinstance(baseline_policy, dict):
+        errors.append("research_program.baseline_policy must be an object")
+    else:
+        require_boolean(baseline_policy.get("required"), "research_program.baseline_policy.required", errors)
+        require_string_array(baseline_policy.get("baseline_entities"), "research_program.baseline_policy.baseline_entities", errors)
+        require_nonempty_string(baseline_policy.get("comparison_rule"), "research_program.baseline_policy.comparison_rule", errors)
+        policy["baseline_required"] = bool(baseline_policy.get("required"))
+
+    autonomy_policy = research_program.get("autonomy_policy")
+    if not isinstance(autonomy_policy, dict):
+        errors.append("research_program.autonomy_policy must be an object")
+    else:
+        require_nonempty_string(autonomy_policy.get("mode"), "research_program.autonomy_policy.mode", errors)
+        allowed_task_types = set(require_string_array(autonomy_policy.get("allowed_task_types"), "research_program.autonomy_policy.allowed_task_types", errors, allow_empty=False))
+        forbidden_task_types = set(require_string_array(autonomy_policy.get("forbidden_task_types"), "research_program.autonomy_policy.forbidden_task_types", errors))
+        require_string_array(autonomy_policy.get("human_review_triggers"), "research_program.autonomy_policy.human_review_triggers", errors)
+        overlap = allowed_task_types & forbidden_task_types
+        if overlap:
+            errors.append(f"research_program.autonomy_policy allowed_task_types overlaps forbidden_task_types: {sorted(overlap)!r}")
+
+    resource_budget = research_program.get("resource_budget")
+    if not isinstance(resource_budget, dict):
+        errors.append("research_program.resource_budget must be an object")
+    else:
+        max_parallel = resource_budget.get("max_parallel_experiments")
+        if not isinstance(max_parallel, int) or max_parallel < 1:
+            errors.append("research_program.resource_budget.max_parallel_experiments must be an integer >= 1")
+        max_runtime = resource_budget.get("max_runtime_hours_per_experiment")
+        if max_runtime not in (None, "") and (not isinstance(max_runtime, (int, float)) or max_runtime < 0):
+            errors.append("research_program.resource_budget.max_runtime_hours_per_experiment must be a nonnegative number or null")
+        max_tokens = resource_budget.get("max_token_budget_per_cycle")
+        if max_tokens not in (None, "") and (not isinstance(max_tokens, int) or max_tokens < 0):
+            errors.append("research_program.resource_budget.max_token_budget_per_cycle must be a nonnegative integer or null")
+        require_boolean(
+            resource_budget.get("requires_budget_check_before_new_run"),
+            "research_program.resource_budget.requires_budget_check_before_new_run",
+            errors,
+        )
+
+    evidence_policy = research_program.get("evidence_policy")
+    if not isinstance(evidence_policy, dict):
+        errors.append("research_program.evidence_policy must be an object")
+    else:
+        for field in (
+            "require_primary_evidence_for_confirmed_claims",
+            "allow_auxiliary_notes",
+            "require_index_entry_for_cited_files",
+            "require_current_conclusions_update_for_new_claims",
+        ):
+            require_boolean(evidence_policy.get(field), f"research_program.evidence_policy.{field}", errors)
+        policy["require_primary_evidence_for_confirmed_claims"] = bool(
+            evidence_policy.get("require_primary_evidence_for_confirmed_claims")
+        )
+
+    conclusion_policy = research_program.get("conclusion_policy")
+    if not isinstance(conclusion_policy, dict):
+        errors.append("research_program.conclusion_policy must be an object")
+    else:
+        policy["allowed_conclusion_statuses"] = set(
+            require_string_array(
+                conclusion_policy.get("allowed_conclusion_statuses"),
+                "research_program.conclusion_policy.allowed_conclusion_statuses",
+                errors,
+                allow_empty=False,
+            )
+        )
+        require_boolean(
+            conclusion_policy.get("require_staleness_tracking"),
+            "research_program.conclusion_policy.require_staleness_tracking",
+            errors,
+        )
+        require_boolean(
+            conclusion_policy.get("require_invalidation_path"),
+            "research_program.conclusion_policy.require_invalidation_path",
+            errors,
+        )
+        require_boolean(
+            conclusion_policy.get("publish_only_after_review"),
+            "research_program.conclusion_policy.publish_only_after_review",
+            errors,
+        )
+
+    require_string_array(research_program.get("stop_conditions"), "research_program.stop_conditions", errors, allow_empty=False)
+
+    system_state = research_program.get("system_state")
+    if not isinstance(system_state, dict):
+        errors.append("research_program.system_state must be an object")
+    else:
+        lifecycle = system_state.get("lifecycle")
+        if lifecycle not in {"bootstrap", "active", "paused", "blocked", "archived"}:
+            errors.append("research_program.system_state.lifecycle must be one of bootstrap|active|paused|blocked|archived")
+        require_nonempty_string(system_state.get("current_focus"), "research_program.system_state.current_focus", errors, allow_null=True)
+        try:
+            parse_timestamp(system_state.get("next_review_at"))
+        except Exception:
+            errors.append("research_program.system_state.next_review_at must be ISO-8601 or null")
+        require_string_array(system_state.get("notes"), "research_program.system_state.notes", errors)
+
+    return policy
+
+
 def main():
     args = parse_args()
     root = Path(args.project_root).resolve()
     index_root = root / "project_index"
     schema_root = index_root / "schema"
+    research_root = root / "research"
+    research_schema_root = research_root / "schema"
 
     errors = []
     warnings = []
@@ -101,17 +329,22 @@ def main():
         schema_data = load_json(schema_root / schema_name, errors, required=True, default={})
         if isinstance(schema_data, dict) and schema_data.get("type") != "object":
             warnings.append(f"{schema_name} should declare top-level type=object")
+    research_program_schema = load_json(research_schema_root / "research_program.schema.json", errors, required=True, default={}) or {}
+    if isinstance(research_program_schema, dict) and research_program_schema.get("type") != "object":
+        warnings.append("research_program.schema.json should declare top-level type=object")
 
     doc_records = load_jsonl(index_root / "document_index.jsonl", errors, required=True)
     experiment_records = load_jsonl(index_root / "experiment_index.jsonl", errors, required=True)
     current_conclusions = load_json(index_root / "current_conclusions.json", errors, required=True, default={}) or {}
     golden_queries = load_json(index_root / "golden_queries.json", errors, required=True, default={}) or {}
+    research_program = load_json(research_root / "RESEARCH_PROGRAM.json", errors, required=True, default={}) or {}
 
     valid_doc_types = set(enums.get("doc_type", []))
     valid_status = set(enums.get("status", []))
     valid_evidence_scope = set(enums.get("evidence_scope", []))
     valid_conclusion_status = set(enums.get("conclusion_status", []))
     valid_search_decision = set(enums.get("search_decision", []))
+    research_policy = validate_research_program(research_program, errors)
 
     docs_by_id = {}
     experiments_by_id = {}
@@ -166,6 +399,13 @@ def main():
             errors.append(f"{label}.status is invalid: {record.get('status')!r}")
         if record.get("evidence_scope") not in valid_evidence_scope:
             errors.append(f"{label}.evidence_scope is invalid: {record.get('evidence_scope')!r}")
+        project_area = record.get("project_area")
+        if not is_safe_project_area(project_area):
+            errors.append(f"{label}.project_area must be a safe nonempty label")
+        elif research_policy["allowed_project_areas"] and project_area not in research_policy["allowed_project_areas"]:
+            errors.append(f"{label}.project_area is outside research_program allowed_project_areas: {project_area!r}")
+        if project_area in research_policy["forbidden_project_areas"]:
+            errors.append(f"{label}.project_area is forbidden by research_program: {project_area!r}")
         if record.get("checksum_scope") != "raw_file_bytes":
             errors.append(f"{label}.checksum_scope must be raw_file_bytes")
         if not isinstance(record.get("tags"), list):
@@ -224,6 +464,8 @@ def main():
             errors.append(f"{label}.status is invalid: {record.get('status')!r}")
         if record.get("evidence_scope") not in valid_evidence_scope:
             errors.append(f"{label}.evidence_scope is invalid: {record.get('evidence_scope')!r}")
+        if research_policy["baseline_required"] and record.get("status") == "active" and record.get("baseline_model") in (None, ""):
+            errors.append(f"{label}.baseline_model must be set because research_program.baseline_policy.required=true")
         primary_metrics = record.get("primary_metrics")
         if not isinstance(primary_metrics, list):
             errors.append(f"{label}.primary_metrics must be an array")
@@ -282,6 +524,10 @@ def main():
         ], label)
         if item.get("conclusion_status") not in valid_conclusion_status:
             errors.append(f"{label}.conclusion_status is invalid: {item.get('conclusion_status')!r}")
+        if research_policy["allowed_conclusion_statuses"] and item.get("conclusion_status") not in research_policy["allowed_conclusion_statuses"]:
+            errors.append(
+                f"{label}.conclusion_status is outside research_program allowed_conclusion_statuses: {item.get('conclusion_status')!r}"
+            )
         if item.get("evidence_scope") not in valid_evidence_scope:
             errors.append(f"{label}.evidence_scope is invalid: {item.get('evidence_scope')!r}")
         if not isinstance(item.get("supporting_docs"), list):
@@ -319,6 +565,10 @@ def main():
                     support_scopes.append(experiments_by_id[experiment_id].get("evidence_scope"))
             if support_scopes and all(scope == "auxiliary_only" for scope in support_scopes):
                 errors.append(f"{label} confirmed conclusion cannot rely only on auxiliary_only evidence")
+            if research_policy["require_primary_evidence_for_confirmed_claims"] and not any(
+                scope in {"primary_only", "mixed"} for scope in support_scopes
+            ):
+                errors.append(f"{label} confirmed conclusion must include primary or mixed evidence per research_program")
         add_warning_if_stale(item, warnings)
 
     if not isinstance(golden_queries, dict):
@@ -352,6 +602,7 @@ def main():
             "experiments": len(experiment_records),
             "current_conclusions": len(items),
             "golden_queries": len(queries),
+            "research_program": 1 if isinstance(research_program, dict) else 0,
         },
         "errors": errors,
         "warnings": warnings,
@@ -363,7 +614,7 @@ def main():
         status = "ok" if not errors else "error"
         print(f"[watchdog-index] status={status} root={root}")
         print(
-            "[watchdog-index] documents={documents} experiments={experiments} current_conclusions={current_conclusions} golden_queries={golden_queries}".format(
+            "[watchdog-index] documents={documents} experiments={experiments} current_conclusions={current_conclusions} golden_queries={golden_queries} research_program={research_program}".format(
                 **summary["counts"]
             )
         )

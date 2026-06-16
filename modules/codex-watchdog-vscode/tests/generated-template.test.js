@@ -223,7 +223,13 @@ async function main() {
   assert.ok(fs.existsSync(path.join(projectRoot, "project_index", "schema", "document_index.schema.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "project_index", "document_index.jsonl")));
   assert.ok(fs.existsSync(path.join(projectRoot, "project_index", "current_conclusions.json")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "research", "RESEARCH_PROGRAM.json")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "research", "schema", "research_program.schema.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "skills", "project-secondary-example", "SKILL.example.md")));
+  const initialResearchProgram = JSON.parse(fs.readFileSync(path.join(projectRoot, "research", "RESEARCH_PROGRAM.json"), "utf8"));
+  assert.strictEqual(initialResearchProgram.schema_version, "research_program.v0.1");
+  assert.strictEqual(initialResearchProgram.autonomy_policy.mode, "domain_bounded");
+  assert.strictEqual(initialResearchProgram.evidence_policy.require_primary_evidence_for_confirmed_claims, true);
   const initialTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
   assert.ok(initialTaskBox.project_question);
   assert.ok(initialTaskBox.decision_relevance);
@@ -250,6 +256,7 @@ async function main() {
   assert.strictEqual(initialIndexValidate.counts.documents, 0);
   assert.strictEqual(initialIndexValidate.counts.experiments, 0);
   assert.strictEqual(initialIndexValidate.counts.current_conclusions, 0);
+  assert.strictEqual(initialIndexValidate.counts.research_program, 1);
 
   writeFile(projectRoot, "formal/current_best.md", "# Current Best Candidate\n\nModel A remains the current best candidate.\n");
   writeFile(projectRoot, "analysis/aux_debug.md", "# Auxiliary Debug Note\n\nLoss spikes may be related to preprocessing drift.\n");
@@ -368,6 +375,7 @@ async function main() {
   }));
   assert.strictEqual(curatedIndexValidate.ok, true);
   assert.deepStrictEqual(curatedIndexValidate.errors, []);
+  assert.strictEqual(curatedIndexValidate.counts.research_program, 1);
 
   const safeSearch = JSON.parse(run("python3", [path.join(projectRoot, "agent", "bin", "watchdog_doc_search.py"), "--project-root", projectRoot, "--query", "current best candidate", "--json"], {
     cwd: projectRoot

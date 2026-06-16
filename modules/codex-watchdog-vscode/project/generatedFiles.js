@@ -43,6 +43,7 @@ function createGeneratedFilesHelpers({
     await ensureDir(path.join(root, "project_index", "schema"));
     await ensureDir(path.join(root, "research", "proposals"));
     await ensureDir(path.join(root, "research", "analysis"));
+    await ensureDir(path.join(root, "research", "schema"));
   }
 
   async function generatedWatcherFileEntries(root) {
@@ -133,6 +134,18 @@ function createGeneratedFilesHelpers({
       await ensureDir(path.dirname(ledgerNotes));
       await fsp.writeFile(ledgerNotes, templates.ledgerNotes());
       output.appendLine("Created research/LEDGER_NOTES.md");
+    }
+    const researchProgram = path.join(root, "research", "RESEARCH_PROGRAM.json");
+    if (!fs.existsSync(researchProgram)) {
+      await ensureDir(path.dirname(researchProgram));
+      await fsp.writeFile(researchProgram, templates.researchProgram());
+      output.appendLine("Created research/RESEARCH_PROGRAM.json");
+    }
+    const researchProgramSchema = path.join(root, "research", "schema", "research_program.schema.json");
+    if (!fs.existsSync(researchProgramSchema)) {
+      await ensureDir(path.dirname(researchProgramSchema));
+      await fsp.writeFile(researchProgramSchema, templates.researchProgramSchema());
+      output.appendLine("Created research/schema/research_program.schema.json");
     }
     const taskRequest = path.join(root, "agent", "TASK_REQUEST.md");
     if (!fs.existsSync(taskRequest)) {

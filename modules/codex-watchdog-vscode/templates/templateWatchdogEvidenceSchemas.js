@@ -211,6 +211,210 @@ const watchdogEvidenceSchemaTemplates = {
       }
     },
     additionalProperties: false
+  }, null, 2)}\n`,
+
+  researchProgramSchema: () => `${JSON.stringify({
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    title: "research/RESEARCH_PROGRAM.json schema",
+    type: "object",
+    required: [
+      "schema_version",
+      "program_id",
+      "created_at",
+      "updated_at",
+      "owner",
+      "domain",
+      "research_goal",
+      "metrics",
+      "data_policy",
+      "baseline_policy",
+      "autonomy_policy",
+      "resource_budget",
+      "evidence_policy",
+      "conclusion_policy",
+      "stop_conditions",
+      "system_state"
+    ],
+    properties: {
+      schema_version: { type: "string", const: "research_program.v0.1" },
+      program_id: { type: "string", minLength: 1 },
+      created_at: { type: ["string", "null"] },
+      updated_at: { type: ["string", "null"] },
+      owner: {
+        type: "object",
+        required: ["human_owner", "supervisor_role", "default_runner_role"],
+        properties: {
+          human_owner: { type: "string", minLength: 1 },
+          supervisor_role: { type: "string", minLength: 1 },
+          default_runner_role: { type: "string", minLength: 1 }
+        },
+        additionalProperties: false
+      },
+      domain: {
+        type: "object",
+        required: [
+          "name",
+          "primary_question",
+          "allowed_project_areas",
+          "forbidden_project_areas",
+          "out_of_scope_requests"
+        ],
+        properties: {
+          name: { type: "string", minLength: 1 },
+          primary_question: { type: "string", minLength: 1 },
+          allowed_project_areas: { type: "array", items: { type: "string", minLength: 1 } },
+          forbidden_project_areas: { type: "array", items: { type: "string", minLength: 1 } },
+          out_of_scope_requests: { type: "array", items: { type: "string", minLength: 1 } }
+        },
+        additionalProperties: false
+      },
+      research_goal: {
+        type: "object",
+        required: ["primary_goal", "decision_target", "non_goals", "deliverables"],
+        properties: {
+          primary_goal: { type: "string", minLength: 1 },
+          decision_target: { type: "string", minLength: 1 },
+          non_goals: { type: "array", items: { type: "string", minLength: 1 } },
+          deliverables: { type: "array", items: { type: "string", minLength: 1 } }
+        },
+        additionalProperties: false
+      },
+      metrics: {
+        type: "object",
+        required: ["primary", "guardrail"],
+        properties: {
+          primary: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              required: ["name", "higher_is_better", "required_for_claim"],
+              properties: {
+                name: { type: "string", minLength: 1 },
+                higher_is_better: { type: "boolean" },
+                required_for_claim: { type: "boolean" }
+              },
+              additionalProperties: false
+            }
+          },
+          guardrail: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["name", "higher_is_better", "required_for_claim"],
+              properties: {
+                name: { type: "string", minLength: 1 },
+                higher_is_better: { type: "boolean" },
+                required_for_claim: { type: "boolean" }
+              },
+              additionalProperties: false
+            }
+          }
+        },
+        additionalProperties: false
+      },
+      data_policy: {
+        type: "object",
+        required: [
+          "allowed_datasets",
+          "restricted_datasets",
+          "evaluation_split_policy",
+          "pii_policy"
+        ],
+        properties: {
+          allowed_datasets: { type: "array", items: { type: "string", minLength: 1 } },
+          restricted_datasets: { type: "array", items: { type: "string", minLength: 1 } },
+          evaluation_split_policy: { type: "string", minLength: 1 },
+          pii_policy: { type: "string", minLength: 1 }
+        },
+        additionalProperties: false
+      },
+      baseline_policy: {
+        type: "object",
+        required: ["required", "baseline_entities", "comparison_rule"],
+        properties: {
+          required: { type: "boolean" },
+          baseline_entities: { type: "array", items: { type: "string", minLength: 1 } },
+          comparison_rule: { type: "string", minLength: 1 }
+        },
+        additionalProperties: false
+      },
+      autonomy_policy: {
+        type: "object",
+        required: ["mode", "allowed_task_types", "forbidden_task_types", "human_review_triggers"],
+        properties: {
+          mode: { type: "string", minLength: 1 },
+          allowed_task_types: { type: "array", items: { type: "string", minLength: 1 } },
+          forbidden_task_types: { type: "array", items: { type: "string", minLength: 1 } },
+          human_review_triggers: { type: "array", items: { type: "string", minLength: 1 } }
+        },
+        additionalProperties: false
+      },
+      resource_budget: {
+        type: "object",
+        required: [
+          "max_parallel_experiments",
+          "max_runtime_hours_per_experiment",
+          "max_token_budget_per_cycle",
+          "requires_budget_check_before_new_run"
+        ],
+        properties: {
+          max_parallel_experiments: { type: "integer", minimum: 1 },
+          max_runtime_hours_per_experiment: { type: ["number", "null"], minimum: 0 },
+          max_token_budget_per_cycle: { type: ["integer", "null"], minimum: 0 },
+          requires_budget_check_before_new_run: { type: "boolean" }
+        },
+        additionalProperties: false
+      },
+      evidence_policy: {
+        type: "object",
+        required: [
+          "require_primary_evidence_for_confirmed_claims",
+          "allow_auxiliary_notes",
+          "require_index_entry_for_cited_files",
+          "require_current_conclusions_update_for_new_claims"
+        ],
+        properties: {
+          require_primary_evidence_for_confirmed_claims: { type: "boolean" },
+          allow_auxiliary_notes: { type: "boolean" },
+          require_index_entry_for_cited_files: { type: "boolean" },
+          require_current_conclusions_update_for_new_claims: { type: "boolean" }
+        },
+        additionalProperties: false
+      },
+      conclusion_policy: {
+        type: "object",
+        required: [
+          "allowed_conclusion_statuses",
+          "require_staleness_tracking",
+          "require_invalidation_path",
+          "publish_only_after_review"
+        ],
+        properties: {
+          allowed_conclusion_statuses: { type: "array", items: { type: "string", minLength: 1 } },
+          require_staleness_tracking: { type: "boolean" },
+          require_invalidation_path: { type: "boolean" },
+          publish_only_after_review: { type: "boolean" }
+        },
+        additionalProperties: false
+      },
+      stop_conditions: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+      system_state: {
+        type: "object",
+        required: ["lifecycle", "current_focus", "next_review_at", "notes"],
+        properties: {
+          lifecycle: {
+            type: "string",
+            enum: ["bootstrap", "active", "paused", "blocked", "archived"]
+          },
+          current_focus: { type: ["string", "null"] },
+          next_review_at: { type: ["string", "null"] },
+          notes: { type: "array", items: { type: "string" } }
+        },
+        additionalProperties: false
+      }
+    },
+    additionalProperties: false
   }, null, 2)}\n`
 };
 

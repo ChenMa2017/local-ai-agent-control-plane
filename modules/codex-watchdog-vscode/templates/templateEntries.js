@@ -33,6 +33,8 @@ function bootstrapScaffoldEntries(templates) {
     ["project_index/experiment_index.jsonl", templates.projectIndexExperimentIndex()],
     ["project_index/current_conclusions.json", templates.projectIndexCurrentConclusions()],
     ["project_index/golden_queries.json", templates.projectIndexGoldenQueries()],
+    ["research/RESEARCH_PROGRAM.json", templates.researchProgram()],
+    ["research/schema/research_program.schema.json", templates.researchProgramSchema()],
     ["research/RESEARCH_LEDGER.md", templates.researchLedger()],
     ["research/LEDGER_NOTES.md", templates.ledgerNotes()]
   ];
