@@ -915,6 +915,87 @@ class BridgeTests(unittest.TestCase):
             self.assertIn("--raw", argv)
             self.assertIn("--json-output", argv)
 
+    def test_result_persists_execution_evaluation_for_prepared_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "codex-bridge.js"
+            script.parent.mkdir()
+            script.write_text(
+                "console.log(JSON.stringify({task_id:'task_20260616_120000_eval01', text:'safe result summary', raw:false, redacted:true, truncated:false}));\n"
+            )
+            (root / "project_index").mkdir(parents=True)
+            self.write_watchdog_doc_search(
+                root,
+                {
+                    "query": "What is the current best candidate?",
+                    "decision": "stale_conclusion",
+                    "warnings": ["matching current conclusion is stale and should be rechecked before citation"],
+                    "read_plan": [
+                        {"path": "formal/current_best.md", "reason": "supports current conclusion: current best candidate"}
+                    ],
+                    "hits": [
+                        {"kind": "current_conclusion", "id": "current_best_candidate", "score": 6.0}
+                    ],
+                },
+            )
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "What is the current best candidate?",
+                    "source": "web",
+                },
+                config,
+                principal,
+            )
+            intake_id = prepared["intake_id"]
+            self.write_codex_task(
+                root,
+                "task_20260616_120000_eval01",
+                user="chenma",
+                status="done",
+                extra={
+                    "adapter_metadata": {
+                        "intake_id": intake_id,
+                        "prepared_objective": "report_only",
+                        "evidence_retrieval_decision": "stale_conclusion",
+                    }
+                },
+            )
+
+            response = bridge.handle_codex_query(
+                {"task_id": "task_20260616_120000_eval01"},
+                config,
+                "result",
+                principal,
+            )
+            repeat = bridge.handle_codex_query(
+                {"task_id": "task_20260616_120000_eval01"},
+                config,
+                "result",
+                principal,
+            )
+
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["intake_id"], intake_id)
+            evaluation = response["execution_evaluation"]
+            self.assertEqual(evaluation["execution_decision"], "result_ready_for_review")
+            self.assertEqual(evaluation["recommended_next_action"], "review_result")
+            self.assertEqual(evaluation["evidence_retrieval_decision"], "stale_conclusion")
+            self.assertIn("bounded", evaluation["warnings"][0])
+            self.assertEqual(repeat["execution_evaluation"]["task_id"], "task_20260616_120000_eval01")
+            intake_dir = bridge.intake_dir(config, intake_id)
+            self.assertTrue((intake_dir / "EXECUTION_EVALUATION.json").exists())
+            self.assertTrue((intake_dir / "EXECUTION_EVALUATION.md").exists())
+            events = [
+                json.loads(line)
+                for line in (intake_dir / "TASK_INTAKE.events.jsonl").read_text().strip().splitlines()
+            ]
+            execution_events = [item for item in events if item.get("event") == "execution_evaluated"]
+            self.assertEqual(len(execution_events), 1)
+            self.assertEqual(execution_events[0]["task_id"], "task_20260616_120000_eval01")
+
     def test_logs_pass_tail_and_max_chars(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

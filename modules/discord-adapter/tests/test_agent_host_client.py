@@ -308,6 +308,26 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("Result truncated", response)
         self.assertNotIn("/home/chenma", response)
 
+    def test_format_task_response_shows_execution_evaluation(self):
+        response = bot.format_task_response(
+            {"text": "task_id: task_123\nstatus: done\n"},
+            {
+                "text": "safe result summary",
+                "raw": False,
+                "execution_evaluation": {
+                    "execution_decision": "result_ready_for_review",
+                    "recommended_next_action": "review_result",
+                    "warnings": ["Prepared evidence decision remains stale_conclusion; keep formal conclusion claims bounded until reviewer confirmation."],
+                },
+            },
+            200,
+        )
+
+        self.assertIn("Evaluation:", response)
+        self.assertIn("result_ready_for_review", response)
+        self.assertIn("review_result", response)
+        self.assertIn("stale_conclusion", response)
+
     def test_policy_violation_task_response_uses_safe_result_summary(self):
         response = bot.format_task_response(
             {"text": "task_id: task_123\nstatus: policy_violation\n"},

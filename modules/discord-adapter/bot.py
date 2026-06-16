@@ -548,6 +548,20 @@ def format_thread_intro(task_id: str, workspace: str, mode: str, prompt: str, re
     return "\n".join(lines)
 
 
+def format_execution_evaluation(evaluation: dict[str, Any]) -> str:
+    decision = sanitize_discord_text(str(evaluation.get("execution_decision") or "unknown"))
+    next_action = sanitize_discord_text(str(evaluation.get("recommended_next_action") or "review"))
+    lines = [
+        "Evaluation:",
+        f"- decision: {decision}",
+        f"- next: {next_action}",
+    ]
+    warnings = evaluation.get("warnings") if isinstance(evaluation.get("warnings"), list) else []
+    if warnings:
+        lines.append(f"- warning: {sanitize_discord_text(str(warnings[0]))}")
+    return "\n".join(lines)
+
+
 def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any], max_chars: int) -> str:
     status_text = str(status_data.get("text", ""))
     status = parse_status_text(status_text)
@@ -560,7 +574,12 @@ def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any
         ])
     summary = sanitize_discord_text(result_text.strip() or "(empty result)")
     title = "Task done." if status == "done" else "Task finished with policy violation."
-    return f"{title}\n\nResult:\n{summary}"
+    evaluation = result_data.get("execution_evaluation") if isinstance(result_data.get("execution_evaluation"), dict) else {}
+    body = [title]
+    if evaluation:
+        body.extend(["", format_execution_evaluation(evaluation)])
+    body.extend(["", "Result:", summary])
+    return "\n".join(body)
 
 
 def format_task_page_response(data: dict[str, Any], max_chars: int) -> str:
@@ -586,7 +605,18 @@ def format_completion_message(task_id: str, status_data: dict[str, Any], result_
         result_text = str(result_data.get("text", "") or "")
         title = "任务完成。" if status == "done" else "任务触碰了 protected path policy，已结束。"
         summary = sanitize_discord_text(result_text.strip() or "(empty result)")
-        return f"**🤖 AI 回答**\n\n{title}\n\nTask: {task_id}\n\nResult:\n{summary}"
+        evaluation = result_data.get("execution_evaluation") if isinstance(result_data.get("execution_evaluation"), dict) else {}
+        lines = [
+            "**🤖 AI 回答**",
+            "",
+            title,
+            "",
+            f"Task: {task_id}",
+        ]
+        if evaluation:
+            lines.extend(["", format_execution_evaluation(evaluation)])
+        lines.extend(["", "Result:", summary])
+        return "\n".join(lines)
     short_status, _truncated = truncate_text(status_text.strip() or status, min(max_chars, 1000))
     return f"**🤖 AI 回答**\n\n任务已结束：{status}\n\nTask: {task_id}\n\n{sanitize_discord_text(short_status)}"
 

@@ -255,6 +255,8 @@ If the request looks like a real experiment and Agent Host marks `DECISION_GATE.
 
 `reference_task_id` is optional. When provided, the new task becomes a follow-up to a previous task. The Agent Host checks that the authenticated user can access the referenced task, and `codex-bridge` injects only the previous task's safe result excerpt into the new Codex prompt. If `/agent_run` is used inside a bot-created task thread and `reference_task_id` is omitted, the adapter uses that thread's current task as the reference.
 
+When a prepared run later finishes and Agent Host returns `execution_evaluation` inside `/codex/result`, the adapter now surfaces that evaluation summary in task replies and completion notifications. Users can see whether the result is ready for review, needs log inspection, or stopped on a policy boundary without opening the intake directory by hand.
+
 If you reply directly to a bot-authored task message inside a bot-created task thread, the adapter treats that reply as a follow-up task request in the same thread. It tries to resolve `reference_task_id` from the replied bot message first, then falls back to the thread's latest known task. This makes the thread behave more like an email chain:
 
 ```text

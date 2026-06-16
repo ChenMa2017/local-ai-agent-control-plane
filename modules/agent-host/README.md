@@ -151,6 +151,7 @@ POST /codex/cancel
 - consult project-local evidence retrieval for current-conclusion / comparison / formal-result style requests when a workspace exposes project_index + watchdog_doc_search.py
 - persist EVIDENCE_RETRIEVAL.json and READ_PLAN.md beside the intake artifacts
 - allow POST /codex/run to continue a prepared intake_id and inject the stored read-plan / claim-boundary context into the final run prompt
+- persist EXECUTION_EVALUATION.json / EXECUTION_EVALUATION.md when a prepared task later exposes a safe result through POST /codex/result
 - block direct execution until missing experiment decisions are clarified
 ```
 
@@ -181,6 +182,18 @@ curl -X POST http://127.0.0.1:8787/codex/run \
 ```
 
 这条路径会先检查 `TASK_CONTRACT / TASKBOX_DRAFT / POLICY_PREFLIGHT` 是否仍然可运行；如果 intake 还在 clarification 或 decision gate 状态，Agent Host 会返回 `409 prepare_not_runnable`，而不会静默绕过 prepare gate。
+
+当一个带 `intake_id` 的任务后续通过 `POST /codex/result` 暴露 safe result 时，Agent Host 还会把这次执行整理成结构化 `EXECUTION_EVALUATION`：
+
+```text
+- execution_decision
+- recommended_next_action
+- safe_result_excerpt
+- evidence_retrieval_decision
+- write_audit summary
+```
+
+这让 intake 目录不只记录“准备阶段”，也开始记录“执行后该如何 review / follow up”。
 
 确认当前 token 身份：
 

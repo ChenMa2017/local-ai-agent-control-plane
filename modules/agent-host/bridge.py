@@ -616,6 +616,27 @@ def load_codex_task(config: BridgeConfig, task_id: str) -> tuple[Path, dict[str,
     return task_dir, data
 
 
+def task_adapter_metadata(task: dict[str, Any]) -> dict[str, Any]:
+    raw = task.get("adapter_metadata")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def task_intake_id(task: dict[str, Any]) -> str:
+    value = str(task_adapter_metadata(task).get("intake_id") or "").strip()
+    if value and INTAKE_ID_RE.match(value):
+        return value
+    return ""
+
+
 def is_admin(principal: AuthPrincipal) -> bool:
     return principal.role.lower() == "admin"
 
@@ -1113,6 +1134,18 @@ def load_prepared_run_context(config: BridgeConfig, intake_id: str, principal: A
     }
 
 
+def read_json_object_if_exists(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
@@ -1464,6 +1497,205 @@ def prepared_run_prompt(bundle: dict[str, Any], run_note: str) -> str:
         "Execute the prepared request while respecting the prepared evidence/read-plan context above.",
     ])
     return safe_intake_text("\n".join(lines).strip(), MAX_TASK_CHARS)
+
+
+def load_task_prepare_bundle(config: BridgeConfig, task: dict[str, Any]) -> dict[str, Any]:
+    intake_id = task_intake_id(task)
+    if not intake_id:
+        return {}
+    root = intake_dir(config, intake_id)
+    if not root.exists():
+        return {"intake_id": intake_id, "available": False}
+    return {
+        "intake_id": intake_id,
+        "available": True,
+        "intent": read_json_object_if_exists(root / "INTENT_DRAFT.json"),
+        "contract": read_json_object_if_exists(root / "TASK_CONTRACT.json"),
+        "taskbox": read_json_object_if_exists(root / "TASKBOX_DRAFT.json"),
+        "preflight": read_json_object_if_exists(root / "POLICY_PREFLIGHT.json"),
+        "evidence_retrieval": read_json_object_if_exists(root / "EVIDENCE_RETRIEVAL.json"),
+    }
+
+
+def execution_evaluation_decision(task: dict[str, Any]) -> tuple[str, str, str]:
+    status = str(task.get("status", "") or "")
+    if status == "done":
+        return (
+            "result_ready_for_review",
+            "review_result",
+            "Task completed successfully; review the safe result before turning it into a new claim or follow-up task.",
+        )
+    if status == "policy_violation":
+        return (
+            "policy_violation",
+            "human_review",
+            "Task stopped on a policy boundary; inspect the write audit or protected-path reason before any retry.",
+        )
+    if status in {"failed", "timeout", "stale"}:
+        return (
+            "execution_failed",
+            "inspect_logs",
+            "Task did not finish cleanly; inspect logs and decide whether a bounded retry is justified.",
+        )
+    if status == "cancelled":
+        return (
+            "cancelled",
+            "prepare_followup",
+            "Task was cancelled before completion; decide whether to close the intake or prepare a narrower follow-up.",
+        )
+    return (
+        "task_incomplete",
+        "wait",
+        "Task is not yet in a terminal result state.",
+    )
+
+
+def execution_result_excerpt(result_data: dict[str, Any]) -> str:
+    text = str(result_data.get("text", "") or "").strip()
+    if len(text) <= 1600:
+        return text
+    return text[:1599].rstrip() + "…"
+
+
+def execution_evaluation_fingerprint(evaluation: dict[str, Any]) -> str:
+    stable = {
+        "intake_id": evaluation.get("intake_id"),
+        "task_id": evaluation.get("task_id"),
+        "task_status": evaluation.get("task_status"),
+        "execution_decision": evaluation.get("execution_decision"),
+        "recommended_next_action": evaluation.get("recommended_next_action"),
+        "result_available": evaluation.get("result_available"),
+        "safe_result_excerpt": evaluation.get("safe_result_excerpt"),
+        "evidence_retrieval_decision": evaluation.get("evidence_retrieval_decision"),
+        "warnings": evaluation.get("warnings"),
+        "write_audit": evaluation.get("write_audit"),
+    }
+    return json.dumps(stable, ensure_ascii=False, sort_keys=True)
+
+
+def execution_evaluation_markdown(evaluation: dict[str, Any]) -> str:
+    lines = [
+        "# Execution Evaluation",
+        "",
+        f"- intake_id: {evaluation.get('intake_id') or 'none'}",
+        f"- task_id: {evaluation.get('task_id') or 'none'}",
+        f"- workspace: {evaluation.get('workspace') or 'none'}",
+        f"- objective: {evaluation.get('objective') or 'unknown'}",
+        f"- task_status: {evaluation.get('task_status') or 'unknown'}",
+        f"- execution_decision: {evaluation.get('execution_decision') or 'unknown'}",
+        f"- recommended_next_action: {evaluation.get('recommended_next_action') or 'unknown'}",
+        f"- evidence_retrieval_decision: {evaluation.get('evidence_retrieval_decision') or 'none'}",
+        "",
+        "## Summary",
+        "",
+        str(evaluation.get("summary") or "No evaluation summary was produced."),
+        "",
+    ]
+    warnings = evaluation.get("warnings") if isinstance(evaluation.get("warnings"), list) else []
+    if warnings:
+        lines.extend(["## Warnings", ""])
+        for warning in warnings:
+            lines.append(f"- {warning}")
+        lines.append("")
+    lines.extend([
+        "## Write Audit",
+        "",
+        f"- changed_files_count: {((evaluation.get('write_audit') or {}).get('changed_files_count') if isinstance(evaluation.get('write_audit'), dict) else 'none')}",
+        f"- protected_path_violation: {'true' if ((evaluation.get('write_audit') or {}).get('protected_path_violation') if isinstance(evaluation.get('write_audit'), dict) else False) else 'false'}",
+        "",
+        "## Safe Result Excerpt",
+        "",
+        str(evaluation.get("safe_result_excerpt") or "(empty result excerpt)"),
+        "",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_execution_evaluation(
+    config: BridgeConfig,
+    task_dir: Path,
+    task: dict[str, Any],
+    result_data: dict[str, Any],
+) -> dict[str, Any]:
+    prepare_bundle = load_task_prepare_bundle(config, task)
+    contract = prepare_bundle.get("contract") if isinstance(prepare_bundle.get("contract"), dict) else {}
+    evidence = prepare_bundle.get("evidence_retrieval") if isinstance(prepare_bundle.get("evidence_retrieval"), dict) else {}
+    intake_id = str(prepare_bundle.get("intake_id") or "")
+    execution_decision, next_action, summary = execution_evaluation_decision(task)
+    excerpt = execution_result_excerpt(result_data)
+    warnings: list[str] = []
+    evidence_decision = evidence.get("decision")
+    if evidence_decision and evidence_decision != "safe_to_answer":
+        warnings.append(
+            f"Prepared evidence decision remains {evidence_decision}; keep formal conclusion claims bounded until reviewer confirmation."
+        )
+    if str(task.get("status", "")) == "policy_violation":
+        warnings.append("Task hit a protected-path or policy boundary; inspect write audit evidence before any retry.")
+    if str(task.get("status", "")) == "done" and not excerpt:
+        warnings.append("Task finished without a non-empty safe result excerpt.")
+    if intake_id and not prepare_bundle.get("available"):
+        warnings.append("Prepared intake artifacts are missing; evaluation is based only on task metadata and safe result.")
+    return {
+        "schema_version": 1,
+        "intake_id": intake_id,
+        "task_id": str(task.get("task_id") or task_dir.name),
+        "workspace": str(task.get("project") or ""),
+        "objective": str(contract.get("objective") or ""),
+        "task_status": str(task.get("status") or ""),
+        "task_mode": str(task.get("mode") or ""),
+        "reference_task_id": str(task.get("reference_task_id") or ""),
+        "execution_decision": execution_decision,
+        "recommended_next_action": next_action,
+        "summary": summary,
+        "evidence_retrieval_decision": evidence_decision,
+        "result_available": bool(excerpt),
+        "safe_result_excerpt": excerpt,
+        "warnings": warnings,
+        "write_audit": {
+            "present": bool(task.get("write_audit_path")),
+            "changed_files_count": task.get("changed_files_count") if isinstance(task.get("changed_files_count"), int) else None,
+            "protected_path_violation": bool(task.get("protected_path_violation")),
+        },
+        "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
+    }
+
+
+def persist_execution_evaluation(config: BridgeConfig, evaluation: dict[str, Any]) -> dict[str, Any]:
+    intake_id = str(evaluation.get("intake_id") or "")
+    if not intake_id:
+        return evaluation
+    root = intake_dir(config, intake_id)
+    existing = read_json_object_if_exists(root / "EXECUTION_EVALUATION.json")
+    if existing and execution_evaluation_fingerprint(existing) == execution_evaluation_fingerprint(evaluation):
+        return existing
+    write_json_atomic(root / "EXECUTION_EVALUATION.json", evaluation)
+    write_text_atomic(root / "EXECUTION_EVALUATION.md", execution_evaluation_markdown(evaluation))
+    append_jsonl(
+        root / "TASK_INTAKE.events.jsonl",
+        {
+            "event": "execution_evaluated",
+            "intake_id": intake_id,
+            "task_id": evaluation.get("task_id"),
+            "task_status": evaluation.get("task_status"),
+            "execution_decision": evaluation.get("execution_decision"),
+            "recommended_next_action": evaluation.get("recommended_next_action"),
+            "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
+        },
+    )
+    return evaluation
+
+
+def maybe_attach_execution_evaluation(
+    config: BridgeConfig,
+    task_dir: Path,
+    task: dict[str, Any],
+    result_data: dict[str, Any],
+) -> dict[str, Any] | None:
+    intake_id = task_intake_id(task)
+    if not intake_id:
+        return None
+    evaluation = build_execution_evaluation(config, task_dir, task, result_data)
+    return persist_execution_evaluation(config, evaluation)
 
 
 def clarification_questions(gray_areas: list[str], signals: dict[str, bool]) -> list[str]:
@@ -2126,7 +2358,7 @@ def handle_codex_query(
 ) -> dict[str, Any]:
     reject_frontend_identity(payload)
     task_id = validate_task_id(payload.get("task_id", ""))
-    _task_dir, task = authorize_codex_task(config, principal, task_id)
+    task_dir, task = authorize_codex_task(config, principal, task_id)
     raw_requested = bool_from_payload(payload.get("raw", ""))
     if raw_requested and not is_admin(principal):
         raise BridgeError("raw output requires admin role", 403)
@@ -2153,6 +2385,13 @@ def handle_codex_query(
             rendered = json.loads(output)
         except json.JSONDecodeError as exc:
             raise BridgeError(f"codex-bridge returned invalid JSON: {exc}", 500) from exc
+        intake_id = task_intake_id(task)
+        if command == "result" and not raw_requested:
+            evaluation = maybe_attach_execution_evaluation(config, task_dir, task, rendered)
+            if evaluation:
+                rendered["execution_evaluation"] = evaluation
+        if intake_id:
+            rendered["intake_id"] = intake_id
         rendered.update({
             "ok": True,
             "task_id": task_id,
