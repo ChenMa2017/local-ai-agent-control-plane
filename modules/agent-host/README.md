@@ -226,6 +226,8 @@ curl -X POST http://127.0.0.1:8787/codex/run \
 
 这样 intake 目录现在不仅记录“怎么准备”和“执行后建议做什么”，还会记录“如果要交给人接手，应该把什么材料一起交出去”。
 
+如果客户端改用 `POST /codex/result-page` 分页读取长结果，第 1 页也会复用同一批 post-run metadata：`EXECUTION_EVALUATION`、`FOLLOWUP_TASK_DRAFT`、`LEDGER_NOTE_DRAFT`、`REVIEW_PROPOSAL_DRAFT` 会和第一页 safe result slice 一起返回，不会因为结果过长而丢掉下一步建议。
+
 如果客户端拿到了上一轮任务的 `task_id`，现在也可以直接这样发起下一轮 prepare：
 
 ```bash

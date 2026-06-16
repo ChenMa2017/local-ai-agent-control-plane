@@ -211,6 +211,8 @@ POST /codex/prepare
 POST /codex/result-page
 ```
 
+For long safe outputs, `POST /codex/result-page` page 1 now carries the same prepared-result metadata as `POST /codex/result`, so clients can still see evaluation / follow-up / review summaries while paging through the body.
+
 `POST /codex/prepare` is now more than a generic clarification endpoint. It can:
 
 - classify low-risk report-only / bounded CPU / local-workspace-copy requests into a structured `TASK_CONTRACT`;

@@ -538,15 +538,41 @@ class BotHelperTests(unittest.TestCase):
         response = bot.format_task_page_response(
             {
                 "task_id": "task_123",
+                "intake_id": "intake_20260616_000001_ab12cd",
                 "page": 1,
                 "total_pages": 3,
                 "has_next": True,
                 "text": "/home/example/Documents/My_App_Dev/x Authorization: Bearer demo",
+                "execution_evaluation": {
+                    "execution_decision": "result_ready_for_review",
+                    "recommended_next_action": "review_result",
+                },
+                "followup_task_draft": {
+                    "title": "Review the result against prepared evidence",
+                    "recommended_next_action": "review_result",
+                    "requires_prepare": True,
+                    "source_task_id": "task_123",
+                },
+                "ledger_note_draft": {
+                    "title": "Proposed ledger note for task task_123",
+                    "target_path_hint": "research/LEDGER_NOTES.md",
+                },
+                "review_proposal_draft": {
+                    "title": "Review the bounded claim before promoting the result",
+                    "review_scope": "report_only",
+                    "requires_human_review": False,
+                },
             },
             500,
         )
 
+        self.assertIn("intake_id: intake_20260616_000001_ab12cd", response)
         self.assertIn("Page: 1/3", response)
+        self.assertIn("Evaluation:", response)
+        self.assertIn("Follow-up draft:", response)
+        self.assertIn("Ledger note draft:", response)
+        self.assertIn("Review proposal draft:", response)
+        self.assertIn("/agent_prepare followup_task_id:task_123", response)
         self.assertIn("Next page: 2", response)
         self.assertNotIn("/home/example", response)
         self.assertNotIn("Bearer demo", response)

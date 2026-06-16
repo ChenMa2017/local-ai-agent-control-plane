@@ -265,6 +265,8 @@ If Agent Host also returns `followup_task_draft`, the adapter now shows that dra
 
 If Agent Host also returns `ledger_note_draft` or `review_proposal_draft`, the adapter surfaces those summaries in the same task reply / completion message. This gives the user an immediate hint that the result is ready to be turned into a bounded ledger note, or that a human/policy review bundle should be handled before any retry or claim promotion.
 
+The same rule now applies to `/<prefix>_task_page` page 1 for long results: the first paged reply can still show evaluation / follow-up / review summaries before the first safe-result slice, so paging does not erase the structured next-step context.
+
 If you reply directly to a bot-authored task message inside a bot-created task thread, the adapter treats that reply as a follow-up task request in the same thread. It tries to resolve `reference_task_id` from the replied bot message first, then falls back to the thread's latest known task. This makes the thread behave more like an email chain:
 
 ```text

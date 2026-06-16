@@ -878,6 +878,69 @@ class BridgeTests(unittest.TestCase):
             self.assertTrue(response["has_next"])
             self.assertFalse(response["raw"])
 
+    def test_result_page_includes_execution_artifacts_for_prepared_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "codex-bridge.js"
+            script.parent.mkdir()
+            script.write_text(
+                "console.log(JSON.stringify({task_id:'task_20260616_120000_pageeval01',"
+                "text:'safe result summary that is long enough for paging',raw:false,redacted:true,truncated:false}))\n"
+            )
+            (root / "project_index").mkdir(parents=True)
+            self.write_watchdog_doc_search(
+                root,
+                {
+                    "query": "What is the current best candidate?",
+                    "decision": "stale_conclusion",
+                    "warnings": ["matching current conclusion is stale and should be rechecked before citation"],
+                    "read_plan": [
+                        {"path": "formal/current_best.md", "reason": "supports current conclusion: current best candidate"}
+                    ],
+                    "hits": [
+                        {"kind": "current_conclusion", "id": "current_best_candidate", "score": 6.0}
+                    ],
+                },
+            )
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "What is the current best candidate?",
+                    "source": "web",
+                },
+                config,
+                principal,
+            )
+            intake_id = prepared["intake_id"]
+            self.write_codex_task(
+                root,
+                "task_20260616_120000_pageeval01",
+                user="chenma",
+                status="done",
+                extra={
+                    "adapter_metadata": {
+                        "intake_id": intake_id,
+                        "prepared_objective": "report_only",
+                        "evidence_retrieval_decision": "stale_conclusion",
+                    }
+                },
+            )
+
+            response = bridge.handle_codex_result_page(
+                {"task_id": "task_20260616_120000_pageeval01", "page": "1", "page_size": "12"},
+                config,
+                principal,
+            )
+
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["intake_id"], intake_id)
+            self.assertEqual(response["execution_evaluation"]["execution_decision"], "result_ready_for_review")
+            self.assertEqual(response["followup_task_draft"]["source_task_id"], "task_20260616_120000_pageeval01")
+            self.assertEqual(response["ledger_note_draft"]["target_path_hint"], "research/LEDGER_NOTES.md")
+            self.assertEqual(response["review_proposal_draft"]["review_scope"], "report_only")
+
     def test_codex_tasks_filters_and_user_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

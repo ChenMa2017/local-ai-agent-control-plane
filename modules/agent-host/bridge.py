@@ -3103,10 +3103,15 @@ def handle_codex_result_page(
     return {
         "ok": True,
         "task_id": result.get("task_id"),
+        "intake_id": result.get("intake_id"),
         "command": "result-page",
         "redacted": bool(result.get("redacted", True)),
         "raw": False,
         "source_truncated": bool(result.get("truncated", False)),
+        "execution_evaluation": result.get("execution_evaluation") if isinstance(result.get("execution_evaluation"), dict) else None,
+        "followup_task_draft": result.get("followup_task_draft") if isinstance(result.get("followup_task_draft"), dict) else None,
+        "ledger_note_draft": result.get("ledger_note_draft") if isinstance(result.get("ledger_note_draft"), dict) else None,
+        "review_proposal_draft": result.get("review_proposal_draft") if isinstance(result.get("review_proposal_draft"), dict) else None,
         **page_data,
     }
 

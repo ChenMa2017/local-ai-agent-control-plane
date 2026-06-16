@@ -668,12 +668,17 @@ def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any
     return "\n".join(body)
 
 
-def format_task_page_response(data: dict[str, Any], max_chars: int) -> str:
+def format_task_page_response(data: dict[str, Any], max_chars: int, command_prefix: str = "agent") -> str:
     task_id = str(data.get("task_id") or "")
+    intake_id = str(data.get("intake_id") or "")
     page = data.get("page", "?")
     total_pages = data.get("total_pages", "?")
     text = sanitize_discord_text(str(data.get("text") or ""))
     text, truncated = truncate_text(text, max_chars)
+    evaluation = data.get("execution_evaluation") if isinstance(data.get("execution_evaluation"), dict) else {}
+    followup = data.get("followup_task_draft") if isinstance(data.get("followup_task_draft"), dict) else {}
+    ledger_note = data.get("ledger_note_draft") if isinstance(data.get("ledger_note_draft"), dict) else {}
+    review_proposal = data.get("review_proposal_draft") if isinstance(data.get("review_proposal_draft"), dict) else {}
     suffix = ""
     if data.get("has_next"):
         suffix += f"\n\nNext page: {int(data.get('page', 1)) + 1}"
@@ -681,7 +686,25 @@ def format_task_page_response(data: dict[str, Any], max_chars: int) -> str:
         suffix += "\n\nSource safe result was truncated by Agent Host limits."
     if truncated:
         suffix += "\n\nDiscord page output truncated."
-    return f"Task result page\n\nTask: {task_id}\nPage: {page}/{total_pages}\n\n{text}{suffix}"
+    lines = [
+        "Task result page",
+        "",
+        f"Task: {task_id}",
+        f"Page: {page}/{total_pages}",
+    ]
+    if intake_id:
+        lines.append(f"intake_id: {intake_id}")
+    if page == 1:
+        if evaluation:
+            lines.extend(["", format_execution_evaluation(evaluation)])
+        if followup:
+            lines.extend(["", format_followup_task_draft(followup, command_prefix)])
+        if ledger_note:
+            lines.extend(["", format_ledger_note_draft(ledger_note)])
+        if review_proposal:
+            lines.extend(["", format_review_proposal_draft(review_proposal)])
+    lines.extend(["", text + suffix])
+    return "\n".join(lines)
 
 
 def format_completion_message(
@@ -1466,7 +1489,7 @@ def run_bot(config: AdapterConfig) -> None:
                     data = self.agent.result_page(task_id, page=page, page_size=config.max_result_chars)
                     await self.send_followup_text(
                         interaction,
-                        format_task_page_response(data, config.max_result_chars),
+                        format_task_page_response(data, config.max_result_chars, config.command_prefix),
                         ephemeral=True,
                     )
                 except Exception as error:
