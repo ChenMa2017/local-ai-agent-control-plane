@@ -1134,6 +1134,30 @@ def load_prepared_run_context(config: BridgeConfig, intake_id: str, principal: A
     }
 
 
+def load_followup_prepare_seed(config: BridgeConfig, followup_task_id: str, principal: AuthPrincipal) -> dict[str, Any]:
+    _task_dir, task = authorize_codex_task(config, principal, followup_task_id)
+    intake_id = task_intake_id(task)
+    if not intake_id:
+        raise BridgeError(
+            f"follow-up draft is not available for task {followup_task_id}; the task is not linked to a prepared intake",
+            409,
+            "followup_draft_unavailable",
+        )
+    draft = load_intake_json_artifact(config, intake_id, "FOLLOWUP_TASK_DRAFT.json")
+    if str(draft.get("source_task_id") or "") not in {"", followup_task_id}:
+        raise BridgeError(
+            f"follow-up draft source does not match task {followup_task_id}",
+            409,
+            "followup_draft_invalid",
+        )
+    return {
+        "task_id": followup_task_id,
+        "source_intake_id": intake_id,
+        "task": task,
+        "draft": draft,
+    }
+
+
 def read_json_object_if_exists(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -2284,25 +2308,53 @@ def persist_intake_artifacts(
 def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
     reject_frontend_identity(payload)
     intake_id = (payload.get("intake_id") or "").strip()
+    followup_task_id = (payload.get("followup_task_id") or payload.get("followupTaskId") or "").strip()
+    if intake_id and followup_task_id:
+        raise BridgeError("intake_id and followup_task_id cannot be used together", 400, "invalid_request")
     existing_intent: dict[str, Any] = {}
+    followup_seed: dict[str, Any] = {}
     if intake_id:
         intake_id = validate_intake_id(intake_id)
         existing_intent = load_intake_intent(config, intake_id)
     else:
         intake_id = new_intake_id()
+    if followup_task_id:
+        followup_task_id = validate_task_id(followup_task_id)
+        followup_seed = load_followup_prepare_seed(config, followup_task_id, principal)
+    followup_draft = followup_seed.get("draft") if isinstance(followup_seed.get("draft"), dict) else {}
 
-    project_name = (payload.get("workspace") or payload.get("project", "")).strip() or str(existing_intent.get("workspace") or "")
-    prompt = safe_intake_text(payload.get("prompt", "") or str(existing_intent.get("prompt") or ""), MAX_TASK_CHARS)
+    project_name = (
+        (payload.get("workspace") or payload.get("project", "")).strip()
+        or str(existing_intent.get("workspace") or "")
+        or str(followup_draft.get("workspace") or "")
+        or str((followup_seed.get("task") or {}).get("project") or "")
+    )
+    prompt = safe_intake_text(
+        payload.get("prompt", "")
+        or str(existing_intent.get("prompt") or "")
+        or str(followup_draft.get("prompt") or ""),
+        MAX_TASK_CHARS,
+    )
     if not prompt:
         raise BridgeError("prompt is required", 400, "invalid_request")
     project = validate_codex_project(config, project_name)
-    mode = (payload.get("mode") or str(existing_intent.get("desired_mode") or "") or project.default_mode).strip() or project.default_mode
+    mode = (
+        payload.get("mode")
+        or str(existing_intent.get("desired_mode") or "")
+        or str(followup_draft.get("suggested_mode") or "")
+        or project.default_mode
+    ).strip() or project.default_mode
     if mode not in project.allowed_modes:
         allowed = ", ".join(project.allowed_modes)
         raise BridgeError(f"mode {mode} is not allowed for workspace {project.name}; allowed: {allowed}", 400, "invalid_request")
 
     answers = intake_answers_text(payload)
-    reference_task_id = (payload.get("reference_task_id") or payload.get("referenceTaskId") or str(existing_intent.get("reference_task_id") or "")).strip()
+    reference_task_id = (
+        payload.get("reference_task_id")
+        or payload.get("referenceTaskId")
+        or str(existing_intent.get("reference_task_id") or "")
+        or str(followup_draft.get("reference_task_id") or "")
+    ).strip()
     if reference_task_id:
         reference_task_id = validate_task_id(reference_task_id)
         authorize_codex_task(config, principal, reference_task_id)
@@ -2337,6 +2389,8 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         "source": source,
         "user": principal.user,
         "reference_task_id": reference_task_id or "",
+        "followup_task_id": followup_task_id or "",
+        "followup_source_intake_id": str(followup_seed.get("source_intake_id") or ""),
         "prompt": prompt,
         "prompt_preview": prompt_preview(prompt),
         "desired_mode": mode,
@@ -2362,12 +2416,14 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         preflight=preflight,
         evidence_retrieval=evidence_retrieval,
         answers=answers,
-        event_type="intake_replied" if answers else "intake_created",
+        event_type="intake_replied" if answers and existing_intent else ("intake_created_from_followup" if followup_task_id else "intake_created"),
     )
     return {
         "ok": True,
         "intake_id": intake_id,
         "workspace": project.name,
+        "followup_task_id": followup_task_id or None,
+        "followup_source_intake_id": str(followup_seed.get("source_intake_id") or "") or None,
         "status": "blocked" if risk_class == "high" else ("need_user_reply" if questions else ("blocked" if not preflight.get("ok") else "prepared")),
         "questions": questions,
         "gray_areas": gray_areas,

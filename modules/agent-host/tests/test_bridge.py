@@ -394,6 +394,97 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(second["contract"]["prompt"], "Please fix this for me.")
             self.assertTrue((Path(second["artifacts_dir"]) / "ANSWERS.jsonl").exists())
 
+    def test_codex_prepare_can_seed_new_intake_from_followup_task_draft(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "codex-bridge.js"
+            script.parent.mkdir()
+            script.write_text(
+                "console.log(JSON.stringify({task_id:'task_20260616_120000_follow01', text:'safe result summary', raw:false, redacted:true, truncated:false}));\n"
+            )
+            (root / "project_index").mkdir(parents=True)
+            self.write_watchdog_doc_search(
+                root,
+                {
+                    "query": "What is the current best candidate?",
+                    "decision": "stale_conclusion",
+                    "warnings": ["matching current conclusion is stale and should be rechecked before citation"],
+                    "read_plan": [
+                        {"path": "formal/current_best.md", "reason": "supports current conclusion: current best candidate"}
+                    ],
+                    "hits": [
+                        {"kind": "current_conclusion", "id": "current_best_candidate", "score": 6.0}
+                    ],
+                },
+            )
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "What is the current best candidate?",
+                    "source": "web",
+                },
+                config,
+                principal,
+            )
+            intake_id = prepared["intake_id"]
+            self.write_codex_task(
+                root,
+                "task_20260616_120000_follow01",
+                user="chenma",
+                status="done",
+                extra={
+                    "adapter_metadata": {
+                        "intake_id": intake_id,
+                        "prepared_objective": "report_only",
+                        "evidence_retrieval_decision": "stale_conclusion",
+                    }
+                },
+            )
+            bridge.handle_codex_query(
+                {"task_id": "task_20260616_120000_follow01"},
+                config,
+                "result",
+                principal,
+            )
+
+            response = bridge.handle_codex_prepare(
+                {
+                    "followup_task_id": "task_20260616_120000_follow01",
+                    "source": "discord",
+                },
+                config,
+                principal,
+            )
+
+            self.assertEqual(response["status"], "prepared")
+            self.assertEqual(response["workspace"], "demo")
+            self.assertEqual(response["followup_task_id"], "task_20260616_120000_follow01")
+            self.assertEqual(response["followup_source_intake_id"], intake_id)
+            self.assertEqual(response["contract"]["reference_task_id"], "task_20260616_120000_follow01")
+            self.assertIn("Review the safe result", response["contract"]["prompt"])
+            seeded_intent = json.loads((Path(response["artifacts_dir"]) / "INTENT_DRAFT.json").read_text())
+            self.assertEqual(seeded_intent["followup_task_id"], "task_20260616_120000_follow01")
+            self.assertEqual(seeded_intent["followup_source_intake_id"], intake_id)
+
+    def test_codex_prepare_rejects_intake_and_followup_task_together(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            with self.assertRaises(bridge.BridgeError) as ctx:
+                bridge.handle_codex_prepare(
+                    {
+                        "workspace": "demo",
+                        "intake_id": "intake_20260616_000001_ab12cd",
+                        "followup_task_id": "task_20260616_120000_follow01",
+                        "source": "discord",
+                    },
+                    config,
+                    bridge.AuthPrincipal(user="chenma", role="admin"),
+                )
+            self.assertEqual(ctx.exception.status, 400)
+
     def test_codex_prepare_blocks_high_risk_training_request(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

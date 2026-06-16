@@ -13,7 +13,7 @@ http://127.0.0.1:8787
 ```text
 /agent_status
 /agent_workspaces
-/agent_prepare prompt [workspace] [intake_id] [answers] [reference_task_id]
+/agent_prepare [prompt] [workspace] [intake_id] [answers] [reference_task_id] [followup_task_id]
 /agent_run [prompt] [workspace] [reference_task_id] [intake_id]
 /agent_task task_id
 /agent_cancel task_id
@@ -244,6 +244,8 @@ READ_PLAN
 ```
 
 If clarification is still needed, the adapter returns the generated questions plus an `intake_id`. A later `/<prefix>_prepare` call can continue the same intake by sending that `intake_id` with `answers`.
+
+`followup_task_id` is also optional on `/<prefix>_prepare`. When present, the adapter can omit `prompt` and let Agent Host seed a fresh intake from the latest `FOLLOWUP_TASK_DRAFT` attached to that finished task. Inside a bot-created task thread, calling `/<prefix>_prepare` with no prompt or intake id now falls back to that thread's latest task id as the follow-up seed.
 
 When Agent Host also performs metadata-first evidence retrieval, the prepare response now surfaces the retrieval `decision`, any warnings, and a short `read_plan` summary directly in Discord. This lets the user see whether the request looks like a safe-to-answer conclusion, a stale conclusion, or an auxiliary-only match before turning it into `/run`.
 

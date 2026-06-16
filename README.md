@@ -221,6 +221,7 @@ POST /codex/result-page
 - allow `/codex/run` to continue a prepared `intake_id`, reusing the stored contract, preflight, and read-plan context;
 - persist `EXECUTION_EVALUATION.json/.md` for prepared runs once a safe result is observed, so the intake chain records a structured post-run summary and next action;
 - persist `FOLLOWUP_TASK_DRAFT.json/.md` beside the evaluation so the system can suggest the next `/prepare` prompt without auto-running it;
+- allow `/codex/prepare` to start a fresh intake from `followup_task_id`, reusing the latest follow-up draft prompt instead of making the user retype it;
 - block direct execution when experiment-defining decisions such as control-arm meaning, fairness constraints, or success criteria are still unresolved.
 
 Discord Adapter maps them to:

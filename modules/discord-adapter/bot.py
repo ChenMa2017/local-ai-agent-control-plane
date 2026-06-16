@@ -162,6 +162,17 @@ def safe_reference_task_id(value: str) -> str:
     return text
 
 
+def safe_followup_task_id(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    import re
+
+    if not re.match(r"^task_[A-Za-z0-9_.-]+$", text):
+        raise ValueError("followup_task_id must be a valid task id")
+    return text
+
+
 def safe_intake_id(value: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -462,6 +473,7 @@ def format_prepare_response(
 ) -> str:
     intake_id = str(data.get("intake_id") or "")
     status = str(data.get("status") or "unknown")
+    followup_task_id = str(data.get("followup_task_id") or "")
     contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
     preflight = data.get("preflight") if isinstance(data.get("preflight"), dict) else {}
     questions = data.get("questions") if isinstance(data.get("questions"), list) else []
@@ -476,6 +488,8 @@ def format_prepare_response(
         f"risk_class: {contract.get('risk_class', 'unknown')}",
         f"preflight: {'ok' if preflight.get('ok') else 'blocked'}",
     ]
+    if followup_task_id:
+        lines.append(f"followup_from_task: {followup_task_id}")
     if evidence.get("required"):
         lines.append(f"evidence: {evidence.get('decision') or 'unavailable'}")
     if questions:
@@ -562,7 +576,7 @@ def format_execution_evaluation(evaluation: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_followup_task_draft(draft: dict[str, Any]) -> str:
+def format_followup_task_draft(draft: dict[str, Any], command_prefix: str = "agent") -> str:
     title = sanitize_discord_text(str(draft.get("title") or "Prepare the next bounded step"))
     next_action = sanitize_discord_text(str(draft.get("recommended_next_action") or "review"))
     lines = [
@@ -571,11 +585,16 @@ def format_followup_task_draft(draft: dict[str, Any]) -> str:
         f"- next: {next_action}",
     ]
     if draft.get("requires_prepare"):
-        lines.append("- use: /agent_prepare")
+        source_task_id = sanitize_discord_text(str(draft.get("source_task_id") or draft.get("reference_task_id") or ""))
+        prepare_command = f"/{slash_command_name(command_prefix, 'prepare')}"
+        if source_task_id:
+            lines.append(f"- use: {prepare_command} followup_task_id:{source_task_id}")
+        else:
+            lines.append(f"- use: {prepare_command}")
     return "\n".join(lines)
 
 
-def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any], max_chars: int) -> str:
+def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any], max_chars: int, command_prefix: str = "agent") -> str:
     status_text = str(status_data.get("text", ""))
     status = parse_status_text(status_text)
     result_text = str(result_data.get("text", "") or "")
@@ -593,7 +612,7 @@ def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any
     if evaluation:
         body.extend(["", format_execution_evaluation(evaluation)])
     if followup:
-        body.extend(["", format_followup_task_draft(followup)])
+        body.extend(["", format_followup_task_draft(followup, command_prefix)])
     body.extend(["", "Result:", summary])
     return "\n".join(body)
 
@@ -614,7 +633,13 @@ def format_task_page_response(data: dict[str, Any], max_chars: int) -> str:
     return f"Task result page\n\nTask: {task_id}\nPage: {page}/{total_pages}\n\n{text}{suffix}"
 
 
-def format_completion_message(task_id: str, status_data: dict[str, Any], result_data: dict[str, Any] | None, max_chars: int) -> str:
+def format_completion_message(
+    task_id: str,
+    status_data: dict[str, Any],
+    result_data: dict[str, Any] | None,
+    max_chars: int,
+    command_prefix: str = "agent",
+) -> str:
     status_text = str(status_data.get("text", ""))
     status = parse_status_text(status_text)
     if status in {"done", "policy_violation"} and result_data is not None:
@@ -633,7 +658,7 @@ def format_completion_message(task_id: str, status_data: dict[str, Any], result_
         if evaluation:
             lines.extend(["", format_execution_evaluation(evaluation)])
         if followup:
-            lines.extend(["", format_followup_task_draft(followup)])
+            lines.extend(["", format_followup_task_draft(followup, command_prefix)])
         lines.extend(["", "Result:", summary])
         return "\n".join(lines)
     short_status, _truncated = truncate_text(status_text.strip() or status, min(max_chars, 1000))
@@ -793,6 +818,7 @@ async def process_completion_notifications(
     agent: AgentHostClient,
     notifier: Any,
     max_result_chars: int,
+    command_prefix: str = "agent",
 ) -> int:
     sent = 0
     for record in store.pending():
@@ -810,7 +836,7 @@ async def process_completion_notifications(
             continue
         repaired = previous_status in FINAL_TASK_STATUSES
         result_data = agent.result(task_id, max_chars=None) if status in {"done", "policy_violation"} else None
-        message = format_completion_message(task_id, status_data, result_data, max_result_chars)
+        message = format_completion_message(task_id, status_data, result_data, max_result_chars, command_prefix)
         await notifier.send(record, message)
         store.mark_notified(task_id, status, repaired=repaired)
         sent += 1
@@ -1011,6 +1037,7 @@ def run_bot(config: AdapterConfig) -> None:
                         agent=self.agent,
                         notifier=self,
                         max_result_chars=config.max_result_chars,
+                        command_prefix=config.command_prefix,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -1246,26 +1273,34 @@ def run_bot(config: AdapterConfig) -> None:
                 intake_id: str = "",
                 answers: str = "",
                 reference_task_id: str = "",
+                followup_task_id: str = "",
             ) -> None:
                 try:
                     self.require_user(interaction)
                     clean_prompt = str(prompt or "").strip()
                     if clean_prompt and len(clean_prompt) > config.max_prompt_chars:
                         raise ValueError(f"prompt is too long; max {config.max_prompt_chars} chars")
-                    selected_workspace = str(workspace or config.default_workspace or "").strip()
-                    if not selected_workspace:
-                        raise ValueError("workspace is required; configure discord.default_workspace or pass workspace explicitly")
                     selected_intake_id = safe_intake_id(intake_id)
-                    if not clean_prompt and not selected_intake_id:
-                        raise ValueError("prompt is required unless you are continuing an existing intake_id")
                     selected_answers = str(answers or "").strip()
                     if len(selected_answers) > config.max_prompt_chars:
                         raise ValueError(f"answers is too long; max {config.max_prompt_chars} chars")
                     selected_reference_task_id = safe_reference_task_id(reference_task_id)
+                    selected_followup_task_id = safe_followup_task_id(followup_task_id)
                     if not selected_reference_task_id and isinstance(interaction.channel, discord.Thread):
                         selected_reference_task_id = self.thread_store.task_id_for_thread(str(interaction.channel.id))
+                    if not selected_followup_task_id and isinstance(interaction.channel, discord.Thread) and not clean_prompt and not selected_intake_id:
+                        selected_followup_task_id = self.thread_store.task_id_for_thread(str(interaction.channel.id))
+                    selected_workspace = str(workspace or "").strip()
+                    if not selected_workspace and isinstance(interaction.channel, discord.Thread):
+                        selected_workspace = str(self.thread_store.latest_record_for_thread(str(interaction.channel.id)).get("workspace") or "").strip()
+                    if not selected_workspace and not selected_intake_id and not selected_followup_task_id:
+                        selected_workspace = str(config.default_workspace or "").strip()
+                    if not selected_workspace and not selected_intake_id and not selected_followup_task_id:
+                        raise ValueError("workspace is required; configure discord.default_workspace or pass workspace explicitly")
+                    if not clean_prompt and not selected_intake_id and not selected_followup_task_id:
+                        raise ValueError("prompt is required unless you are continuing an existing intake_id or follow-up task")
                     await interaction.response.defer(ephemeral=True, thinking=True)
-                    mode = default_mode_for_workspace(self.agent.workspaces(), selected_workspace)
+                    mode = default_mode_for_workspace(self.agent.workspaces(), selected_workspace) if selected_workspace else None
                     data = self.agent.prepare(
                         workspace=selected_workspace,
                         prompt=clean_prompt,
@@ -1277,11 +1312,13 @@ def run_bot(config: AdapterConfig) -> None:
                         answers=selected_answers or None,
                         mode=mode,
                         reference_task_id=selected_reference_task_id or None,
+                        followup_task_id=selected_followup_task_id or None,
                         command_name=f"/{slash_command_name(config.command_prefix, 'prepare')}",
                     )
+                    response_workspace = str(data.get("workspace") or selected_workspace or config.default_workspace or "").strip()
                     await self.send_followup_text(
                         interaction,
-                        format_prepare_response(data, selected_workspace, config.command_prefix),
+                        format_prepare_response(data, response_workspace, config.command_prefix),
                         ephemeral=True,
                     )
                 except Exception as error:
@@ -1358,7 +1395,7 @@ def run_bot(config: AdapterConfig) -> None:
                     result_data = self.agent.result(task_id, max_chars=None)
                     await self.send_followup_text(
                         interaction,
-                        format_task_response(status_data, result_data, config.max_result_chars),
+                        format_task_response(status_data, result_data, config.max_result_chars, config.command_prefix),
                         ephemeral=True,
                     )
                 except Exception as error:

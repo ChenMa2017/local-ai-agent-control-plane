@@ -208,6 +208,25 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(payload["reference_task_id"], "task_20260525_120000_ref001")
         self.assertEqual(payload["metadata"]["command"], "/agent_prepare")
 
+    def test_prepare_can_seed_from_followup_task_without_prompt(self):
+        response = self.client().prepare(
+            workspace="",
+            prompt="",
+            source_user_id="discord-user",
+            source_channel_id="discord-channel",
+            source_message_id="interaction-followup-prepare",
+            guild_id="guild-1",
+            followup_task_id="task_20260616_120000_follow01",
+        )
+
+        self.assertEqual(response["status"], "need_user_reply")
+        record = RecordingHandler.records[-1]
+        self.assertEqual(record["path"], "/codex/prepare")
+        payload = record["payload"]
+        self.assertEqual(payload["followup_task_id"], "task_20260616_120000_follow01")
+        self.assertNotIn("workspace", payload)
+        self.assertNotIn("prompt", payload)
+
     def test_cancel_error_uses_stable_error_format_without_token_leak(self):
         with self.assertRaises(AgentHostError) as ctx:
             self.client().cancel("task_123")
@@ -323,6 +342,7 @@ class BotHelperTests(unittest.TestCase):
                     "title": "Review the result against prepared evidence",
                     "recommended_next_action": "review_result",
                     "requires_prepare": True,
+                    "source_task_id": "task_123",
                 },
             },
             200,
@@ -333,7 +353,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("result_ready_for_review", response)
         self.assertIn("review_result", response)
         self.assertIn("stale_conclusion", response)
-        self.assertIn("/agent_prepare", response)
+        self.assertIn("/agent_prepare followup_task_id:task_123", response)
 
     def test_policy_violation_task_response_uses_safe_result_summary(self):
         response = bot.format_task_response(
@@ -390,6 +410,7 @@ class BotHelperTests(unittest.TestCase):
         response = bot.format_prepare_response(
             {
                 "intake_id": "intake_20260616_000001_ab12cd",
+                "followup_task_id": "task_20260616_120000_follow01",
                 "status": "prepared",
                 "questions": [],
                 "contract": {"objective": "report_only", "risk_class": "low"},
@@ -409,6 +430,7 @@ class BotHelperTests(unittest.TestCase):
         )
 
         self.assertIn("evidence: stale_conclusion", response)
+        self.assertIn("followup_from_task: task_20260616_120000_follow01", response)
         self.assertIn("证据提醒", response)
         self.assertIn("formal/current_best.md", response)
         self.assertIn("不应被当作正式已确认结论", response)
@@ -697,6 +719,11 @@ class BotHelperTests(unittest.TestCase):
         self.assertEqual(bot.safe_reference_task_id(" task_20260525_120000_ref001 "), "task_20260525_120000_ref001")
         with self.assertRaises(ValueError):
             bot.safe_reference_task_id("../../bad")
+
+    def test_safe_followup_task_id_validation(self):
+        self.assertEqual(bot.safe_followup_task_id(" task_20260525_120000_ref001 "), "task_20260525_120000_ref001")
+        with self.assertRaises(ValueError):
+            bot.safe_followup_task_id("../../bad")
 
     def test_extract_task_id_from_text_supports_intro_and_completion_formats(self):
         self.assertEqual(

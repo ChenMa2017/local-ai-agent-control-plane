@@ -150,6 +150,7 @@ POST /codex/cancel
 - persist DECISION_GATE.json for experiment-like requests
 - consult project-local evidence retrieval for current-conclusion / comparison / formal-result style requests when a workspace exposes project_index + watchdog_doc_search.py
 - persist EVIDENCE_RETRIEVAL.json and READ_PLAN.md beside the intake artifacts
+- allow POST /codex/prepare to start a new intake from followup_task_id by reusing the latest FOLLOWUP_TASK_DRAFT prompt/reference context
 - allow POST /codex/run to continue a prepared intake_id and inject the stored read-plan / claim-boundary context into the final run prompt
 - persist EXECUTION_EVALUATION.json / EXECUTION_EVALUATION.md when a prepared task later exposes a safe result through POST /codex/result
 - persist FOLLOWUP_TASK_DRAFT.json / FOLLOWUP_TASK_DRAFT.md so a later client can turn the latest result into a new /codex/prepare prompt without guessing from scratch
@@ -208,6 +209,17 @@ curl -X POST http://127.0.0.1:8787/codex/run \
 ```
 
 这份 draft 仍然只是下一轮 `/prepare` 的输入草案，不会自动绕过 prepare gate 或直接创建新任务。
+
+如果客户端拿到了上一轮任务的 `task_id`，现在也可以直接这样发起下一轮 prepare：
+
+```bash
+curl -X POST http://127.0.0.1:8787/codex/prepare \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"followup_task_id":"task_20260616_120000_follow01","source":"web"}'
+```
+
+这条路径会读取该任务关联 intake 下最新的 `FOLLOWUP_TASK_DRAFT.json`，并把其中的 `prompt / reference_task_id / suggested_mode / read_plan context` 重新带回新的 prepare 流程。
 
 确认当前 token 身份：
 
