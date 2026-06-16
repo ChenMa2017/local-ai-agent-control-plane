@@ -404,6 +404,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("self, grokking", response)
         self.assertIn("最近任务：1 个", response)
         self.assertIn("/agent_run", response)
+        self.assertIn("/agent_intake", response)
         self.assertNotIn("Features:", response)
 
     def test_format_status_uses_command_prefix(self):
@@ -432,6 +433,47 @@ class BotHelperTests(unittest.TestCase):
 
         self.assertIn("intake_id: intake_20260604_000001_ab12cd", response)
         self.assertIn("请说明允许改动的文件范围", response)
+        self.assertIn("/agent_prepare", response)
+
+    def test_format_intake_response_shows_questions_and_artifacts(self):
+        response = bot.format_intake_response(
+            {
+                "intake_id": "intake_20260616_000001_ab12cd",
+                "intent": {"workspace": "main_codex", "status": "prepared"},
+                "questions": ["请说明允许改动的文件范围。"],
+                "contract": {"objective": "local_workspace_copy", "risk_class": "medium"},
+                "preflight": {"ok": False, "reasons": ["Task intent still has unresolved gray areas."]},
+                "ready_to_run": False,
+                "execution_evaluation": {
+                    "execution_decision": "result_ready_for_review",
+                    "recommended_next_action": "review_result",
+                },
+                "followup_task_draft": {
+                    "title": "Review the result against prepared evidence",
+                    "recommended_next_action": "review_result",
+                    "requires_prepare": True,
+                    "source_task_id": "task_123",
+                },
+                "ledger_note_draft": {
+                    "title": "Proposed ledger note for task task_123",
+                    "target_path_hint": "research/LEDGER_NOTES.md",
+                },
+                "review_proposal_draft": {
+                    "title": "Review the bounded claim before promoting the result",
+                    "review_scope": "report_only",
+                    "requires_human_review": False,
+                },
+            },
+            "agent",
+        )
+
+        self.assertIn("Intake 状态", response)
+        self.assertIn("intake_20260616_000001_ab12cd", response)
+        self.assertIn("请说明允许改动的文件范围", response)
+        self.assertIn("Evaluation:", response)
+        self.assertIn("Follow-up draft:", response)
+        self.assertIn("Ledger note draft:", response)
+        self.assertIn("Review proposal draft:", response)
         self.assertIn("/agent_prepare", response)
 
     def test_format_prepare_response_shows_evidence_decision_and_read_plan(self):

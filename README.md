@@ -235,6 +235,8 @@ Discord Adapter maps them to:
 ```text
 /agent_health
 /agent_prepare
+/agent_intake
+/agent_task
 /agent_task_page
 ```
 

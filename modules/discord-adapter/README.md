@@ -14,8 +14,10 @@ http://127.0.0.1:8787
 /agent_status
 /agent_workspaces
 /agent_prepare [prompt] [workspace] [intake_id] [answers] [reference_task_id] [followup_task_id]
+/agent_intake intake_id
 /agent_run [prompt] [workspace] [reference_task_id] [intake_id]
 /agent_task task_id
+/agent_task_page task_id page
 /agent_cancel task_id
 ```
 
@@ -248,6 +250,8 @@ If clarification is still needed, the adapter returns the generated questions pl
 `followup_task_id` is also optional on `/<prefix>_prepare`. When present, the adapter can omit `prompt` and let Agent Host seed a fresh intake from the latest `FOLLOWUP_TASK_DRAFT` attached to that finished task. Inside a bot-created task thread, calling `/<prefix>_prepare` with no prompt or intake id now falls back to that thread's latest task id as the follow-up seed.
 
 When that seeded follow-up also has post-run context such as `execution_evaluation`, `ledger_note_draft`, or `review_proposal_draft`, the adapter now surfaces a short summary in the prepare reply. This helps the user see whether they are continuing a normal review loop, a stale-claim review, or a policy-review handoff.
+
+`/<prefix>_intake intake_id:...` is the read-only way to reopen a saved intake bundle from Discord. It shows the current `status / objective / preflight / questions`, and when available it also includes `execution_evaluation`, `followup_task_draft`, `ledger_note_draft`, and `review_proposal_draft`.
 
 When Agent Host also performs metadata-first evidence retrieval, the prepare response now surfaces the retrieval `decision`, any warnings, and a short `read_plan` summary directly in Discord. This lets the user see whether the request looks like a safe-to-answer conclusion, a stale conclusion, or an auxiliary-only match before turning it into `/run`.
 

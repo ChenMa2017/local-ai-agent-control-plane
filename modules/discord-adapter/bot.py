@@ -56,7 +56,7 @@ def safe_command_prefix(value: Any) -> str:
     prefix = str(value or "agent").strip().lower().replace(" ", "_")
     if not re.match(r"^[a-z0-9_-]{1,20}$", prefix):
         raise ValueError("discord.command_prefix must be 1-20 lowercase letters, numbers, underscore, or dash")
-    for action in ("status", "health", "workspaces", "prepare", "run", "task", "task_page", "cancel"):
+    for action in ("status", "health", "workspaces", "prepare", "intake", "run", "task", "task_page", "cancel"):
         if len(slash_command_name(prefix, action)) > 32:
             raise ValueError("discord.command_prefix makes slash command names too long")
     return prefix
@@ -345,6 +345,7 @@ def format_status(
     write_enabled = bool(features.get("write_mode"))
     modes = ", ".join(str(mode) for mode in capabilities.get("modes", []) if mode) or "readonly"
     run_command = f"/{slash_command_name(command_prefix, 'run')}"
+    intake_command = f"/{slash_command_name(command_prefix, 'intake')}"
     task_command = f"/{slash_command_name(command_prefix, 'task')}"
     lines = [
         "我在线，可以接收 Codex 任务。",
@@ -356,7 +357,7 @@ def format_status(
         f"- 修改代码：{'已开启' if write_enabled else '未开启'}",
         f"- 取消/超时保护：{'可用' if features.get('cancel') and features.get('timeout') else '未完整启用'}",
         "",
-        f"你可以用 {run_command} 创建任务，或用 {task_command} 查询结果。",
+        f"你可以用 {run_command} 创建任务，用 {intake_command} 查看 prepare intake，或用 {task_command} 查询结果。",
         "",
         f"系统版本：{capabilities.get('version', 'unknown')}",
     ]
@@ -554,6 +555,54 @@ def format_prepare_response(
             "这类请求当前不应被当作正式已确认结论；请先按上面的 read plan 核对证据，或继续用 "
             f"/{slash_command_name(command_prefix, 'prepare')} 补充上下文。",
         ])
+    return "\n".join(lines).strip()
+
+
+def format_intake_response(data: dict[str, Any], command_prefix: str = "agent") -> str:
+    intake_id = str(data.get("intake_id") or "")
+    intent = data.get("intent") if isinstance(data.get("intent"), dict) else {}
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    preflight = data.get("preflight") if isinstance(data.get("preflight"), dict) else {}
+    evidence = data.get("evidence_retrieval") if isinstance(data.get("evidence_retrieval"), dict) else {}
+    questions = data.get("questions") if isinstance(data.get("questions"), list) else []
+    lines = [
+        "Intake 状态：",
+        "",
+        f"intake_id: {intake_id or '(missing)'}",
+        f"workspace: {intent.get('workspace') or contract.get('workspace') or 'unknown'}",
+        f"status: {intent.get('status') or contract.get('status') or 'unknown'}",
+        f"objective: {contract.get('objective', 'unknown')}",
+        f"risk_class: {contract.get('risk_class', 'unknown')}",
+        f"preflight: {'ok' if preflight.get('ok') else 'blocked'}",
+        f"ready_to_run: {'yes' if data.get('ready_to_run') else 'no'}",
+    ]
+    if evidence.get("required"):
+        lines.append(f"evidence: {evidence.get('decision') or 'unavailable'}")
+    if questions:
+        lines.extend(["", "还需要你补充："])
+        for idx, question in enumerate(questions[:5], start=1):
+            lines.append(f"{idx}. {sanitize_discord_text(str(question))}")
+        lines.extend([
+            "",
+            f"继续方式：再次执行 /{slash_command_name(command_prefix, 'prepare')}，带上同一个 intake_id，并把回复写进 answers。",
+        ])
+    evaluation = data.get("execution_evaluation") if isinstance(data.get("execution_evaluation"), dict) else {}
+    followup = data.get("followup_task_draft") if isinstance(data.get("followup_task_draft"), dict) else {}
+    ledger_note = data.get("ledger_note_draft") if isinstance(data.get("ledger_note_draft"), dict) else {}
+    review_proposal = data.get("review_proposal_draft") if isinstance(data.get("review_proposal_draft"), dict) else {}
+    if evaluation:
+        lines.extend(["", format_execution_evaluation(evaluation)])
+    if followup:
+        lines.extend(["", format_followup_task_draft(followup, command_prefix)])
+    if ledger_note:
+        lines.extend(["", format_ledger_note_draft(ledger_note)])
+    if review_proposal:
+        lines.extend(["", format_review_proposal_draft(review_proposal)])
+    reasons = preflight.get("reasons") if isinstance(preflight.get("reasons"), list) else []
+    if reasons:
+        lines.extend(["", "预检说明："])
+        for reason in reasons[:3]:
+            lines.append(f"- {sanitize_discord_text(str(reason))}")
     return "\n".join(lines).strip()
 
 
@@ -1399,6 +1448,21 @@ def run_bot(config: AdapterConfig) -> None:
                     await self.send_followup_text(
                         interaction,
                         format_prepare_response(data, response_workspace, config.command_prefix),
+                        ephemeral=True,
+                    )
+                except Exception as error:
+                    await self.reply_error(interaction, error)
+
+            @self.tree.command(name=slash_command_name(config.command_prefix, "intake"), description="Show saved intake state by intake_id")
+            async def agent_intake(interaction: Any, intake_id: str) -> None:
+                try:
+                    self.require_user(interaction)
+                    selected_intake_id = safe_intake_id(intake_id)
+                    await interaction.response.defer(ephemeral=True, thinking=True)
+                    data = self.agent.intake(selected_intake_id)
+                    await self.send_followup_text(
+                        interaction,
+                        format_intake_response(data, config.command_prefix),
                         ephemeral=True,
                     )
                 except Exception as error:
