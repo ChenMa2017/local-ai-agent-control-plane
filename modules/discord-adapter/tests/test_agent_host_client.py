@@ -424,6 +424,21 @@ class BotHelperTests(unittest.TestCase):
             {
                 "intake_id": "intake_20260616_000001_ab12cd",
                 "followup_task_id": "task_20260616_120000_follow01",
+                "followup_context": {
+                    "source_task_id": "task_20260616_120000_follow01",
+                    "source_intake_id": "intake_20260616_000000_prev001",
+                    "execution_evaluation": {
+                        "execution_decision": "result_ready_for_review",
+                        "recommended_next_action": "review_result",
+                    },
+                    "ledger_note_draft": {
+                        "target_path_hint": "research/LEDGER_NOTES.md",
+                    },
+                    "review_proposal_draft": {
+                        "review_scope": "report_only",
+                        "requires_human_review": False,
+                    },
+                },
                 "status": "prepared",
                 "questions": [],
                 "contract": {"objective": "report_only", "risk_class": "low"},
@@ -444,6 +459,9 @@ class BotHelperTests(unittest.TestCase):
 
         self.assertIn("evidence: stale_conclusion", response)
         self.assertIn("followup_from_task: task_20260616_120000_follow01", response)
+        self.assertIn("previous_result: result_ready_for_review -> review_result", response)
+        self.assertIn("previous_review: report_only / recommended", response)
+        self.assertIn("previous_ledger_note: ready", response)
         self.assertIn("证据提醒", response)
         self.assertIn("formal/current_best.md", response)
         self.assertIn("不应被当作正式已确认结论", response)

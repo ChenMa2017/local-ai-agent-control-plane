@@ -237,6 +237,8 @@ curl -X POST http://127.0.0.1:8787/codex/prepare \
 
 这条路径会读取该任务关联 intake 下最新的 `FOLLOWUP_TASK_DRAFT.json`，并把其中的 `prompt / reference_task_id / suggested_mode / read_plan context` 重新带回新的 prepare 流程。
 
+如果上一轮任务已经产出了 `EXECUTION_EVALUATION / LEDGER_NOTE_DRAFT / REVIEW_PROPOSAL_DRAFT`，这条 follow-up prepare 响应也会把这些 post-run context 一并带回客户端，方便 UI 直接展示“这次 follow-up 是基于怎样的结果评估继续的”。
+
 确认当前 token 身份：
 
 ```bash

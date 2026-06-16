@@ -462,6 +462,20 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(response["workspace"], "demo")
             self.assertEqual(response["followup_task_id"], "task_20260616_120000_follow01")
             self.assertEqual(response["followup_source_intake_id"], intake_id)
+            self.assertEqual(response["followup_context"]["source_task_id"], "task_20260616_120000_follow01")
+            self.assertEqual(response["followup_context"]["source_intake_id"], intake_id)
+            self.assertEqual(
+                response["followup_context"]["execution_evaluation"]["execution_decision"],
+                "result_ready_for_review",
+            )
+            self.assertEqual(
+                response["followup_context"]["review_proposal_draft"]["review_scope"],
+                "report_only",
+            )
+            self.assertEqual(
+                response["followup_context"]["ledger_note_draft"]["target_path_hint"],
+                "research/LEDGER_NOTES.md",
+            )
             self.assertEqual(response["contract"]["reference_task_id"], "task_20260616_120000_follow01")
             self.assertIn("Review the safe result", response["contract"]["prompt"])
             seeded_intent = json.loads((Path(response["artifacts_dir"]) / "INTENT_DRAFT.json").read_text())

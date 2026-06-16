@@ -478,6 +478,7 @@ def format_prepare_response(
     preflight = data.get("preflight") if isinstance(data.get("preflight"), dict) else {}
     questions = data.get("questions") if isinstance(data.get("questions"), list) else []
     evidence = data.get("evidence_retrieval") if isinstance(data.get("evidence_retrieval"), dict) else {}
+    followup_context = data.get("followup_context") if isinstance(data.get("followup_context"), dict) else {}
     lines = [
         "任务准备结果：",
         "",
@@ -490,6 +491,27 @@ def format_prepare_response(
     ]
     if followup_task_id:
         lines.append(f"followup_from_task: {followup_task_id}")
+    if followup_context:
+        execution = followup_context.get("execution_evaluation") if isinstance(followup_context.get("execution_evaluation"), dict) else {}
+        review_proposal = followup_context.get("review_proposal_draft") if isinstance(followup_context.get("review_proposal_draft"), dict) else {}
+        ledger_note = followup_context.get("ledger_note_draft") if isinstance(followup_context.get("ledger_note_draft"), dict) else {}
+        if execution:
+            lines.append(
+                "previous_result: "
+                + sanitize_discord_text(
+                    f"{execution.get('execution_decision') or 'unknown'} -> {execution.get('recommended_next_action') or 'review'}"
+                )
+            )
+        if review_proposal:
+            lines.append(
+                "previous_review: "
+                + sanitize_discord_text(
+                    f"{review_proposal.get('review_scope') or 'none'} / "
+                    + ("required" if review_proposal.get("requires_human_review") else "recommended")
+                )
+            )
+        if ledger_note:
+            lines.append("previous_ledger_note: ready")
     if evidence.get("required"):
         lines.append(f"evidence: {evidence.get('decision') or 'unavailable'}")
     if questions:

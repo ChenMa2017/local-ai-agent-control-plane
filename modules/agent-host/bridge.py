@@ -1150,11 +1150,24 @@ def load_followup_prepare_seed(config: BridgeConfig, followup_task_id: str, prin
             409,
             "followup_draft_invalid",
         )
+    root = intake_dir(config, intake_id)
+    execution_evaluation = read_json_object_if_exists(root / "EXECUTION_EVALUATION.json")
+    if execution_evaluation and str(execution_evaluation.get("task_id") or "") not in {"", followup_task_id}:
+        execution_evaluation = {}
+    ledger_note_draft = read_json_object_if_exists(root / "LEDGER_NOTE_DRAFT.json")
+    if ledger_note_draft and str(ledger_note_draft.get("source_task_id") or "") not in {"", followup_task_id}:
+        ledger_note_draft = {}
+    review_proposal_draft = read_json_object_if_exists(root / "REVIEW_PROPOSAL_DRAFT.json")
+    if review_proposal_draft and str(review_proposal_draft.get("source_task_id") or "") not in {"", followup_task_id}:
+        review_proposal_draft = {}
     return {
         "task_id": followup_task_id,
         "source_intake_id": intake_id,
         "task": task,
         "draft": draft,
+        "execution_evaluation": execution_evaluation,
+        "ledger_note_draft": ledger_note_draft,
+        "review_proposal_draft": review_proposal_draft,
     }
 
 
@@ -2781,6 +2794,26 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         "workspace": project.name,
         "followup_task_id": followup_task_id or None,
         "followup_source_intake_id": str(followup_seed.get("source_intake_id") or "") or None,
+        "followup_context": {
+            "source_task_id": followup_task_id or None,
+            "source_intake_id": str(followup_seed.get("source_intake_id") or "") or None,
+            "execution_evaluation": (
+                followup_seed.get("execution_evaluation")
+                if isinstance(followup_seed.get("execution_evaluation"), dict) and followup_seed.get("execution_evaluation")
+                else None
+            ),
+            "followup_task_draft": followup_draft or None,
+            "ledger_note_draft": (
+                followup_seed.get("ledger_note_draft")
+                if isinstance(followup_seed.get("ledger_note_draft"), dict) and followup_seed.get("ledger_note_draft")
+                else None
+            ),
+            "review_proposal_draft": (
+                followup_seed.get("review_proposal_draft")
+                if isinstance(followup_seed.get("review_proposal_draft"), dict) and followup_seed.get("review_proposal_draft")
+                else None
+            ),
+        } if followup_task_id else None,
         "status": "blocked" if risk_class == "high" else ("need_user_reply" if questions else ("blocked" if not preflight.get("ok") else "prepared")),
         "questions": questions,
         "gray_areas": gray_areas,

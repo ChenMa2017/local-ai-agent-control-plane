@@ -247,6 +247,8 @@ If clarification is still needed, the adapter returns the generated questions pl
 
 `followup_task_id` is also optional on `/<prefix>_prepare`. When present, the adapter can omit `prompt` and let Agent Host seed a fresh intake from the latest `FOLLOWUP_TASK_DRAFT` attached to that finished task. Inside a bot-created task thread, calling `/<prefix>_prepare` with no prompt or intake id now falls back to that thread's latest task id as the follow-up seed.
 
+When that seeded follow-up also has post-run context such as `execution_evaluation`, `ledger_note_draft`, or `review_proposal_draft`, the adapter now surfaces a short summary in the prepare reply. This helps the user see whether they are continuing a normal review loop, a stale-claim review, or a policy-review handoff.
+
 When Agent Host also performs metadata-first evidence retrieval, the prepare response now surfaces the retrieval `decision`, any warnings, and a short `read_plan` summary directly in Discord. This lets the user see whether the request looks like a safe-to-answer conclusion, a stale conclusion, or an auxiliary-only match before turning it into `/run`.
 
 If the request looks like a real experiment and Agent Host marks `DECISION_GATE.required=true`, keep the user in the `/prepare` loop until the missing experiment decisions are clarified. The adapter should not bypass that gate by turning the same vague request into `/run`.
