@@ -980,21 +980,33 @@ class BridgeTests(unittest.TestCase):
             self.assertTrue(response["ok"])
             self.assertEqual(response["intake_id"], intake_id)
             evaluation = response["execution_evaluation"]
+            followup = response["followup_task_draft"]
             self.assertEqual(evaluation["execution_decision"], "result_ready_for_review")
             self.assertEqual(evaluation["recommended_next_action"], "review_result")
             self.assertEqual(evaluation["evidence_retrieval_decision"], "stale_conclusion")
             self.assertIn("bounded", evaluation["warnings"][0])
+            self.assertEqual(followup["recommended_next_action"], "review_result")
+            self.assertTrue(followup["requires_prepare"])
+            self.assertEqual(followup["reference_task_id"], "task_20260616_120000_eval01")
+            self.assertIn("Review the safe result", followup["prompt"])
+            self.assertIn("formal/current_best.md", json.dumps(followup["read_plan"], ensure_ascii=False))
             self.assertEqual(repeat["execution_evaluation"]["task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(repeat["followup_task_draft"]["source_task_id"], "task_20260616_120000_eval01")
             intake_dir = bridge.intake_dir(config, intake_id)
             self.assertTrue((intake_dir / "EXECUTION_EVALUATION.json").exists())
             self.assertTrue((intake_dir / "EXECUTION_EVALUATION.md").exists())
+            self.assertTrue((intake_dir / "FOLLOWUP_TASK_DRAFT.json").exists())
+            self.assertTrue((intake_dir / "FOLLOWUP_TASK_DRAFT.md").exists())
             events = [
                 json.loads(line)
                 for line in (intake_dir / "TASK_INTAKE.events.jsonl").read_text().strip().splitlines()
             ]
             execution_events = [item for item in events if item.get("event") == "execution_evaluated"]
+            followup_events = [item for item in events if item.get("event") == "followup_task_drafted"]
             self.assertEqual(len(execution_events), 1)
             self.assertEqual(execution_events[0]["task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(len(followup_events), 1)
+            self.assertEqual(followup_events[0]["source_task_id"], "task_20260616_120000_eval01")
 
     def test_logs_pass_tail_and_max_chars(self):
         with tempfile.TemporaryDirectory() as tmp:

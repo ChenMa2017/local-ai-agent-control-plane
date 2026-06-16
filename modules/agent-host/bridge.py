@@ -1611,6 +1611,169 @@ def execution_evaluation_markdown(evaluation: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def followup_prompt_for_evaluation(evaluation: dict[str, Any], contract: dict[str, Any], evidence: dict[str, Any]) -> str:
+    task_id = str(evaluation.get("task_id") or "")
+    workspace = str(evaluation.get("workspace") or "")
+    objective = str(contract.get("objective") or evaluation.get("objective") or "report_only")
+    original_prompt = str(contract.get("prompt") or "").strip()
+    evidence_decision = str(evaluation.get("evidence_retrieval_decision") or "")
+    status = str(evaluation.get("task_status") or "")
+    next_action = str(evaluation.get("recommended_next_action") or "")
+    read_plan = evidence.get("read_plan") if isinstance(evidence.get("read_plan"), list) else []
+
+    if next_action == "review_result":
+        lines = [
+            f"Review the safe result from task {task_id} in workspace {workspace}.",
+            "Check it against the prepared evidence/read-plan before turning it into a formal conclusion.",
+        ]
+        if evidence_decision and evidence_decision != "safe_to_answer":
+            lines.append(
+                f"Evidence retrieval previously returned {evidence_decision}; keep any conclusion claim bounded until the referenced files are reviewed."
+            )
+        if original_prompt:
+            lines.append(f"Original request: {original_prompt}")
+        if read_plan:
+            refs = ", ".join(str(item.get("path") or "unknown") for item in read_plan[:3] if isinstance(item, dict))
+            if refs:
+                lines.append(f"Start with these files: {refs}.")
+        lines.append("Summarize what still looks true, what is uncertain, and whether a bounded follow-up task is needed.")
+        return " ".join(lines)
+
+    if next_action == "inspect_logs":
+        lines = [
+            f"Inspect why task {task_id} ended with status {status}.",
+            "Review the safe logs and safe result, identify the most likely failure cause, and propose the smallest bounded retry or scope reduction.",
+        ]
+        if original_prompt:
+            lines.append(f"Original request: {original_prompt}")
+        return " ".join(lines)
+
+    if next_action == "prepare_followup":
+        lines = [
+            f"Prepare a narrower follow-up for cancelled task {task_id} in workspace {workspace}.",
+            "Reuse the original objective, preserve the bounded scope, and explain what should change before rerunning.",
+        ]
+        if original_prompt:
+            lines.append(f"Original request: {original_prompt}")
+        return " ".join(lines)
+
+    if next_action == "human_review":
+        lines = [
+            f"Review the policy boundary hit by task {task_id}.",
+            "Explain which protected action or write boundary stopped the task and propose a safe next step that does not bypass review.",
+        ]
+        if original_prompt:
+            lines.append(f"Original request: {original_prompt}")
+        return " ".join(lines)
+
+    return (
+        f"Reassess task {task_id} in workspace {workspace} and decide the next safe bounded step for objective {objective}."
+    )
+
+
+def build_followup_task_draft(
+    evaluation: dict[str, Any],
+    contract: dict[str, Any],
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    next_action = str(evaluation.get("recommended_next_action") or "")
+    requires_prepare = next_action in {"review_result", "inspect_logs", "prepare_followup", "human_review"}
+    objective = str(contract.get("objective") or evaluation.get("objective") or "")
+    title_map = {
+        "review_result": "Review the result against prepared evidence",
+        "inspect_logs": "Inspect failure logs and scope a bounded retry",
+        "prepare_followup": "Prepare a narrower follow-up task",
+        "human_review": "Review the policy boundary before retrying",
+        "wait": "Wait for the current task to finish",
+    }
+    summary_map = {
+        "review_result": "Use /prepare to review the completed task against the original read plan before making a new claim.",
+        "inspect_logs": "Use /prepare to inspect logs, explain the failure mode, and decide whether a bounded retry is justified.",
+        "prepare_followup": "Use /prepare to define a narrower follow-up that preserves the original safety boundary.",
+        "human_review": "This follow-up needs a human decision before any new run should be queued.",
+        "wait": "No follow-up should be prepared yet because the task is not in a terminal state.",
+    }
+    claim_boundary = (
+        "Do not treat the previous task as a finalized formal conclusion until the referenced evidence has been reviewed."
+        if str(evaluation.get("evidence_retrieval_decision") or "") not in {"", "safe_to_answer"}
+        else "Normal bounded review rules apply; keep claims tied to cited evidence."
+    )
+    return {
+        "schema_version": 1,
+        "intake_id": evaluation.get("intake_id"),
+        "source_task_id": evaluation.get("task_id"),
+        "workspace": evaluation.get("workspace"),
+        "source_objective": objective,
+        "source_execution_decision": evaluation.get("execution_decision"),
+        "recommended_next_action": next_action,
+        "title": title_map.get(next_action, "Prepare the next bounded step"),
+        "summary": summary_map.get(next_action, "Review the latest task outcome and prepare the next safe bounded step."),
+        "requires_prepare": requires_prepare,
+        "suggested_surface": "prepare" if requires_prepare else "review",
+        "suggested_mode": str(contract.get("mode") or evaluation.get("task_mode") or "readonly"),
+        "reference_task_id": evaluation.get("task_id"),
+        "prompt": followup_prompt_for_evaluation(evaluation, contract, evidence),
+        "claim_boundary": claim_boundary,
+        "read_plan": list(evidence.get("read_plan") or []),
+        "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
+    }
+
+
+def followup_task_draft_fingerprint(draft: dict[str, Any]) -> str:
+    stable = {
+        "intake_id": draft.get("intake_id"),
+        "source_task_id": draft.get("source_task_id"),
+        "recommended_next_action": draft.get("recommended_next_action"),
+        "title": draft.get("title"),
+        "summary": draft.get("summary"),
+        "prompt": draft.get("prompt"),
+        "claim_boundary": draft.get("claim_boundary"),
+        "read_plan": draft.get("read_plan"),
+    }
+    return json.dumps(stable, ensure_ascii=False, sort_keys=True)
+
+
+def followup_task_draft_markdown(draft: dict[str, Any]) -> str:
+    lines = [
+        "# Follow-up Task Draft",
+        "",
+        f"- intake_id: {draft.get('intake_id') or 'none'}",
+        f"- source_task_id: {draft.get('source_task_id') or 'none'}",
+        f"- workspace: {draft.get('workspace') or 'none'}",
+        f"- source_objective: {draft.get('source_objective') or 'unknown'}",
+        f"- recommended_next_action: {draft.get('recommended_next_action') or 'unknown'}",
+        f"- requires_prepare: {'true' if draft.get('requires_prepare') else 'false'}",
+        "",
+        "## Title",
+        "",
+        str(draft.get("title") or "Prepare the next bounded step."),
+        "",
+        "## Summary",
+        "",
+        str(draft.get("summary") or ""),
+        "",
+        "## Prompt",
+        "",
+        str(draft.get("prompt") or ""),
+        "",
+        "## Claim Boundary",
+        "",
+        str(draft.get("claim_boundary") or ""),
+        "",
+    ]
+    read_plan = draft.get("read_plan") if isinstance(draft.get("read_plan"), list) else []
+    if read_plan:
+        lines.extend(["## Read Plan", ""])
+        for item in read_plan:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "unknown")
+            reason = str(item.get("reason") or "")
+            lines.append(f"- {path}" + (f": {reason}" if reason else ""))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def build_execution_evaluation(
     config: BridgeConfig,
     task_dir: Path,
@@ -1685,17 +1848,52 @@ def persist_execution_evaluation(config: BridgeConfig, evaluation: dict[str, Any
     return evaluation
 
 
+def persist_followup_task_draft(
+    config: BridgeConfig,
+    evaluation: dict[str, Any],
+    contract: dict[str, Any],
+    evidence: dict[str, Any],
+) -> dict[str, Any] | None:
+    intake_id = str(evaluation.get("intake_id") or "")
+    if not intake_id:
+        return None
+    draft = build_followup_task_draft(evaluation, contract, evidence)
+    root = intake_dir(config, intake_id)
+    existing = read_json_object_if_exists(root / "FOLLOWUP_TASK_DRAFT.json")
+    if existing and followup_task_draft_fingerprint(existing) == followup_task_draft_fingerprint(draft):
+        return existing
+    write_json_atomic(root / "FOLLOWUP_TASK_DRAFT.json", draft)
+    write_text_atomic(root / "FOLLOWUP_TASK_DRAFT.md", followup_task_draft_markdown(draft))
+    append_jsonl(
+        root / "TASK_INTAKE.events.jsonl",
+        {
+            "event": "followup_task_drafted",
+            "intake_id": intake_id,
+            "source_task_id": evaluation.get("task_id"),
+            "recommended_next_action": draft.get("recommended_next_action"),
+            "requires_prepare": bool(draft.get("requires_prepare")),
+            "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
+        },
+    )
+    return draft
+
+
 def maybe_attach_execution_evaluation(
     config: BridgeConfig,
     task_dir: Path,
     task: dict[str, Any],
     result_data: dict[str, Any],
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     intake_id = task_intake_id(task)
     if not intake_id:
-        return None
+        return None, None
     evaluation = build_execution_evaluation(config, task_dir, task, result_data)
-    return persist_execution_evaluation(config, evaluation)
+    evaluation = persist_execution_evaluation(config, evaluation)
+    prepare_bundle = load_task_prepare_bundle(config, task)
+    contract = prepare_bundle.get("contract") if isinstance(prepare_bundle.get("contract"), dict) else {}
+    evidence = prepare_bundle.get("evidence_retrieval") if isinstance(prepare_bundle.get("evidence_retrieval"), dict) else {}
+    draft = persist_followup_task_draft(config, evaluation, contract, evidence)
+    return evaluation, draft
 
 
 def clarification_questions(gray_areas: list[str], signals: dict[str, bool]) -> list[str]:
@@ -2387,9 +2585,11 @@ def handle_codex_query(
             raise BridgeError(f"codex-bridge returned invalid JSON: {exc}", 500) from exc
         intake_id = task_intake_id(task)
         if command == "result" and not raw_requested:
-            evaluation = maybe_attach_execution_evaluation(config, task_dir, task, rendered)
+            evaluation, followup_task_draft = maybe_attach_execution_evaluation(config, task_dir, task, rendered)
             if evaluation:
                 rendered["execution_evaluation"] = evaluation
+            if followup_task_draft:
+                rendered["followup_task_draft"] = followup_task_draft
         if intake_id:
             rendered["intake_id"] = intake_id
         rendered.update({

@@ -257,6 +257,8 @@ If the request looks like a real experiment and Agent Host marks `DECISION_GATE.
 
 When a prepared run later finishes and Agent Host returns `execution_evaluation` inside `/codex/result`, the adapter now surfaces that evaluation summary in task replies and completion notifications. Users can see whether the result is ready for review, needs log inspection, or stopped on a policy boundary without opening the intake directory by hand.
 
+If Agent Host also returns `followup_task_draft`, the adapter now shows that draft's title and recommended next action in the same reply. This keeps the user in a structured `/prepare -> /run -> /prepare` loop instead of forcing them to invent the next prompt from memory.
+
 If you reply directly to a bot-authored task message inside a bot-created task thread, the adapter treats that reply as a follow-up task request in the same thread. It tries to resolve `reference_task_id` from the replied bot message first, then falls back to the thread's latest known task. This makes the thread behave more like an email chain:
 
 ```text

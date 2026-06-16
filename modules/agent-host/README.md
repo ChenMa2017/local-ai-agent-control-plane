@@ -152,6 +152,7 @@ POST /codex/cancel
 - persist EVIDENCE_RETRIEVAL.json and READ_PLAN.md beside the intake artifacts
 - allow POST /codex/run to continue a prepared intake_id and inject the stored read-plan / claim-boundary context into the final run prompt
 - persist EXECUTION_EVALUATION.json / EXECUTION_EVALUATION.md when a prepared task later exposes a safe result through POST /codex/result
+- persist FOLLOWUP_TASK_DRAFT.json / FOLLOWUP_TASK_DRAFT.md so a later client can turn the latest result into a new /codex/prepare prompt without guessing from scratch
 - block direct execution until missing experiment decisions are clarified
 ```
 
@@ -194,6 +195,19 @@ curl -X POST http://127.0.0.1:8787/codex/run \
 ```
 
 这让 intake 目录不只记录“准备阶段”，也开始记录“执行后该如何 review / follow up”。
+
+在这之后，Agent Host 还会继续合成一份 `FOLLOWUP_TASK_DRAFT`，其中包含：
+
+```text
+- recommended_next_action
+- title / summary
+- reference_task_id
+- prompt
+- claim_boundary
+- read_plan
+```
+
+这份 draft 仍然只是下一轮 `/prepare` 的输入草案，不会自动绕过 prepare gate 或直接创建新任务。
 
 确认当前 token 身份：
 

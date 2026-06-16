@@ -562,6 +562,19 @@ def format_execution_evaluation(evaluation: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_followup_task_draft(draft: dict[str, Any]) -> str:
+    title = sanitize_discord_text(str(draft.get("title") or "Prepare the next bounded step"))
+    next_action = sanitize_discord_text(str(draft.get("recommended_next_action") or "review"))
+    lines = [
+        "Follow-up draft:",
+        f"- title: {title}",
+        f"- next: {next_action}",
+    ]
+    if draft.get("requires_prepare"):
+        lines.append("- use: /agent_prepare")
+    return "\n".join(lines)
+
+
 def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any], max_chars: int) -> str:
     status_text = str(status_data.get("text", ""))
     status = parse_status_text(status_text)
@@ -575,9 +588,12 @@ def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any
     summary = sanitize_discord_text(result_text.strip() or "(empty result)")
     title = "Task done." if status == "done" else "Task finished with policy violation."
     evaluation = result_data.get("execution_evaluation") if isinstance(result_data.get("execution_evaluation"), dict) else {}
+    followup = result_data.get("followup_task_draft") if isinstance(result_data.get("followup_task_draft"), dict) else {}
     body = [title]
     if evaluation:
         body.extend(["", format_execution_evaluation(evaluation)])
+    if followup:
+        body.extend(["", format_followup_task_draft(followup)])
     body.extend(["", "Result:", summary])
     return "\n".join(body)
 
@@ -606,6 +622,7 @@ def format_completion_message(task_id: str, status_data: dict[str, Any], result_
         title = "任务完成。" if status == "done" else "任务触碰了 protected path policy，已结束。"
         summary = sanitize_discord_text(result_text.strip() or "(empty result)")
         evaluation = result_data.get("execution_evaluation") if isinstance(result_data.get("execution_evaluation"), dict) else {}
+        followup = result_data.get("followup_task_draft") if isinstance(result_data.get("followup_task_draft"), dict) else {}
         lines = [
             "**🤖 AI 回答**",
             "",
@@ -615,6 +632,8 @@ def format_completion_message(task_id: str, status_data: dict[str, Any], result_
         ]
         if evaluation:
             lines.extend(["", format_execution_evaluation(evaluation)])
+        if followup:
+            lines.extend(["", format_followup_task_draft(followup)])
         lines.extend(["", "Result:", summary])
         return "\n".join(lines)
     short_status, _truncated = truncate_text(status_text.strip() or status, min(max_chars, 1000))

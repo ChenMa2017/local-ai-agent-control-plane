@@ -220,6 +220,7 @@ POST /codex/result-page
 - persist `EVIDENCE_RETRIEVAL.json` and `READ_PLAN.md` so later runs can reuse the same `decision / warnings / read_plan` context;
 - allow `/codex/run` to continue a prepared `intake_id`, reusing the stored contract, preflight, and read-plan context;
 - persist `EXECUTION_EVALUATION.json/.md` for prepared runs once a safe result is observed, so the intake chain records a structured post-run summary and next action;
+- persist `FOLLOWUP_TASK_DRAFT.json/.md` beside the evaluation so the system can suggest the next `/prepare` prompt without auto-running it;
 - block direct execution when experiment-defining decisions such as control-arm meaning, fairness constraints, or success criteria are still unresolved.
 
 Discord Adapter maps them to:

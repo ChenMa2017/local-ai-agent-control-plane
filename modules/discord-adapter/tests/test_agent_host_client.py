@@ -319,14 +319,21 @@ class BotHelperTests(unittest.TestCase):
                     "recommended_next_action": "review_result",
                     "warnings": ["Prepared evidence decision remains stale_conclusion; keep formal conclusion claims bounded until reviewer confirmation."],
                 },
+                "followup_task_draft": {
+                    "title": "Review the result against prepared evidence",
+                    "recommended_next_action": "review_result",
+                    "requires_prepare": True,
+                },
             },
             200,
         )
 
         self.assertIn("Evaluation:", response)
+        self.assertIn("Follow-up draft:", response)
         self.assertIn("result_ready_for_review", response)
         self.assertIn("review_result", response)
         self.assertIn("stale_conclusion", response)
+        self.assertIn("/agent_prepare", response)
 
     def test_policy_violation_task_response_uses_safe_result_summary(self):
         response = bot.format_task_response(
