@@ -224,6 +224,96 @@ class BridgeTests(unittest.TestCase):
                 )
             self.assertEqual(ctx.exception.status, 400)
 
+    def test_codex_run_can_reuse_prepared_intake_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "codex-bridge.js"
+            argv_file = root / "argv.json"
+            script.parent.mkdir()
+            script.write_text(
+                "const fs = require('fs');\n"
+                f"fs.writeFileSync({str(argv_file)!r}, JSON.stringify(process.argv.slice(2)));\n"
+                "console.log('queued task_20260616_120000_prep01')\n"
+            )
+            (root / "project_index").mkdir(parents=True)
+            self.write_watchdog_doc_search(
+                root,
+                {
+                    "query": "What is the current best candidate?",
+                    "decision": "stale_conclusion",
+                    "warnings": ["matching current conclusion is stale and should be rechecked before citation"],
+                    "read_plan": [
+                        {"path": "formal/current_best.md", "reason": "supports current conclusion: current best candidate"}
+                    ],
+                    "hits": [
+                        {"kind": "current_conclusion", "id": "current_best_candidate", "score": 6.0}
+                    ],
+                },
+            )
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "What is the current best candidate?",
+                    "source": "web",
+                },
+                config,
+                principal,
+            )
+
+            response = bridge.handle_codex_run(
+                {
+                    "workspace": "demo",
+                    "intake_id": prepared["intake_id"],
+                },
+                config,
+                principal,
+            )
+
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["task_id"], "task_20260616_120000_prep01")
+            self.assertEqual(response["intake_id"], prepared["intake_id"])
+            self.assertEqual(response["prepare_context"]["objective"], "report_only")
+            argv = json.loads(argv_file.read_text())
+            self.assertIn("--metadata", argv)
+            metadata = json.loads(argv[argv.index("--metadata") + 1])
+            self.assertEqual(metadata["intake_id"], prepared["intake_id"])
+            self.assertEqual(metadata["evidence_retrieval_decision"], "stale_conclusion")
+            prompt = argv[-1]
+            self.assertIn("Prepared intake id:", prompt)
+            self.assertIn("formal/current_best.md", prompt)
+            self.assertIn("Do not present the answer as a finalized formal conclusion", prompt)
+            intake_events = (bridge.intake_dir(config, prepared["intake_id"]) / "TASK_INTAKE.events.jsonl").read_text().strip().splitlines()
+            self.assertTrue(any(json.loads(line).get("event") == "run_queued" for line in intake_events))
+
+    def test_codex_run_rejects_non_runnable_prepared_intake(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Please fix this for me.",
+                    "source": "discord",
+                },
+                config,
+                principal,
+            )
+
+            with self.assertRaises(bridge.BridgeError) as ctx:
+                bridge.handle_codex_run(
+                    {
+                        "workspace": "demo",
+                        "intake_id": prepared["intake_id"],
+                    },
+                    config,
+                    principal,
+                )
+            self.assertEqual(ctx.exception.status, 409)
+            self.assertEqual(ctx.exception.code, "prepare_not_runnable")
+
     def test_codex_prepare_generates_intake_artifacts_for_report_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

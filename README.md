@@ -218,6 +218,7 @@ POST /codex/result-page
 - persist `DECISION_GATE.json` for expensive or scientifically ambiguous experiments;
 - consult project-local metadata-first evidence retrieval when the request asks for a current conclusion, comparison claim, or formal result;
 - persist `EVIDENCE_RETRIEVAL.json` and `READ_PLAN.md` so later runs can reuse the same `decision / warnings / read_plan` context;
+- allow `/codex/run` to continue a prepared `intake_id`, reusing the stored contract, preflight, and read-plan context;
 - block direct execution when experiment-defining decisions such as control-arm meaning, fairness constraints, or success criteria are still unresolved.
 
 Discord Adapter maps them to:

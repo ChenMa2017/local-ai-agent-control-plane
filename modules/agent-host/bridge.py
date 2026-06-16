@@ -626,6 +626,12 @@ def can_access_task(task: dict[str, Any], principal: AuthPrincipal) -> bool:
     return str(task.get("user", "")) == principal.user
 
 
+def can_access_intake(intent: dict[str, Any], principal: AuthPrincipal) -> bool:
+    if is_admin(principal):
+        return True
+    return str(intent.get("user", "")) == principal.user
+
+
 def authorize_codex_task(
     config: BridgeConfig,
     principal: AuthPrincipal,
@@ -1076,6 +1082,37 @@ def load_intake_intent(config: BridgeConfig, intake_id: str) -> dict[str, Any]:
     return data
 
 
+def load_intake_json_artifact(config: BridgeConfig, intake_id: str, filename: str) -> dict[str, Any]:
+    path = intake_dir(config, intake_id) / filename
+    if not path.exists():
+        raise BridgeError(f"intake artifact is missing: {intake_id}/{filename}", 409, "prepare_artifact_missing")
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise BridgeError(f"intake artifact is invalid: {intake_id}/{filename}: {exc}", 500) from exc
+    if not isinstance(data, dict):
+        raise BridgeError(f"intake artifact is invalid: {intake_id}/{filename}", 500)
+    return data
+
+
+def load_prepared_run_context(config: BridgeConfig, intake_id: str, principal: AuthPrincipal) -> dict[str, Any]:
+    intent = load_intake_intent(config, intake_id)
+    if not can_access_intake(intent, principal):
+        raise BridgeError(f"permission denied for intake: {intake_id}", 403, "permission_denied")
+    contract = load_intake_json_artifact(config, intake_id, "TASK_CONTRACT.json")
+    taskbox = load_intake_json_artifact(config, intake_id, "TASKBOX_DRAFT.json")
+    preflight = load_intake_json_artifact(config, intake_id, "POLICY_PREFLIGHT.json")
+    evidence = load_intake_json_artifact(config, intake_id, "EVIDENCE_RETRIEVAL.json")
+    return {
+        "intake_id": intake_id,
+        "intent": intent,
+        "contract": contract,
+        "taskbox": taskbox,
+        "preflight": preflight,
+        "evidence_retrieval": evidence,
+    }
+
+
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
@@ -1350,6 +1387,83 @@ def read_plan_markdown(evidence: dict[str, Any]) -> str:
     else:
         lines.extend(["## Read Plan", "", "- No read-plan entries were produced.", ""])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def prepared_run_summary(bundle: dict[str, Any]) -> dict[str, Any]:
+    contract = bundle.get("contract") if isinstance(bundle.get("contract"), dict) else {}
+    taskbox = bundle.get("taskbox") if isinstance(bundle.get("taskbox"), dict) else {}
+    evidence = bundle.get("evidence_retrieval") if isinstance(bundle.get("evidence_retrieval"), dict) else {}
+    return {
+        "used": True,
+        "intake_id": bundle.get("intake_id"),
+        "objective": str(contract.get("objective") or ""),
+        "workspace_mode": str(taskbox.get("workspace_mode") or ""),
+        "allowed_runner": str(taskbox.get("allowed_runner") or ""),
+        "evidence_retrieval_decision": evidence.get("decision"),
+        "read_plan": list(evidence.get("read_plan") or []),
+    }
+
+
+def prepared_run_prompt(bundle: dict[str, Any], run_note: str) -> str:
+    contract = bundle.get("contract") if isinstance(bundle.get("contract"), dict) else {}
+    taskbox = bundle.get("taskbox") if isinstance(bundle.get("taskbox"), dict) else {}
+    evidence = bundle.get("evidence_retrieval") if isinstance(bundle.get("evidence_retrieval"), dict) else {}
+    prompt = str(contract.get("prompt") or "").strip()
+    answers = str(contract.get("answers_summary") or "").strip()
+    intake_id = str(bundle.get("intake_id") or "")
+    lines = [
+        "You are executing a prepared Codex task from Agent Host.",
+        "",
+        f"Prepared intake id: {intake_id or 'unknown'}",
+        f"Prepared objective: {contract.get('objective') or 'unknown'}",
+        f"Workspace mode: {taskbox.get('workspace_mode') or 'unknown'}",
+        f"Allowed runner: {taskbox.get('allowed_runner') or 'unknown'}",
+        f"Evidence decision: {evidence.get('decision') or 'none'}",
+        "",
+        "Prepared request:",
+        prompt or "(empty)",
+        "",
+    ]
+    if answers:
+        lines.extend([
+            "Prepare answers / constraints:",
+            answers,
+            "",
+        ])
+    read_plan = evidence.get("read_plan") if isinstance(evidence.get("read_plan"), list) else []
+    if read_plan:
+        lines.append("Read these sources before making conclusion-style claims:")
+        for item in read_plan[:5]:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "unknown")
+            reason = str(item.get("reason") or "")
+            lines.append(f"- {path}" + (f": {reason}" if reason else ""))
+        lines.append("")
+    warnings = evidence.get("warnings") if isinstance(evidence.get("warnings"), list) else []
+    if warnings:
+        lines.append("Evidence warnings:")
+        for warning in warnings[:3]:
+            lines.append(f"- {warning}")
+        lines.append("")
+    if evidence.get("required") and evidence.get("decision") not in {None, "", "safe_to_answer"}:
+        lines.extend([
+            "Claim boundary:",
+            "- Do not present the answer as a finalized formal conclusion until the referenced evidence is reviewed.",
+            "- Prefer bounded analysis, verification, or reviewer-ready summaries over confident result claims.",
+            "",
+        ])
+    if run_note:
+        lines.extend([
+            "Additional run note from the user:",
+            run_note,
+            "",
+        ])
+    lines.extend([
+        "Current task:",
+        "Execute the prepared request while respecting the prepared evidence/read-plan context above.",
+    ])
+    return safe_intake_text("\n".join(lines).strip(), MAX_TASK_CHARS)
 
 
 def clarification_questions(gray_areas: list[str], signals: dict[str, bool]) -> list[str]:
@@ -1867,6 +1981,10 @@ def parse_adapter_metadata(value: str) -> dict[str, Any]:
 
 def compact_adapter_metadata(value: str) -> str:
     data = parse_adapter_metadata(value)
+    return compact_adapter_metadata_object(data)
+
+
+def compact_adapter_metadata_object(data: dict[str, Any]) -> str:
     if not data:
         return ""
     text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
@@ -1883,25 +2001,73 @@ def parse_run_receipt(output: str) -> dict[str, Any]:
 
 def handle_codex_run(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
     reject_frontend_identity(payload)
-    project = (payload.get("workspace") or payload.get("project", "")).strip()
-    prompt = payload.get("prompt", "").strip()
+    intake_id = (payload.get("intake_id") or "").strip()
+    prepared_bundle: dict[str, Any] | None = None
+    prepared_intent: dict[str, Any] = {}
+    prepared_contract: dict[str, Any] = {}
+    prepared_taskbox: dict[str, Any] = {}
+    prepared_preflight: dict[str, Any] = {}
+    prepared_summary: dict[str, Any] = {}
+    if intake_id:
+        intake_id = validate_intake_id(intake_id)
+        prepared_bundle = load_prepared_run_context(config, intake_id, principal)
+        prepared_intent = prepared_bundle["intent"]
+        prepared_contract = prepared_bundle["contract"]
+        prepared_taskbox = prepared_bundle["taskbox"]
+        prepared_preflight = prepared_bundle["preflight"]
+        prepared_summary = prepared_run_summary(prepared_bundle)
+    project = (payload.get("workspace") or payload.get("project", "")).strip() or str(prepared_intent.get("workspace") or "")
+    prompt = safe_intake_text(payload.get("prompt", "") or "", MAX_TASK_CHARS) if payload.get("prompt") else ""
+    if not project:
+        raise BridgeError("workspace is required", 400, "invalid_request")
     project_item = validate_codex_project(config, project)
-    mode = (payload.get("mode") or project_item.default_mode).strip() or project_item.default_mode
+    if prepared_intent and project != str(prepared_intent.get("workspace") or ""):
+        raise BridgeError(
+            f"workspace mismatch for intake {intake_id}: expected {prepared_intent.get('workspace')}",
+            409,
+            "prepare_workspace_mismatch",
+        )
+    prepared_mode = str(prepared_contract.get("mode") or prepared_intent.get("desired_mode") or "").strip()
+    mode = (payload.get("mode") or prepared_mode or project_item.default_mode).strip() or project_item.default_mode
+    if prepared_mode and mode != prepared_mode:
+        raise BridgeError(
+            f"mode mismatch for intake {intake_id}: expected {prepared_mode}",
+            409,
+            "prepare_mode_mismatch",
+        )
     if mode not in project_item.allowed_modes:
         allowed = ", ".join(project_item.allowed_modes)
         raise BridgeError(f"mode {mode} is not allowed for workspace {project}; allowed: {allowed}", 400, "invalid_request")
-    if not prompt:
-        raise BridgeError("prompt is required")
-    if len(prompt) > MAX_TASK_CHARS:
-        raise BridgeError(f"prompt is too long; max {MAX_TASK_CHARS} chars")
 
     source = safe_adapter_source(payload.get("source", "web"))
     idempotency_key = safe_idempotency_key(payload.get("idempotency_key", ""))
-    metadata = compact_adapter_metadata(payload.get("metadata", ""))
-    reference_task_id = (payload.get("reference_task_id") or payload.get("referenceTaskId") or "").strip()
+    metadata_obj = parse_adapter_metadata(payload.get("metadata", ""))
+    reference_task_id = (
+        payload.get("reference_task_id")
+        or payload.get("referenceTaskId")
+        or str(prepared_intent.get("reference_task_id") or "")
+    ).strip()
     if reference_task_id:
         reference_task_id = validate_task_id(reference_task_id)
         authorize_codex_task(config, principal, reference_task_id)
+    if prepared_bundle:
+        if not prepared_preflight.get("ok") or str(prepared_taskbox.get("status") or "") != "ready":
+            reason_text = "; ".join(str(item) for item in prepared_preflight.get("reasons", [])[:2])
+            required_action = str(prepared_preflight.get("required_action") or "prepare")
+            message = f"prepared intake {intake_id} is not runnable; required_action={required_action}"
+            if reason_text:
+                message += f"; reasons: {reason_text}"
+            raise BridgeError(message, 409, "prepare_not_runnable")
+        prompt = prepared_run_prompt(prepared_bundle, prompt)
+        metadata_obj.update({
+            "intake_id": intake_id,
+            "prepared_objective": prepared_summary.get("objective") or "",
+            "prepared_workspace_mode": prepared_summary.get("workspace_mode") or "",
+            "evidence_retrieval_decision": prepared_summary.get("evidence_retrieval_decision") or "",
+        })
+    elif not prompt:
+        raise BridgeError("prompt is required", 400, "invalid_request")
+    metadata = compact_adapter_metadata_object(metadata_obj)
     args = ["run", "--project", project, "--mode", mode, "--user", principal.user]
     args.extend(["--source", source])
     args.extend(["--source-user-id", payload.get("source_user_id") or principal.user])
@@ -1922,12 +2088,27 @@ def handle_codex_run(payload: dict[str, str], config: BridgeConfig, principal: A
     output = require_success(run_codex_bridge(config, args))
     task_id = parse_queued_task_id(output)
     receipt = parse_run_receipt(output)
+    if intake_id:
+        append_jsonl(
+            intake_dir(config, intake_id) / "TASK_INTAKE.events.jsonl",
+            {
+                "event": "run_queued",
+                "intake_id": intake_id,
+                "task_id": task_id,
+                "workspace": project_item.name,
+                "mode": mode,
+                "user": principal.user,
+                "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
+            },
+        )
     return {
         "ok": True,
         "task_id": task_id,
         "status": "queued",
         "mode": mode,
         "source": source,
+        "intake_id": intake_id or None,
+        "prepare_context": prepared_summary or None,
         "reference_task_id": reference_task_id or None,
         "idempotent_replay": receipt["idempotent_replay"],
         "output": output,

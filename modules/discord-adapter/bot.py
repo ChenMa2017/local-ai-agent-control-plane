@@ -437,8 +437,15 @@ def format_run_response(
         f"工作区：{workspace}",
         f"模式：{mode}",
     ]
+    if data.get("intake_id"):
+        lines.append(f"intake_id: {data.get('intake_id')}")
     if reference_task_id:
         lines.append(f"参考任务：{reference_task_id}")
+    prepare_context = data.get("prepare_context") if isinstance(data.get("prepare_context"), dict) else {}
+    if prepare_context.get("used"):
+        lines.append(f"prepare: {prepare_context.get('objective') or 'unknown'}")
+        if prepare_context.get("evidence_retrieval_decision"):
+            lines.append(f"evidence: {prepare_context.get('evidence_retrieval_decision')}")
     lines.append(f"状态：{data.get('status', 'queued')}")
     if mode == "workspace-write":
         lines.append("写入审计：任务完成后会报告 changed files / protected path 状态。")
@@ -1232,10 +1239,21 @@ def run_bot(config: AdapterConfig) -> None:
                     await self.reply_error(interaction, error)
 
             @self.tree.command(name=slash_command_name(config.command_prefix, "run"), description="Create a Codex task")
-            async def agent_run(interaction: Any, prompt: str, workspace: str = "", reference_task_id: str = "") -> None:
+            async def agent_run(
+                interaction: Any,
+                prompt: str = "",
+                workspace: str = "",
+                reference_task_id: str = "",
+                intake_id: str = "",
+            ) -> None:
                 try:
                     self.require_user(interaction)
-                    clean_prompt = ensure_prompt_allowed(prompt, config.max_prompt_chars)
+                    clean_prompt = str(prompt or "").strip()
+                    if clean_prompt and len(clean_prompt) > config.max_prompt_chars:
+                        raise ValueError(f"prompt is too long; max {config.max_prompt_chars} chars")
+                    selected_intake_id = safe_intake_id(intake_id)
+                    if not clean_prompt and not selected_intake_id:
+                        raise ValueError("prompt is required unless you are continuing an existing intake_id")
                     selected_workspace = str(workspace or config.default_workspace or "").strip()
                     if not selected_workspace:
                         raise ValueError("workspace is required; configure discord.default_workspace or pass workspace explicitly")
@@ -1253,6 +1271,7 @@ def run_bot(config: AdapterConfig) -> None:
                         source_message_id=str(interaction.id),
                         idempotency_key=f"discord:{interaction.id}",
                         guild_id=str(interaction.guild_id or ""),
+                        intake_id=selected_intake_id or None,
                         reference_task_id=selected_reference_task_id or None,
                         command_name=f"/{slash_command_name(config.command_prefix, 'run')}",
                     )

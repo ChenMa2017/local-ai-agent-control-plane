@@ -122,19 +122,19 @@ class AgentHostClient:
         self,
         *,
         workspace: str,
-        prompt: str,
+        prompt: str = "",
         mode: str | None = None,
         source_user_id: str,
         source_channel_id: str,
         source_message_id: str,
         idempotency_key: str,
         guild_id: str | None = None,
+        intake_id: str | None = None,
         reference_task_id: str | None = None,
         command_name: str = "/agent_run",
     ) -> dict[str, Any]:
         payload = {
             "workspace": workspace,
-            "prompt": prompt,
             "source": "discord",
             "source_user_id": source_user_id,
             "source_channel_id": source_channel_id,
@@ -145,8 +145,12 @@ class AgentHostClient:
                 "command": command_name,
             },
         }
+        if prompt:
+            payload["prompt"] = prompt
         if mode:
             payload["mode"] = mode
+        if intake_id:
+            payload["intake_id"] = intake_id
         if reference_task_id:
             payload["reference_task_id"] = reference_task_id
         return self._request(

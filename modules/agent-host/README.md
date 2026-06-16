@@ -150,6 +150,7 @@ POST /codex/cancel
 - persist DECISION_GATE.json for experiment-like requests
 - consult project-local evidence retrieval for current-conclusion / comparison / formal-result style requests when a workspace exposes project_index + watchdog_doc_search.py
 - persist EVIDENCE_RETRIEVAL.json and READ_PLAN.md beside the intake artifacts
+- allow POST /codex/run to continue a prepared intake_id and inject the stored read-plan / claim-boundary context into the final run prompt
 - block direct execution until missing experiment decisions are clarified
 ```
 
@@ -169,6 +170,17 @@ curl -X POST http://127.0.0.1:8787/codex/run \
   -H 'Content-Type: application/json' \
   -d '{"workspace":"main_codex","prompt":"请只回复 OK","dry_run":"false","source":"web","idempotency_key":"web-demo-001","metadata":{"client":"web-ui"}}'
 ```
+
+如果已经通过 `/codex/prepare` 生成了 `intake_id`，则 `/codex/run` 也可以直接复用那份 intake，而不是重新粘贴同一个 prompt：
+
+```bash
+curl -X POST http://127.0.0.1:8787/codex/run \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"workspace":"main_codex","intake_id":"intake_20260616_000001_ab12cd","source":"web","idempotency_key":"web-demo-prepare-001","metadata":{"client":"web-ui"}}'
+```
+
+这条路径会先检查 `TASK_CONTRACT / TASKBOX_DRAFT / POLICY_PREFLIGHT` 是否仍然可运行；如果 intake 还在 clarification 或 decision gate 状态，Agent Host 会返回 `409 prepare_not_runnable`，而不会静默绕过 prepare gate。
 
 确认当前 token 身份：
 

@@ -14,7 +14,7 @@ http://127.0.0.1:8787
 /agent_status
 /agent_workspaces
 /agent_prepare prompt [workspace] [intake_id] [answers] [reference_task_id]
-/agent_run workspace prompt
+/agent_run [prompt] [workspace] [reference_task_id] [intake_id]
 /agent_task task_id
 /agent_cancel task_id
 ```
@@ -250,6 +250,8 @@ When Agent Host also performs metadata-first evidence retrieval, the prepare res
 If the request looks like a real experiment and Agent Host marks `DECISION_GATE.required=true`, keep the user in the `/prepare` loop until the missing experiment decisions are clarified. The adapter should not bypass that gate by turning the same vague request into `/run`.
 
 `/<prefix>_run workspace:grokking prompt:"..."` becomes a Codex task request. With the default prefix this is `/agent_run`. If `workspace` is omitted, the adapter uses `discord.default_workspace`, usually `main_codex`. The adapter asks the Agent Host for the selected workspace's default mode and sends that mode with the run request. For example, a normal project may be `readonly`, while the main coordination workspace can be `workspace-write`.
+
+`intake_id` is also optional on `/<prefix>_run`. When present, the adapter can omit `prompt` and let Agent Host continue the prepared intake directly. That path reuses the stored `TASK_CONTRACT`, `POLICY_PREFLIGHT`, and evidence `READ_PLAN`, so a user can go from `/prepare` to `/run` without retyping the original request.
 
 `reference_task_id` is optional. When provided, the new task becomes a follow-up to a previous task. The Agent Host checks that the authenticated user can access the referenced task, and `codex-bridge` injects only the previous task's safe result excerpt into the new Codex prompt. If `/agent_run` is used inside a bot-created task thread and `reference_task_id` is omitted, the adapter uses that thread's current task as the reference.
 

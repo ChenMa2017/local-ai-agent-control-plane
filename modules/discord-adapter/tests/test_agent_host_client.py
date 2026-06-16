@@ -160,6 +160,27 @@ class ClientTests(unittest.TestCase):
         self.assertNotIn("user", payload)
         self.assertNotIn("internal_user", payload)
 
+    def test_run_can_continue_a_prepared_intake_without_prompt(self):
+        response = self.client().run(
+            workspace="self",
+            prompt="",
+            mode="readonly",
+            source_user_id="discord-user",
+            source_channel_id="discord-channel",
+            source_message_id="interaction-prepare-run",
+            idempotency_key="discord:interaction-prepare-run",
+            guild_id="guild-1",
+            intake_id="intake_20260616_000001_ab12cd",
+        )
+
+        self.assertEqual(response["task_id"], "task_123")
+        record = RecordingHandler.records[-1]
+        self.assertEqual(record["path"], "/codex/run")
+        payload = record["payload"]
+        self.assertEqual(payload["workspace"], "self")
+        self.assertEqual(payload["intake_id"], "intake_20260616_000001_ab12cd")
+        self.assertNotIn("prompt", payload)
+
     def test_prepare_constructs_agent_host_request(self):
         response = self.client().prepare(
             workspace="self",
@@ -364,6 +385,29 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("证据提醒", response)
         self.assertIn("formal/current_best.md", response)
         self.assertIn("不应被当作正式已确认结论", response)
+
+    def test_format_run_response_shows_prepare_context(self):
+        response = bot.format_run_response(
+            {
+                "task_id": "task_123",
+                "status": "queued",
+                "mode": "readonly",
+                "intake_id": "intake_20260616_000001_ab12cd",
+                "prepare_context": {
+                    "used": True,
+                    "objective": "report_only",
+                    "evidence_retrieval_decision": "stale_conclusion",
+                },
+            },
+            "main_codex",
+            "",
+            "",
+            "agent",
+        )
+
+        self.assertIn("intake_id: intake_20260616_000001_ab12cd", response)
+        self.assertIn("prepare: report_only", response)
+        self.assertIn("evidence: stale_conclusion", response)
 
     def test_format_health_summary_is_safe(self):
         response = bot.format_health_summary(
