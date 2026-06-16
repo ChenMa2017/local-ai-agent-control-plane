@@ -209,6 +209,7 @@ Agent Host also provides safe operational read APIs:
 GET /health/summary
 POST /codex/prepare
 POST /codex/result-page
+GET /codex/intake
 ```
 
 For long safe outputs, `POST /codex/result-page` page 1 now carries the same prepared-result metadata as `POST /codex/result`, so clients can still see evaluation / follow-up / review summaries while paging through the body.
@@ -220,6 +221,7 @@ For long safe outputs, `POST /codex/result-page` page 1 now carries the same pre
 - persist `DECISION_GATE.json` for expensive or scientifically ambiguous experiments;
 - consult project-local metadata-first evidence retrieval when the request asks for a current conclusion, comparison claim, or formal result;
 - persist `EVIDENCE_RETRIEVAL.json` and `READ_PLAN.md` so later runs can reuse the same `decision / warnings / read_plan` context;
+- expose `/codex/intake` so clients can reload a prepared intake bundle and any later execution artifacts by `intake_id`;
 - allow `/codex/run` to continue a prepared `intake_id`, reusing the stored contract, preflight, and read-plan context;
 - persist `EXECUTION_EVALUATION.json/.md` for prepared runs once a safe result is observed, so the intake chain records a structured post-run summary and next action;
 - persist `FOLLOWUP_TASK_DRAFT.json/.md` beside the evaluation so the system can suggest the next `/prepare` prompt without auto-running it;

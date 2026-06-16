@@ -118,6 +118,9 @@ class AgentHostClient:
     def tasks(self, limit: int = 5) -> dict[str, Any]:
         return self._request("GET", "/codex/tasks", query={"limit": limit})
 
+    def intake(self, intake_id: str) -> dict[str, Any]:
+        return self._request("POST", "/codex/intake", {"intake_id": intake_id})
+
     def run(
         self,
         *,

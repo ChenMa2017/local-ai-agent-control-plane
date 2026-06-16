@@ -813,7 +813,7 @@ def handle_codex_capabilities(config: BridgeConfig, _principal: AuthPrincipal) -
     return {
         "ok": True,
         "version": AGENT_HOST_VERSION,
-        "commands": ["prepare", "run", "tasks", "status", "result", "logs", "cancel"],
+        "commands": ["prepare", "intake", "run", "tasks", "status", "result", "logs", "cancel"],
         "features": {
             "auth": True,
             "safe_output": True,
@@ -823,6 +823,7 @@ def handle_codex_capabilities(config: BridgeConfig, _principal: AuthPrincipal) -
             "resume": False,
             "write_mode": write_mode,
             "prepare_intake": True,
+            "intake_lookup": True,
             "raw_admin_access": True,
         },
         "modes": modes,
@@ -1116,6 +1117,38 @@ def load_intake_json_artifact(config: BridgeConfig, intake_id: str, filename: st
     return data
 
 
+def load_optional_intake_json_artifact(config: BridgeConfig, intake_id: str, filename: str) -> dict[str, Any] | None:
+    path = intake_dir(config, intake_id) / filename
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise BridgeError(f"intake artifact is invalid: {intake_id}/{filename}: {exc}", 500) from exc
+    if not isinstance(data, dict):
+        raise BridgeError(f"intake artifact is invalid: {intake_id}/{filename}", 500)
+    return data
+
+
+def load_intake_questions(config: BridgeConfig, intake_id: str) -> list[str]:
+    questions_data = load_optional_intake_json_artifact(config, intake_id, "QUESTIONS.json")
+    if isinstance(questions_data, dict):
+        items = questions_data.get("items")
+        if isinstance(items, list):
+            return [str(item) for item in items if str(item or "").strip()]
+    path = intake_dir(config, intake_id) / "QUESTIONS.md"
+    if not path.exists():
+        return []
+    questions: list[str] = []
+    for raw_line in path.read_text().splitlines():
+        match = re.match(r"^\s*\d+\.\s+(.*)$", raw_line)
+        if match:
+            text = match.group(1).strip()
+            if text:
+                questions.append(text)
+    return questions
+
+
 def load_prepared_run_context(config: BridgeConfig, intake_id: str, principal: AuthPrincipal) -> dict[str, Any]:
     intent = load_intake_intent(config, intake_id)
     if not can_access_intake(intent, principal):
@@ -1131,6 +1164,44 @@ def load_prepared_run_context(config: BridgeConfig, intake_id: str, principal: A
         "taskbox": taskbox,
         "preflight": preflight,
         "evidence_retrieval": evidence,
+    }
+
+
+def handle_codex_intake(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
+    reject_frontend_identity(payload)
+    intake_id = validate_intake_id((payload.get("intake_id") or "").strip())
+    bundle = load_prepared_run_context(config, intake_id, principal)
+    root = intake_dir(config, intake_id)
+    gray_areas_artifact = load_optional_intake_json_artifact(config, intake_id, "GRAY_AREAS.json") or {}
+    decision_gate = load_optional_intake_json_artifact(config, intake_id, "DECISION_GATE.json") or {}
+    questions = load_intake_questions(config, intake_id)
+    execution_evaluation = load_optional_intake_json_artifact(config, intake_id, "EXECUTION_EVALUATION.json")
+    followup_task_draft = load_optional_intake_json_artifact(config, intake_id, "FOLLOWUP_TASK_DRAFT.json")
+    ledger_note_draft = load_optional_intake_json_artifact(config, intake_id, "LEDGER_NOTE_DRAFT.json")
+    review_proposal_draft = load_optional_intake_json_artifact(config, intake_id, "REVIEW_PROPOSAL_DRAFT.json")
+    event_count = 0
+    events_path = root / "TASK_INTAKE.events.jsonl"
+    if events_path.exists():
+        for raw_line in events_path.read_text().splitlines():
+            if raw_line.strip():
+                event_count += 1
+    return {
+        "ok": True,
+        "intake_id": intake_id,
+        "intent": bundle["intent"],
+        "gray_areas": list(gray_areas_artifact.get("items") or []),
+        "questions": questions,
+        "contract": bundle["contract"],
+        "taskbox": bundle["taskbox"],
+        "preflight": bundle["preflight"],
+        "decision_gate": decision_gate,
+        "evidence_retrieval": bundle["evidence_retrieval"],
+        "execution_evaluation": execution_evaluation,
+        "followup_task_draft": followup_task_draft,
+        "ledger_note_draft": ledger_note_draft,
+        "review_proposal_draft": review_proposal_draft,
+        "event_count": event_count,
+        "ready_to_run": bool(bundle["preflight"].get("ok") and not questions),
     }
 
 
@@ -2632,6 +2703,7 @@ def persist_intake_artifacts(
     root = intake_dir(config, intake_id)
     write_json_atomic(root / "INTENT_DRAFT.json", intent)
     write_json_atomic(root / "GRAY_AREAS.json", {"schema_version": 1, "intake_id": intake_id, "items": gray_areas})
+    write_json_atomic(root / "QUESTIONS.json", {"schema_version": 1, "intake_id": intake_id, "items": questions})
     write_text_atomic(
         root / "QUESTIONS.md",
         "\n".join(
@@ -4143,6 +4215,16 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_api_error(exc)
             return
+        if parsed.path == "/codex/intake":
+            payload = {key: values[-1] if values else "" for key, values in parse_qs(parsed.query).items()}
+            try:
+                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
+                self.send_json(200, handle_codex_intake(payload, self.config, principal))
+            except BridgeError as exc:
+                self.send_api_error(exc)
+            except Exception as exc:
+                self.send_api_error(exc)
+            return
         if parsed.path == "/codex/result-page":
             payload = {key: values[-1] if values else "" for key, values in parse_qs(parsed.query).items()}
             try:
@@ -4175,6 +4257,7 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
         if route not in {
             "/mattermost/watchdog",
             "/codex/prepare",
+            "/codex/intake",
             "/codex/run",
             "/codex/status",
             "/codex/result",
@@ -4203,6 +4286,10 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
                 principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
                 if route == "/codex/prepare":
                     response = handle_codex_prepare(payload, self.config, principal)
+                    self.send_json(200, response)
+                    return
+                if route == "/codex/intake":
+                    response = handle_codex_intake(payload, self.config, principal)
                     self.send_json(200, response)
                     return
                 if route == "/codex/run":

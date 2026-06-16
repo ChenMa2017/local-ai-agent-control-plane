@@ -341,6 +341,7 @@ class BridgeTests(unittest.TestCase):
             self.assertTrue((intake_dir / "TASKBOX_DRAFT.json").exists())
             self.assertTrue((intake_dir / "POLICY_PREFLIGHT.json").exists())
             self.assertTrue((intake_dir / "DECISION_GATE.json").exists())
+            self.assertTrue((intake_dir / "QUESTIONS.json").exists())
 
     def test_codex_prepare_requests_clarification_for_write_without_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -481,6 +482,106 @@ class BridgeTests(unittest.TestCase):
             seeded_intent = json.loads((Path(response["artifacts_dir"]) / "INTENT_DRAFT.json").read_text())
             self.assertEqual(seeded_intent["followup_task_id"], "task_20260616_120000_follow01")
             self.assertEqual(seeded_intent["followup_source_intake_id"], intake_id)
+
+    def test_codex_intake_returns_prepare_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Please fix this for me.",
+                    "source": "web",
+                },
+                config,
+                principal,
+            )
+
+            response = bridge.handle_codex_intake(
+                {"intake_id": prepared["intake_id"]},
+                config,
+                principal,
+            )
+
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["intake_id"], prepared["intake_id"])
+            self.assertEqual(response["intent"]["workspace"], "demo")
+            self.assertEqual(response["contract"]["objective"], "local_workspace_copy")
+            self.assertEqual(response["preflight"]["required_action"], "reply_to_questions")
+            self.assertGreaterEqual(len(response["questions"]), 1)
+            self.assertFalse(response["ready_to_run"])
+            self.assertIsNone(response["execution_evaluation"])
+            self.assertIsNone(response["followup_task_draft"])
+
+    def test_codex_intake_returns_post_run_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "codex-bridge.js"
+            script.parent.mkdir()
+            script.write_text(
+                "console.log(JSON.stringify({task_id:'task_20260616_120000_intake01', text:'safe result summary', raw:false, redacted:true, truncated:false}));\n"
+            )
+            (root / "project_index").mkdir(parents=True)
+            self.write_watchdog_doc_search(
+                root,
+                {
+                    "query": "What is the current best candidate?",
+                    "decision": "stale_conclusion",
+                    "warnings": ["matching current conclusion is stale and should be rechecked before citation"],
+                    "read_plan": [
+                        {"path": "formal/current_best.md", "reason": "supports current conclusion: current best candidate"}
+                    ],
+                    "hits": [
+                        {"kind": "current_conclusion", "id": "current_best_candidate", "score": 6.0}
+                    ],
+                },
+            )
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "What is the current best candidate?",
+                    "source": "web",
+                },
+                config,
+                principal,
+            )
+            intake_id = prepared["intake_id"]
+            self.write_codex_task(
+                root,
+                "task_20260616_120000_intake01",
+                user="chenma",
+                status="done",
+                extra={
+                    "adapter_metadata": {
+                        "intake_id": intake_id,
+                        "prepared_objective": "report_only",
+                        "evidence_retrieval_decision": "stale_conclusion",
+                    }
+                },
+            )
+            bridge.handle_codex_query(
+                {"task_id": "task_20260616_120000_intake01"},
+                config,
+                "result",
+                principal,
+            )
+
+            response = bridge.handle_codex_intake(
+                {"intake_id": intake_id},
+                config,
+                principal,
+            )
+
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["execution_evaluation"]["execution_decision"], "result_ready_for_review")
+            self.assertEqual(response["followup_task_draft"]["source_task_id"], "task_20260616_120000_intake01")
+            self.assertEqual(response["ledger_note_draft"]["target_path_hint"], "research/LEDGER_NOTES.md")
+            self.assertEqual(response["review_proposal_draft"]["review_scope"], "report_only")
+            self.assertGreaterEqual(response["event_count"], 3)
+            self.assertTrue(response["ready_to_run"])
 
     def test_codex_prepare_rejects_intake_and_followup_task_together(self):
         with tempfile.TemporaryDirectory() as tmp:

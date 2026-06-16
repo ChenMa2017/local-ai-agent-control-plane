@@ -92,6 +92,14 @@ class RecordingHandler(BaseHTTPRequestHandler):
             })
         elif item["path"] == "/codex/run":
             self.send_payload(200, {"ok": True, "task_id": "task_123", "status": "queued"})
+        elif item["path"] == "/codex/intake":
+            self.send_payload(200, {
+                "ok": True,
+                "intake_id": "intake_20260616_000001_ab12cd",
+                "questions": ["请说明允许改动的文件范围。"],
+                "contract": {"objective": "local_workspace_copy"},
+                "preflight": {"ok": False},
+            })
         elif item["path"] == "/codex/status":
             self.send_payload(200, {"ok": True, "text": "task_id: task_123\nstatus: done\n"})
         elif item["path"] == "/codex/result":
@@ -255,6 +263,13 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(record["payload"]["task_id"], "task_123")
         self.assertEqual(record["payload"]["page"], "2")
         self.assertEqual(record["payload"]["page_size"], "1200")
+
+    def test_intake_constructs_request(self):
+        response = self.client().intake("intake_20260616_000001_ab12cd")
+        self.assertEqual(response["intake_id"], "intake_20260616_000001_ab12cd")
+        record = RecordingHandler.records[-1]
+        self.assertEqual(record["path"], "/codex/intake")
+        self.assertEqual(record["payload"]["intake_id"], "intake_20260616_000001_ab12cd")
 
 
 class BotHelperTests(unittest.TestCase):

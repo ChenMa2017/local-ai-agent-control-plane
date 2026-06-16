@@ -133,6 +133,7 @@ GET  /whoami
 GET  /codex/workspaces
 GET  /codex/capabilities
 GET  /codex/tasks
+GET  /codex/intake
 POST /codex/run
 POST /codex/stream-token
 GET  /codex/events
@@ -150,6 +151,7 @@ POST /codex/cancel
 - persist DECISION_GATE.json for experiment-like requests
 - consult project-local evidence retrieval for current-conclusion / comparison / formal-result style requests when a workspace exposes project_index + watchdog_doc_search.py
 - persist EVIDENCE_RETRIEVAL.json and READ_PLAN.md beside the intake artifacts
+- expose GET/POST `/codex/intake` so clients can reload the current intake bundle and any post-run drafts by `intake_id`
 - allow POST /codex/prepare to start a new intake from followup_task_id by reusing the latest FOLLOWUP_TASK_DRAFT prompt/reference context
 - allow POST /codex/run to continue a prepared intake_id and inject the stored read-plan / claim-boundary context into the final run prompt
 - persist EXECUTION_EVALUATION.json / EXECUTION_EVALUATION.md when a prepared task later exposes a safe result through POST /codex/result
@@ -186,6 +188,24 @@ curl -X POST http://127.0.0.1:8787/codex/run \
 ```
 
 这条路径会先检查 `TASK_CONTRACT / TASKBOX_DRAFT / POLICY_PREFLIGHT` 是否仍然可运行；如果 intake 还在 clarification 或 decision gate 状态，Agent Host 会返回 `409 prepare_not_runnable`，而不会静默绕过 prepare gate。
+
+如果只是想把当前 intake 状态重新取回给 Web / UI / adapter，而不是马上执行，也可以直接读取：
+
+```bash
+curl http://127.0.0.1:8787/codex/intake?intake_id=intake_20260616_000001_ab12cd \
+  -H 'Authorization: Bearer <token>'
+```
+
+或者：
+
+```bash
+curl -X POST http://127.0.0.1:8787/codex/intake \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"intake_id":"intake_20260616_000001_ab12cd"}'
+```
+
+返回会包含 `intent / questions / contract / taskbox / preflight / evidence_retrieval`，以及在可用时附带 `execution_evaluation / followup_task_draft / ledger_note_draft / review_proposal_draft`。
 
 当一个带 `intake_id` 的任务后续通过 `POST /codex/result` 暴露 safe result 时，Agent Host 还会把这次执行整理成结构化 `EXECUTION_EVALUATION`：
 
