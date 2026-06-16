@@ -154,6 +154,8 @@ POST /codex/cancel
 - allow POST /codex/run to continue a prepared intake_id and inject the stored read-plan / claim-boundary context into the final run prompt
 - persist EXECUTION_EVALUATION.json / EXECUTION_EVALUATION.md when a prepared task later exposes a safe result through POST /codex/result
 - persist FOLLOWUP_TASK_DRAFT.json / FOLLOWUP_TASK_DRAFT.md so a later client can turn the latest result into a new /codex/prepare prompt without guessing from scratch
+- persist LEDGER_NOTE_DRAFT.json / LEDGER_NOTE_DRAFT.md as an intake-local proposed fragment for `research/LEDGER_NOTES.md` without touching the real project ledger
+- persist REVIEW_PROPOSAL_DRAFT.json / REVIEW_PROPOSAL_DRAFT.md when the result still needs a bounded claim review or human policy review
 - block direct execution until missing experiment decisions are clarified
 ```
 
@@ -209,6 +211,20 @@ curl -X POST http://127.0.0.1:8787/codex/run \
 ```
 
 这份 draft 仍然只是下一轮 `/prepare` 的输入草案，不会自动绕过 prepare gate 或直接创建新任务。
+
+同一次 `POST /codex/result` 还会额外整理两类 intake 内部草稿：
+
+```text
+- LEDGER_NOTE_DRAFT
+  把 safe result、warning、claim boundary、read plan 组织成一份“建议写入 research/LEDGER_NOTES.md 的草稿”
+  这只是 intake 本地草稿，不会直接修改项目里的正式 ledger / notes
+
+- REVIEW_PROPOSAL_DRAFT
+  当结果仍然需要 bounded-claim review，或任务因为 policy boundary 停止时，
+  生成一份 reviewer-ready proposal，说明 review scope、reason、stop condition、safe result excerpt
+```
+
+这样 intake 目录现在不仅记录“怎么准备”和“执行后建议做什么”，还会记录“如果要交给人接手，应该把什么材料一起交出去”。
 
 如果客户端拿到了上一轮任务的 `task_id`，现在也可以直接这样发起下一轮 prepare：
 

@@ -261,6 +261,8 @@ When a prepared run later finishes and Agent Host returns `execution_evaluation`
 
 If Agent Host also returns `followup_task_draft`, the adapter now shows that draft's title and recommended next action in the same reply. This keeps the user in a structured `/prepare -> /run -> /prepare` loop instead of forcing them to invent the next prompt from memory.
 
+If Agent Host also returns `ledger_note_draft` or `review_proposal_draft`, the adapter surfaces those summaries in the same task reply / completion message. This gives the user an immediate hint that the result is ready to be turned into a bounded ledger note, or that a human/policy review bundle should be handled before any retry or claim promotion.
+
 If you reply directly to a bot-authored task message inside a bot-created task thread, the adapter treats that reply as a follow-up task request in the same thread. It tries to resolve `reference_task_id` from the replied bot message first, then falls back to the thread's latest known task. This makes the thread behave more like an email chain:
 
 ```text

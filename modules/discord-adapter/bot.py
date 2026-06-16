@@ -594,6 +594,29 @@ def format_followup_task_draft(draft: dict[str, Any], command_prefix: str = "age
     return "\n".join(lines)
 
 
+def format_ledger_note_draft(draft: dict[str, Any]) -> str:
+    title = sanitize_discord_text(str(draft.get("title") or "Proposed ledger note"))
+    target = sanitize_discord_text(str(draft.get("target_path_hint") or "research/LEDGER_NOTES.md"))
+    lines = [
+        "Ledger note draft:",
+        f"- title: {title}",
+        f"- target: {target}",
+    ]
+    return "\n".join(lines)
+
+
+def format_review_proposal_draft(draft: dict[str, Any]) -> str:
+    title = sanitize_discord_text(str(draft.get("title") or "Review proposal"))
+    scope = sanitize_discord_text(str(draft.get("review_scope") or "none"))
+    lines = [
+        "Review proposal draft:",
+        f"- title: {title}",
+        f"- scope: {scope}",
+        f"- required: {'yes' if draft.get('requires_human_review') else 'recommended'}",
+    ]
+    return "\n".join(lines)
+
+
 def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any], max_chars: int, command_prefix: str = "agent") -> str:
     status_text = str(status_data.get("text", ""))
     status = parse_status_text(status_text)
@@ -608,11 +631,17 @@ def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any
     title = "Task done." if status == "done" else "Task finished with policy violation."
     evaluation = result_data.get("execution_evaluation") if isinstance(result_data.get("execution_evaluation"), dict) else {}
     followup = result_data.get("followup_task_draft") if isinstance(result_data.get("followup_task_draft"), dict) else {}
+    ledger_note = result_data.get("ledger_note_draft") if isinstance(result_data.get("ledger_note_draft"), dict) else {}
+    review_proposal = result_data.get("review_proposal_draft") if isinstance(result_data.get("review_proposal_draft"), dict) else {}
     body = [title]
     if evaluation:
         body.extend(["", format_execution_evaluation(evaluation)])
     if followup:
         body.extend(["", format_followup_task_draft(followup, command_prefix)])
+    if ledger_note:
+        body.extend(["", format_ledger_note_draft(ledger_note)])
+    if review_proposal:
+        body.extend(["", format_review_proposal_draft(review_proposal)])
     body.extend(["", "Result:", summary])
     return "\n".join(body)
 
@@ -648,6 +677,8 @@ def format_completion_message(
         summary = sanitize_discord_text(result_text.strip() or "(empty result)")
         evaluation = result_data.get("execution_evaluation") if isinstance(result_data.get("execution_evaluation"), dict) else {}
         followup = result_data.get("followup_task_draft") if isinstance(result_data.get("followup_task_draft"), dict) else {}
+        ledger_note = result_data.get("ledger_note_draft") if isinstance(result_data.get("ledger_note_draft"), dict) else {}
+        review_proposal = result_data.get("review_proposal_draft") if isinstance(result_data.get("review_proposal_draft"), dict) else {}
         lines = [
             "**🤖 AI 回答**",
             "",
@@ -659,6 +690,10 @@ def format_completion_message(
             lines.extend(["", format_execution_evaluation(evaluation)])
         if followup:
             lines.extend(["", format_followup_task_draft(followup, command_prefix)])
+        if ledger_note:
+            lines.extend(["", format_ledger_note_draft(ledger_note)])
+        if review_proposal:
+            lines.extend(["", format_review_proposal_draft(review_proposal)])
         lines.extend(["", "Result:", summary])
         return "\n".join(lines)
     short_status, _truncated = truncate_text(status_text.strip() or status, min(max_chars, 1000))

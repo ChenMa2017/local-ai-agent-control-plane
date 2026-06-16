@@ -344,16 +344,29 @@ class BotHelperTests(unittest.TestCase):
                     "requires_prepare": True,
                     "source_task_id": "task_123",
                 },
+                "ledger_note_draft": {
+                    "title": "Proposed ledger note for task task_123",
+                    "target_path_hint": "research/LEDGER_NOTES.md",
+                },
+                "review_proposal_draft": {
+                    "title": "Review the bounded claim before promoting the result",
+                    "review_scope": "report_only",
+                    "requires_human_review": False,
+                },
             },
             200,
         )
 
         self.assertIn("Evaluation:", response)
         self.assertIn("Follow-up draft:", response)
+        self.assertIn("Ledger note draft:", response)
+        self.assertIn("Review proposal draft:", response)
         self.assertIn("result_ready_for_review", response)
         self.assertIn("review_result", response)
         self.assertIn("stale_conclusion", response)
         self.assertIn("/agent_prepare followup_task_id:task_123", response)
+        self.assertIn("research/LEDGER_NOTES.md", response)
+        self.assertIn("report_only", response)
 
     def test_policy_violation_task_response_uses_safe_result_summary(self):
         response = bot.format_task_response(
@@ -687,6 +700,39 @@ class BotHelperTests(unittest.TestCase):
 
         self.assertIn("protected path policy", response)
         self.assertIn("Write Summary", response)
+
+    def test_completion_message_shows_review_artifacts(self):
+        response = bot.format_completion_message(
+            "task_123",
+            {"text": "task_id: task_123\nstatus: done\n"},
+            {
+                "text": "safe result summary",
+                "execution_evaluation": {
+                    "execution_decision": "result_ready_for_review",
+                    "recommended_next_action": "review_result",
+                },
+                "followup_task_draft": {
+                    "title": "Review the result against prepared evidence",
+                    "recommended_next_action": "review_result",
+                    "requires_prepare": True,
+                    "source_task_id": "task_123",
+                },
+                "ledger_note_draft": {
+                    "title": "Proposed ledger note for task task_123",
+                    "target_path_hint": "research/LEDGER_NOTES.md",
+                },
+                "review_proposal_draft": {
+                    "title": "Review the bounded claim before promoting the result",
+                    "review_scope": "report_only",
+                    "requires_human_review": False,
+                },
+            },
+            500,
+        )
+
+        self.assertIn("Ledger note draft:", response)
+        self.assertIn("Review proposal draft:", response)
+        self.assertIn("recommended", response)
 
     def test_thread_intro_sanitizes_prompt_secrets(self):
         response = bot.format_thread_intro(

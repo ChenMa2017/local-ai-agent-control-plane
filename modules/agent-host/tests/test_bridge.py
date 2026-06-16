@@ -1072,6 +1072,8 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(response["intake_id"], intake_id)
             evaluation = response["execution_evaluation"]
             followup = response["followup_task_draft"]
+            ledger_note = response["ledger_note_draft"]
+            review_proposal = response["review_proposal_draft"]
             self.assertEqual(evaluation["execution_decision"], "result_ready_for_review")
             self.assertEqual(evaluation["recommended_next_action"], "review_result")
             self.assertEqual(evaluation["evidence_retrieval_decision"], "stale_conclusion")
@@ -1081,23 +1083,99 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(followup["reference_task_id"], "task_20260616_120000_eval01")
             self.assertIn("Review the safe result", followup["prompt"])
             self.assertIn("formal/current_best.md", json.dumps(followup["read_plan"], ensure_ascii=False))
+            self.assertEqual(ledger_note["target_path_hint"], "research/LEDGER_NOTES.md")
+            self.assertIn("Proposed Ledger Fragment", ledger_note["note_markdown"])
+            self.assertEqual(review_proposal["review_scope"], "report_only")
+            self.assertFalse(review_proposal["requires_human_review"])
+            self.assertIn("stale_conclusion", review_proposal["summary"])
             self.assertEqual(repeat["execution_evaluation"]["task_id"], "task_20260616_120000_eval01")
             self.assertEqual(repeat["followup_task_draft"]["source_task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(repeat["ledger_note_draft"]["source_task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(repeat["review_proposal_draft"]["source_task_id"], "task_20260616_120000_eval01")
             intake_dir = bridge.intake_dir(config, intake_id)
             self.assertTrue((intake_dir / "EXECUTION_EVALUATION.json").exists())
             self.assertTrue((intake_dir / "EXECUTION_EVALUATION.md").exists())
             self.assertTrue((intake_dir / "FOLLOWUP_TASK_DRAFT.json").exists())
             self.assertTrue((intake_dir / "FOLLOWUP_TASK_DRAFT.md").exists())
+            self.assertTrue((intake_dir / "LEDGER_NOTE_DRAFT.json").exists())
+            self.assertTrue((intake_dir / "LEDGER_NOTE_DRAFT.md").exists())
+            self.assertTrue((intake_dir / "REVIEW_PROPOSAL_DRAFT.json").exists())
+            self.assertTrue((intake_dir / "REVIEW_PROPOSAL_DRAFT.md").exists())
             events = [
                 json.loads(line)
                 for line in (intake_dir / "TASK_INTAKE.events.jsonl").read_text().strip().splitlines()
             ]
             execution_events = [item for item in events if item.get("event") == "execution_evaluated"]
             followup_events = [item for item in events if item.get("event") == "followup_task_drafted"]
+            ledger_events = [item for item in events if item.get("event") == "ledger_note_drafted"]
+            review_events = [item for item in events if item.get("event") == "review_proposal_drafted"]
             self.assertEqual(len(execution_events), 1)
             self.assertEqual(execution_events[0]["task_id"], "task_20260616_120000_eval01")
             self.assertEqual(len(followup_events), 1)
             self.assertEqual(followup_events[0]["source_task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(len(ledger_events), 1)
+            self.assertEqual(ledger_events[0]["source_task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(len(review_events), 1)
+            self.assertEqual(review_events[0]["review_scope"], "report_only")
+
+    def test_result_persists_policy_review_proposal_for_prepared_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "codex-bridge.js"
+            script.parent.mkdir()
+            script.write_text(
+                "console.log(JSON.stringify({task_id:'task_20260616_120000_policy01', text:'Write Summary:\\nprotected_path_violation: true', raw:false, redacted:true, truncated:false}));\n"
+            )
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Please update the shared production file.",
+                    "source": "web",
+                },
+                config,
+                principal,
+            )
+            intake_id = prepared["intake_id"]
+            self.write_codex_task(
+                root,
+                "task_20260616_120000_policy01",
+                user="chenma",
+                status="policy_violation",
+                extra={
+                    "adapter_metadata": {
+                        "intake_id": intake_id,
+                        "prepared_objective": "local_workspace_copy",
+                    },
+                    "write_audit_path": str(root / ".codex-bridge" / "tasks" / "task_20260616_120000_policy01" / "write_audit.json"),
+                    "changed_files_count": 1,
+                    "protected_path_violation": True,
+                },
+            )
+
+            response = bridge.handle_codex_query(
+                {"task_id": "task_20260616_120000_policy01"},
+                config,
+                "result",
+                principal,
+            )
+
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["intake_id"], intake_id)
+            evaluation = response["execution_evaluation"]
+            followup = response["followup_task_draft"]
+            ledger_note = response["ledger_note_draft"]
+            review_proposal = response["review_proposal_draft"]
+            self.assertEqual(evaluation["execution_decision"], "policy_violation")
+            self.assertEqual(evaluation["recommended_next_action"], "human_review")
+            self.assertTrue(evaluation["write_audit"]["protected_path_violation"])
+            self.assertEqual(followup["recommended_next_action"], "human_review")
+            self.assertIn("human reviews the policy boundary", followup["claim_boundary"])
+            self.assertIn("Write Summary", ledger_note["note_markdown"])
+            self.assertTrue(review_proposal["requires_human_review"])
+            self.assertEqual(review_proposal["review_scope"], "unsafe_operation")
+            self.assertIn("policy boundary", review_proposal["proposal_markdown"])
 
     def test_logs_pass_tail_and_max_chars(self):
         with tempfile.TemporaryDirectory() as tmp:
