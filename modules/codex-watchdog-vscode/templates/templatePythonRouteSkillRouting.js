@@ -56,6 +56,70 @@ def research_gate_applicable(capability):
         "bounded_training_canary",
     }
 
+def research_program_task_type(capability):
+    return {
+        "local_workspace_copy": "bounded_execution",
+        "local_profile_authoring": "experiment_design",
+        "local_queue_draft_authoring": "experiment_design",
+        "bounded_cpu_eval": "bounded_execution",
+        "bounded_gpu_probe": "bounded_execution",
+        "bounded_training_canary": "bounded_execution",
+        "queue_enqueue": "bounded_execution",
+    }.get(capability, "")
+
+def task_research_program_assessment(task, task_box, route_canonical=None, research_program=None):
+    capability = classify_task_capability(task)
+    task_type = research_program_task_type(capability)
+    assessment = {
+        "task_type": task_type,
+        "project_area": task_contract_value(task, task_box, "project_area"),
+        "repair_fields": [],
+        "violations": [],
+    }
+    if not task_type:
+        return assessment
+
+    if research_program is None:
+        research_program = load_research_program(ROOT)
+    if not isinstance(research_program, dict) or not research_program:
+        assessment["violations"].append("research/RESEARCH_PROGRAM.json is missing or unreadable")
+        return assessment
+    if research_program.get("schema_version") != "research_program.v0.1":
+        assessment["violations"].append("research/RESEARCH_PROGRAM.json schema_version must be research_program.v0.1")
+        return assessment
+
+    domain = research_program.get("domain") if isinstance(research_program.get("domain"), dict) else {}
+    autonomy = research_program.get("autonomy_policy") if isinstance(research_program.get("autonomy_policy"), dict) else {}
+
+    allowed_task_types = set(normalize_string_list(autonomy.get("allowed_task_types")))
+    forbidden_task_types = set(normalize_string_list(autonomy.get("forbidden_task_types")))
+    if allowed_task_types and task_type not in allowed_task_types:
+        assessment["violations"].append(
+            f"RESEARCH_PROGRAM autonomy_policy.allowed_task_types does not allow task_type={task_type}"
+        )
+    if task_type in forbidden_task_types:
+        assessment["violations"].append(
+            f"RESEARCH_PROGRAM autonomy_policy.forbidden_task_types forbids task_type={task_type}"
+        )
+
+    allowed_project_areas = set(normalize_string_list(domain.get("allowed_project_areas")))
+    forbidden_project_areas = set(normalize_string_list(domain.get("forbidden_project_areas")))
+    project_area = assessment["project_area"]
+    if allowed_project_areas or forbidden_project_areas:
+        if not project_area:
+            assessment["repair_fields"].append("project_area")
+        else:
+            if allowed_project_areas and project_area not in allowed_project_areas:
+                assessment["violations"].append(
+                    f"project_area={project_area} is outside RESEARCH_PROGRAM domain.allowed_project_areas"
+                )
+            if project_area in forbidden_project_areas:
+                assessment["violations"].append(
+                    f"project_area={project_area} is forbidden by RESEARCH_PROGRAM domain.forbidden_project_areas"
+                )
+
+    return assessment
+
 def task_research_gate_gaps(task, task_box, route_canonical=None):
     capability = classify_task_capability(task)
     policy = research_gate_policy(task_box)
@@ -173,13 +237,16 @@ def load_exact_profile_draft(route_canonical):
         return {}
     return data if isinstance(data, dict) else {}
 
-def exact_profile_followup_allowed(task, task_box, route_canonical):
+def exact_profile_followup_allowed(task, task_box, route_canonical, research_program=None):
     capability = classify_task_capability(task)
     if capability not in {"bounded_cpu_eval", "local_workspace_copy"}:
         return False, ""
     if infer_experiment_gate_status(route_canonical, task_box) == "blocked":
         return False, ""
     if task_research_gate_gaps(task, task_box, route_canonical):
+        return False, ""
+    assessment = task_research_program_assessment(task, task_box, route_canonical, research_program)
+    if assessment.get("repair_fields") or assessment.get("violations"):
         return False, ""
 
     profile = load_exact_profile_draft(route_canonical)
@@ -237,13 +304,16 @@ def exact_profile_followup_allowed(task, task_box, route_canonical):
         return False, ""
     return True, "Autonomous route allows one bounded local workspace follow-up because the exact profile already defines workspace root, write paths, budget, timeout, and expected outputs."
 
-def conditional_queue_enqueue_allowed(task, task_box, route_canonical):
+def conditional_queue_enqueue_allowed(task, task_box, route_canonical, research_program=None):
     if classify_task_capability(task) != "queue_enqueue":
         return False, ""
     policy = task_box.get("queue_policy") if isinstance(task_box, dict) else {}
     if not isinstance(policy, dict) or policy.get("allow_conditional_enqueue") is not True:
         return False, ""
     if task_research_gate_gaps(task, task_box, route_canonical):
+        return False, ""
+    assessment = task_research_program_assessment(task, task_box, route_canonical, research_program)
+    if assessment.get("repair_fields") or assessment.get("violations"):
         return False, ""
 
     queue_draft = load_exact_queue_draft(route_canonical)
@@ -489,6 +559,7 @@ def route():
     state = load_json(ROOT / "agent" / "STATE.json", {})
     task_box = load_task_box(ROOT)
     route_canonical = load_route_canonical(ROOT)
+    research_program = load_research_program(ROOT)
     next_task_draft = load_next_task_draft(ROOT)
     progress = load_json(ROOT / "agent" / "PROGRESS_STATE.json", {})
     run_state = load_json(ROOT / "agent" / "RUN_STATE.json", {})
@@ -606,6 +677,37 @@ def route():
                 "route_locked": True,
                 "task_id": task.get("task_id")
             }
+        research_program_repairs = []
+        research_program_violations = []
+        for task in pending:
+            assessment = task_research_program_assessment(task, task_box, route_canonical, research_program)
+            if assessment.get("violations"):
+                research_program_violations.append((task, assessment))
+            elif assessment.get("repair_fields"):
+                research_program_repairs.append((task, assessment))
+        if research_program_violations:
+            task, assessment = research_program_violations[0]
+            return {
+                "primary_skill": "watchdog-orchestrator",
+                "reason": f"{len(pending)} pending task(s) exist in {pending_source}; selected task violates the RESEARCH_PROGRAM boundary: {'; '.join(assessment.get('violations', []))}. Align TASK_BOX or research/RESEARCH_PROGRAM.json before executing the bounded step.",
+                "stop_condition": "Repair one RESEARCH_PROGRAM/task alignment issue locally, refresh compact state, and stop.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True,
+                "task_id": task.get("task_id")
+            }
+        if research_program_repairs:
+            task, assessment = research_program_repairs[0]
+            repair_fields = sorted(set(assessment.get("repair_fields", [])))
+            return {
+                "primary_skill": "watchdog-orchestrator",
+                "reason": f"{len(pending)} pending task(s) exist in {pending_source}; selected task is missing RESEARCH_PROGRAM alignment fields: {', '.join(repair_fields)}. Repair TASK_BOX/task metadata locally before executing the bounded step.",
+                "stop_condition": "Add the missing RESEARCH_PROGRAM alignment fields to the structured task contract, refresh compact state, and stop.",
+                "permission_guardian_required": False,
+                "permission_guardian_result": "not_required",
+                "route_locked": True,
+                "task_id": task.get("task_id")
+            }
         report_only_pending = [t for t in pending if task_is_report_only(t)]
         if report_only_pending:
             task = report_only_pending[0]
@@ -634,7 +736,7 @@ def route():
             for task in pending:
                 capability = classify_task_capability(task)
                 if capability == "queue_enqueue":
-                    queue_allowed, queue_reason = conditional_queue_enqueue_allowed(task, task_box, route_canonical)
+                    queue_allowed, queue_reason = conditional_queue_enqueue_allowed(task, task_box, route_canonical, research_program)
                     if queue_allowed:
                         return {
                             "primary_skill": "watchdog-orchestrator",
@@ -669,7 +771,7 @@ def route():
                             "task_id": task.get("task_id")
                         }
                 if capability in {"bounded_cpu_eval", "local_workspace_copy"}:
-                    profile_allowed, profile_reason = exact_profile_followup_allowed(task, task_box, route_canonical)
+                    profile_allowed, profile_reason = exact_profile_followup_allowed(task, task_box, route_canonical, research_program)
                     if profile_allowed:
                         return {
                             "primary_skill": "watchdog-orchestrator",

@@ -52,6 +52,11 @@ try:
     route_canonical = json.loads(route_canonical_path.read_text()) if route_canonical_path.exists() else {}
 except Exception:
     route_canonical = {}
+research_program_path = Path("research/RESEARCH_PROGRAM.json")
+try:
+    research_program = json.loads(research_program_path.read_text()) if research_program_path.exists() else {}
+except Exception:
+    research_program = {}
 
 def atomic_write_text(path, text):
     target = Path(path)
@@ -75,6 +80,33 @@ def int_env(name, fallback=0):
     except Exception:
         return fallback
     return value if value >= 0 else fallback
+
+def normalized_string_list(value):
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item or "").strip()]
+
+def summarize_research_program(program):
+    if not isinstance(program, dict):
+        return {
+            "program_id": "none",
+            "domain_name": "none",
+            "autonomy_mode": "unknown",
+            "allowed_project_areas": [],
+            "baseline_required": False,
+        }
+    domain = program.get("domain") if isinstance(program.get("domain"), dict) else {}
+    autonomy = program.get("autonomy_policy") if isinstance(program.get("autonomy_policy"), dict) else {}
+    baseline = program.get("baseline_policy") if isinstance(program.get("baseline_policy"), dict) else {}
+    return {
+        "program_id": str(program.get("program_id") or "none"),
+        "domain_name": str(domain.get("name") or "none"),
+        "autonomy_mode": str(autonomy.get("mode") or "unknown"),
+        "allowed_project_areas": normalized_string_list(domain.get("allowed_project_areas")),
+        "baseline_required": baseline.get("required") is True,
+    }
+
+research_program_info = summarize_research_program(research_program)
 
 def clean_object(value):
     return value if isinstance(value, dict) else {}

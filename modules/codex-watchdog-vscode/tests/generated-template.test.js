@@ -230,6 +230,14 @@ async function main() {
   assert.strictEqual(initialResearchProgram.schema_version, "research_program.v0.1");
   assert.strictEqual(initialResearchProgram.autonomy_policy.mode, "domain_bounded");
   assert.strictEqual(initialResearchProgram.evidence_policy.require_primary_evidence_for_confirmed_claims, true);
+  run(path.join(projectRoot, "agent", "bin", "collect_status.sh"), [], {
+    cwd: projectRoot
+  });
+  const promptSnapshot = run(path.join(projectRoot, "agent", "bin", "make_prompt.sh"), [], {
+    cwd: projectRoot
+  });
+  assert.match(promptSnapshot, /BEGIN RESEARCH PROGRAM/);
+  assert.match(promptSnapshot, /replace_with_project_program_id/);
   const initialTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
   assert.ok(initialTaskBox.project_question);
   assert.ok(initialTaskBox.decision_relevance);
@@ -1022,6 +1030,78 @@ async function main() {
   assert.strictEqual(route.task_id, "bounded_cpu_missing_research_contract");
   assert.match(route.reason, /autonomous mode allows one bounded bounded_cpu_eval step/i);
 
+  writeJson(projectRoot, "research/RESEARCH_PROGRAM.json", {
+    ...initialResearchProgram,
+    domain: {
+      ...initialResearchProgram.domain,
+      allowed_project_areas: ["model_selection"],
+      forbidden_project_areas: [],
+      out_of_scope_requests: []
+    }
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "bounded_cpu_missing_research_contract");
+  assert.match(route.reason, /missing RESEARCH_PROGRAM alignment fields: project_area/i);
+  assert.match(route.stop_condition, /RESEARCH_PROGRAM alignment fields/i);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "research-gate-box",
+    route_id: "route-research-gate",
+    route_epoch: "route-research-gate-001",
+    project_question: "Does the current CPU probe reduce uncertainty about the next route decision?",
+    decision_relevance: "A positive result decides whether the route can proceed to the next bounded follow-up.",
+    project_area: "model_selection",
+    claim_scope: "bounded_cpu_diagnostic",
+    forbidden_conclusions: ["Do not treat this CPU probe as a project-level superiority claim."],
+    diagnosis_target: "carrier behavior",
+    fair_comparability: {
+      same_family_or_not: "same_family",
+      same_budget_or_not: "same_budget",
+      same_training_contract_or_not: "same_training_contract",
+      same_eval_contract_or_not: "same_eval_contract"
+    },
+    value_of_information: {
+      expected_information_gain: "medium",
+      decision_change_if_positive: "Proceed to the next bounded follow-up.",
+      decision_change_if_negative: "Pause this branch and re-evaluate the route.",
+      cheaper_alternative_exists: false
+    },
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: [
+      {
+        task_id: "bounded_cpu_missing_research_contract",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Run one bounded CPU probe for the new route."
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "bounded_cpu_missing_research_contract");
+  assert.match(route.reason, /autonomous mode allows one bounded bounded_cpu_eval step/i);
+  writeJson(projectRoot, "research/RESEARCH_PROGRAM.json", initialResearchProgram);
+
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,
     task_box_id: "queue-enqueue-box",
@@ -1442,6 +1522,9 @@ async function main() {
   assert.strictEqual(queueRunState.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
   assert.strictEqual(queueRunState.required_successor_exactness, "queue_exact");
   assert.strictEqual(queueRunState.successor_materialization_status, "queue_exact");
+  assert.strictEqual(queueRunState.research_program_id, "replace_with_project_program_id");
+  assert.strictEqual(queueRunState.research_domain, "replace_with_domain_name");
+  assert.strictEqual(queueRunState.research_autonomy_mode, "domain_bounded");
   const nextActionText = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
   assert.match(nextActionText, /Exact next task: stage06_g1_followup/);
   assert.match(nextActionText, /Exact profile path: agent\/task_profiles\/stage06_g1_followup\.json/);
@@ -1449,14 +1532,18 @@ async function main() {
   assert.match(nextActionText, /Required successor exactness: queue_exact/);
   assert.match(nextActionText, /Successor materialization status: queue_exact/);
   assert.match(nextActionText, /Exact object path: agent\/queue\/drafts\/stage06_g1_followup\.json/);
+  assert.match(nextActionText, /Research program: replace_with_project_program_id/);
   const currentStateText = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
   assert.match(currentStateText, /Route ID: route-new/);
   assert.match(currentStateText, /Secondary skills: research-comparability/);
   assert.match(currentStateText, /Exact queue draft path: agent\/queue\/drafts\/stage06_g1_followup\.json/);
   assert.match(currentStateText, /Required successor exactness: queue_exact/);
   assert.match(currentStateText, /Exact next object: agent\/queue\/drafts\/stage06_g1_followup\.json/);
+  assert.match(currentStateText, /Research program: replace_with_project_program_id/);
+  assert.match(currentStateText, /Research autonomy mode: domain_bounded/);
   const evidenceLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
   const latestLedgerEntry = JSON.parse(evidenceLedgerLines[evidenceLedgerLines.length - 1]);
+  assert.ok(latestLedgerEntry.input_paths.includes("research/RESEARCH_PROGRAM.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/status/NEXT_TASK_DRAFT.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/task_profiles/stage06_g1_followup.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/queue/drafts/stage06_g1_followup.json"));
@@ -1464,6 +1551,7 @@ async function main() {
   assert.strictEqual(latestLedgerEntry.claim_scope, null);
   assert.strictEqual(latestLedgerEntry.successor_contract_generated, true);
   assert.strictEqual(latestLedgerEntry.exact_next_object_path, "agent/queue/drafts/stage06_g1_followup.json");
+  assert.strictEqual(latestLedgerEntry.research_program_id, "replace_with_project_program_id");
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
     schema_version: 1,

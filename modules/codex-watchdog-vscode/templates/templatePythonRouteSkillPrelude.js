@@ -34,6 +34,10 @@ def load_route_canonical(root=ROOT):
     data = load_json(root / "agent" / "ROUTE_CANONICAL.json", {})
     return data if isinstance(data, dict) else {}
 
+def load_research_program(root=ROOT):
+    data = load_json(root / "research" / "RESEARCH_PROGRAM.json", {})
+    return data if isinstance(data, dict) else {}
+
 def load_next_task_draft(root=ROOT):
     data = load_json(root / "agent" / "status" / "NEXT_TASK_DRAFT.json", {})
     return data if isinstance(data, dict) else {}

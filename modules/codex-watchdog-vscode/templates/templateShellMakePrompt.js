@@ -14,6 +14,13 @@ echo "---- BEGIN CURRENT SNAPSHOT ----"
 cat agent/status/current.md
 echo
 echo "---- END CURRENT SNAPSHOT ----"
+if [ -f research/RESEARCH_PROGRAM.json ]; then
+  echo
+  echo "---- BEGIN RESEARCH PROGRAM ----"
+  cat research/RESEARCH_PROGRAM.json
+  echo
+  echo "---- END RESEARCH PROGRAM ----"
+fi
 `;
 
 module.exports = {

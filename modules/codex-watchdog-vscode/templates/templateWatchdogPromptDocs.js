@@ -28,6 +28,7 @@ You are being awakened by a timer. Treat this as a fresh handoff. Do not assume 
 - project_index/experiment_index.jsonl
 - project_index/current_conclusions.json
 - project_index/golden_queries.json
+- research/RESEARCH_PROGRAM.json
 - agent/RUNTIME_STATE.md
 - agent/MORNING_BRIEF.md
 - agent/SKILL_ROUTER.md
@@ -85,6 +86,7 @@ Your job:
 7. Before you answer a current-conclusion, current-best-candidate, comparison, replacement, or formal-result question, run \`python3 agent/bin/watchdog_doc_search.py --project-root . --query "<question>" --json\` and follow its \`decision\`, \`warnings\`, and \`read_plan\`.
 8. If \`watchdog_doc_search.py\` returns any decision other than \`safe_to_answer\`, do not pretend the project has a formal settled conclusion. Report the uncertainty and cite the exact warning.
 9. Use metadata-first retrieval. Read the index first, then only open the specific source files named in the \`read_plan\` unless you need extra bounded verification.
+- Before you expand a bounded research step, queue successor, local profile package, or conclusion-bearing recommendation, read \`research/RESEARCH_PROGRAM.json\` and keep the action inside its declared domain, autonomy mode, and project-area boundary. If the task contract and research program disagree, repair the structured task metadata or stop with a clear blocker instead of improvising.
 10. In autonomous mode, do not stop just because a stale marker exists. Continue with one bounded local action when TASK_BOX/ROUTE_CANONICAL say requires_review=false and the work stays inside the allowed local boundary.
 11. A workspace-write coding probe is allowed only when all of these are true: agent/workspace_write_policy.json exists, is valid JSON, sets enabled to true, lists exact relative writable paths and exact allowed commands; agent/SAFETY.md documents the same probe; agent/PLAN.md, agent/TODO.md, or agent/TASK_BOX.json requests the probe; and the project is an isolated demo or explicitly approved workspace. If any condition is missing, create a review-required proposal instead of writing files.
 12. If an explicit workspace-write coding probe is active, edit only the allowlisted paths, run only the allowlisted commands, and summarize every command and file change in the final structured output.
