@@ -239,9 +239,13 @@ TASK_CONTRACT
 TASKBOX_DRAFT
 POLICY_PREFLIGHT
 DECISION_GATE
+EVIDENCE_RETRIEVAL
+READ_PLAN
 ```
 
 If clarification is still needed, the adapter returns the generated questions plus an `intake_id`. A later `/<prefix>_prepare` call can continue the same intake by sending that `intake_id` with `answers`.
+
+When Agent Host also performs metadata-first evidence retrieval, the prepare response now surfaces the retrieval `decision`, any warnings, and a short `read_plan` summary directly in Discord. This lets the user see whether the request looks like a safe-to-answer conclusion, a stale conclusion, or an auxiliary-only match before turning it into `/run`.
 
 If the request looks like a real experiment and Agent Host marks `DECISION_GATE.required=true`, keep the user in the `/prepare` loop until the missing experiment decisions are clarified. The adapter should not bypass that gate by turning the same vague request into `/run`.
 

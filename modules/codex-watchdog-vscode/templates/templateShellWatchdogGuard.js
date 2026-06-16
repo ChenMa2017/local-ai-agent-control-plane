@@ -288,6 +288,7 @@ PY
 
 validate_runtime() {
   python3 agent/bin/validate_runtime.py
+  python3 agent/bin/validate_watchdog_index.py --project-root .
   validate_generated_manifest
 }
 

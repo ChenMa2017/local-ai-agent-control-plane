@@ -98,6 +98,17 @@ class BridgeTests(unittest.TestCase):
         (task_dir / "bridge.log").write_text("log")
         return task_dir
 
+    def write_watchdog_doc_search(self, root: Path, payload: dict) -> Path:
+        script = root / "agent" / "bin" / "watchdog_doc_search.py"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            f"print(json.dumps({json.dumps(payload, ensure_ascii=False)}))\n"
+        )
+        script.chmod(0o755)
+        return script
+
     def test_task_writes_inbox_json_without_executing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -318,6 +329,68 @@ class BridgeTests(unittest.TestCase):
             gate = json.loads((intake_dir / "DECISION_GATE.json").read_text())
             self.assertTrue(gate["required"])
             self.assertGreaterEqual(len(gate["unresolved_items"]), 1)
+
+    def test_codex_prepare_includes_evidence_retrieval_when_project_index_is_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "project_index").mkdir(parents=True)
+            self.write_watchdog_doc_search(
+                root,
+                {
+                    "query": "What is the current best candidate?",
+                    "decision": "safe_to_answer",
+                    "warnings": [],
+                    "read_plan": [
+                        {"path": "formal/current_best.md", "reason": "active primary conclusion"}
+                    ],
+                    "hits": [
+                        {"kind": "current_conclusion", "id": "current_best_candidate", "score": 6.0}
+                    ],
+                },
+            )
+            config = self.make_config(root)
+            response = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "What is the current best candidate?",
+                    "source": "web",
+                },
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+
+            self.assertTrue(response["evidence_retrieval"]["required"])
+            self.assertTrue(response["evidence_retrieval"]["available"])
+            self.assertTrue(response["evidence_retrieval"]["consulted"])
+            self.assertEqual(response["evidence_retrieval"]["decision"], "safe_to_answer")
+            self.assertEqual(response["contract"]["evidence_retrieval"]["decision"], "safe_to_answer")
+            self.assertEqual(response["taskbox"]["evidence_retrieval"]["decision"], "safe_to_answer")
+            self.assertEqual(response["preflight"]["evidence_retrieval_decision"], "safe_to_answer")
+            intake_dir = Path(response["artifacts_dir"])
+            self.assertTrue((intake_dir / "EVIDENCE_RETRIEVAL.json").exists())
+            self.assertTrue((intake_dir / "READ_PLAN.md").exists())
+
+    def test_codex_prepare_reports_missing_evidence_tool_when_index_is_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "project_index").mkdir(parents=True)
+            config = self.make_config(root)
+            response = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Please compare the current best candidate against the baseline.",
+                    "source": "web",
+                },
+                config,
+                bridge.AuthPrincipal(user="chenma", role="admin"),
+            )
+
+            self.assertTrue(response["evidence_retrieval"]["required"])
+            self.assertTrue(response["evidence_retrieval"]["available"])
+            self.assertFalse(response["evidence_retrieval"]["consulted"])
+            self.assertIsNone(response["evidence_retrieval"]["decision"])
+            self.assertIn("missing", response["evidence_retrieval"]["reason"])
+            self.assertTrue(any("Evidence retrieval was expected" in reason for reason in response["preflight"]["reasons"]))
 
     def test_codex_prepare_requests_decision_gate_for_bounded_gpu_probe(self):
         with tempfile.TemporaryDirectory() as tmp:

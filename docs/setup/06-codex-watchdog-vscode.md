@@ -94,6 +94,9 @@ The generated runtime also uses these compact route/state artifacts:
 agent/TASK_BOX.json
 agent/ROUTE_CANONICAL.json
 agent/EVIDENCE_LEDGER.jsonl
+project_index/document_index.jsonl
+project_index/experiment_index.jsonl
+project_index/current_conclusions.json
 agent/status/NEXT_TASK_DRAFT.json
 agent/status/SKILL_ROUTE.json
 ```
@@ -118,9 +121,11 @@ Run this inside a watchdog project after bootstrap or refresh:
 
 ```bash
 ./agent/bin/watchdog validate
+./agent/bin/watchdog evidence-validate
+./agent/bin/watchdog evidence-search --query "current conclusion" --json
 ```
 
-It validates runtime JSON and checks generated file hashes. If generated scripts drift from the recorded template hashes, refresh generated watcher files before relying on the watchdog.
+`watchdog validate` now validates runtime JSON, the local evidence index under `project_index/`, and generated file hashes. Use `evidence-search` when the agent needs a metadata-first read plan before it opens large project files.
 
 Preferred bootstrap flow in the VSCode control panel:
 

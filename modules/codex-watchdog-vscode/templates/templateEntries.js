@@ -29,6 +29,10 @@ function bootstrapScaffoldEntries(templates) {
     ["agent/SECONDARY_SKILLS.example.json", templates.secondarySkillsExample()],
     ["agent/status/QUEUE_STATUS.md", templates.queueStatus()],
     ["agent/EVIDENCE_LEDGER.jsonl", templates.evidenceLedgerJsonl()],
+    ["project_index/document_index.jsonl", templates.projectIndexDocumentIndex()],
+    ["project_index/experiment_index.jsonl", templates.projectIndexExperimentIndex()],
+    ["project_index/current_conclusions.json", templates.projectIndexCurrentConclusions()],
+    ["project_index/golden_queries.json", templates.projectIndexGoldenQueries()],
     ["research/RESEARCH_LEDGER.md", templates.researchLedger()],
     ["research/LEDGER_NOTES.md", templates.ledgerNotes()]
   ];
@@ -86,6 +90,12 @@ function generatedWatcherEntries(root, templates, watchdogEnv) {
     ["agent/schemas/secondary_skills.schema.json", templates.secondarySkillsSchema(), 0o644],
     ["agent/schemas/job.schema.json", templates.jobSchema(), 0o644],
     ["agent/schemas/gate.schema.json", templates.gateSchema(), 0o644],
+    ["project_index/README.md", templates.projectIndexReadme(), 0o644],
+    ["project_index/schema/README.md", templates.projectIndexSchemaReadme(), 0o644],
+    ["project_index/schema/enums.json", templates.projectIndexEnums(), 0o644],
+    ["project_index/schema/document_index.schema.json", templates.projectIndexDocumentSchema(), 0o644],
+    ["project_index/schema/experiment_index.schema.json", templates.projectIndexExperimentSchema(), 0o644],
+    ["project_index/schema/current_conclusions.schema.json", templates.projectIndexCurrentConclusionsSchema(), 0o644],
     ["agent/TASK_BOX.json", templates.taskBoxJson(), 0o644],
     ["agent/ROUTE_CANONICAL.json", templates.routeCanonicalJson(), 0o644],
     ["agent/EVIDENCE_LEDGER.jsonl", templates.evidenceLedgerJsonl(), 0o644],
@@ -99,6 +109,8 @@ function generatedWatcherEntries(root, templates, watchdogEnv) {
     ["agent/bin/render_report.py", templates.renderReport(), 0o755],
     ["agent/bin/route_skill.py", templates.routeSkill(), 0o755],
     ["agent/bin/validate_runtime.py", templates.validateRuntime(), 0o755],
+    ["agent/bin/validate_watchdog_index.py", templates.validateWatchdogIndex(), 0o755],
+    ["agent/bin/watchdog_doc_search.py", templates.watchdogDocSearch(), 0o755],
     ...generatedSkillEntries(templates)
   ];
 }

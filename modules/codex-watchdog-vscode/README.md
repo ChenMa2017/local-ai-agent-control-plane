@@ -340,6 +340,9 @@ agent/RUN_STATE.json
 agent/CURRENT_STATE.md
 agent/NEXT_ACTION.md
 agent/EVIDENCE_LEDGER.jsonl
+project_index/document_index.jsonl
+project_index/experiment_index.jsonl
+project_index/current_conclusions.json
 ```
 
 That does not fully eliminate drift by itself, but it makes the current route intent and next exact object visible across the files that later Codex sessions and supervisors actually read.
@@ -456,6 +459,8 @@ Bootstrap also creates `agent/TASK_REQUEST.md`, `agent/watchdog.env`, `agent/COD
 ./agent/bin/watchdog queue           # compact queue dashboard, no raw log tails by default
 ./agent/bin/watchdog route           # recompute deterministic primary skill route
 ./agent/bin/watchdog validate        # validate compact runtime JSON and queue files
+./agent/bin/watchdog evidence-validate
+./agent/bin/watchdog evidence-search --query "current conclusion" --json
 ./agent/bin/watchdog pause           # create agent/control/PAUSE; future wakeups do not call Codex
 ./agent/bin/watchdog resume          # remove agent/control/PAUSE
 ./agent/bin/watchdog stop
@@ -508,9 +513,13 @@ agent/schemas/gate.schema.json
 research/RESEARCH_LEDGER.md
 research/LEDGER_NOTES.md
 research/proposals/
+project_index/README.md
+project_index/schema/document_index.schema.json
+project_index/schema/experiment_index.schema.json
+project_index/schema/current_conclusions.schema.json
 ```
 
-Before Codex starts, `agent/bin/route_skill.py` first writes or refreshes `agent/status/SKILL_ROUTE.json`; then `agent/bin/validate_runtime.py` validates compact runtime files, queue files, gate files, and the freshly routed skill file. The project-local `./agent/bin/watchdog validate` command also checks `agent/status/generated_manifest.json`, which records SHA-256 hashes for generated scripts, schemas, prompts, and skills. If a generated file drifts from the recorded template, validation fails and asks you to refresh generated watcher files. The manifest is public-repo safe: it records relative paths and template hashes, not local machine paths; public docs should use `$PROJECT_ROOT`, `$CONTROL_PLANE_ROOT`, and `$COLLAB_ROOT` placeholders instead of real private paths. The prompt tells Codex to follow that deterministic route, and `render_report.py` rejects output whose `primary_skill` does not match the routed skill. The generated JSON schema also requires each wakeup to classify `report_type`, indicate whether progress changed, track `no_progress_cycles`, and set `recommend_pause` when repeated no-progress or repeated blockers need a human decision. `render_report.py` refreshes `agent/PROGRESS_STATE.json`, can update a complete `research/RESEARCH_LEDGER.md`, and writes review proposals under `research/proposals/`.
+Before Codex starts, `agent/bin/route_skill.py` first writes or refreshes `agent/status/SKILL_ROUTE.json`; then `agent/bin/validate_runtime.py` validates compact runtime files, queue files, gate files, and the freshly routed skill file. The project-local `./agent/bin/watchdog validate` command now also runs `agent/bin/validate_watchdog_index.py --project-root .`, so runtime and evidence-index validation stay coupled. For metadata-first retrieval, use `agent/bin/watchdog_doc_search.py` directly or the wrapper `./agent/bin/watchdog evidence-search --query "..." --json`. The generated manifest still records SHA-256 hashes for generated scripts, schemas, prompts, and skills. If a generated file drifts from the recorded template, validation fails and asks you to refresh generated watcher files. The manifest is public-repo safe: it records relative paths and template hashes, not local machine paths; public docs should use `$PROJECT_ROOT`, `$CONTROL_PLANE_ROOT`, and `$COLLAB_ROOT` placeholders instead of real private paths. The prompt tells Codex to follow that deterministic route, and `render_report.py` rejects output whose `primary_skill` does not match the routed skill. The generated JSON schema also requires each wakeup to classify `report_type`, indicate whether progress changed, track `no_progress_cycles`, and set `recommend_pause` when repeated no-progress or repeated blockers need a human decision. `render_report.py` refreshes `agent/PROGRESS_STATE.json`, can update a complete `research/RESEARCH_LEDGER.md`, and writes review proposals under `research/proposals/`.
 
 `agent/bin/route_skill.py` treats completed queue outputs as actionable only when they are fresh. The freshness window defaults to 240 minutes and can be changed with `WATCHDOG_QUEUE_RESULT_FRESH_MINUTES`. This prevents old files in `agent/queue/done/`, `gpu_done/`, or `cpu_done/` from repeatedly triggering `watchdog-gate-evaluator` and causing redundant report snowballing.
 

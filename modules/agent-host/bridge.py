@@ -1111,6 +1111,33 @@ def intake_words(text: str) -> str:
     return " ".join(str(text or "").split()).lower()
 
 
+def evidence_index_markers_present(text: str) -> bool:
+    lowered = intake_words(text)
+    markers = (
+        "current conclusion",
+        "current best",
+        "best candidate",
+        "formal result",
+        "official conclusion",
+        "verify whether",
+        "compare",
+        "versus",
+        "vs ",
+        "replace baseline",
+        "adopt",
+        "current status of the conclusion",
+        "当前",
+        "结论",
+        "最佳",
+        "比较",
+        "验证",
+        "是否采用",
+        "是否替换",
+        "基线",
+    )
+    return any(marker in lowered for marker in markers)
+
+
 def parse_intent_signals(prompt: str, answers: str) -> dict[str, bool]:
     text = intake_words(f"{prompt}\n{answers}")
     return {
@@ -1126,6 +1153,7 @@ def parse_intent_signals(prompt: str, answers: str) -> dict[str, bool]:
         "mentions_experiment": any(term in text for term in ("experiment", "ablation", "baseline", "control arm", "control", "curriculum", "checkpoint sweep", "official eval", "long eval", "compare", "vs ", "versus", "实验", "对照", "基线", "比较", "消融")),
         "mentions_metric_goal": any(term in text for term in ("success criterion", "metric", "psnr", "ssim", "accuracy", "loss", "fixed epoch", "curve comparison", "指标", "成功标准", "loss")),
         "mentions_fairness_constraint": any(term in text for term in ("one factor", "fair", "same budget", "same data", "same checkpoint", "same eval", "单一变量", "公平", "同预算", "同数据")),
+        "wants_evidence_index": evidence_index_markers_present(text),
     }
 
 
@@ -1167,6 +1195,161 @@ def build_gray_areas(prompt: str, answers: str, reference_task_id: str, signals:
     if gate["required"]:
         gray.extend(gate["unresolved_items"])
     return gray
+
+
+def evidence_index_root(project: Project) -> Path:
+    return project.root / "project_index"
+
+
+def evidence_search_script(project: Project) -> Path:
+    return project.root / "agent" / "bin" / "watchdog_doc_search.py"
+
+
+def should_consult_evidence_index(prompt: str, answers: str, objective: str, signals: dict[str, bool]) -> bool:
+    if signals.get("wants_evidence_index"):
+        return True
+    if objective == "bounded_cpu_eval" and bool(signals.get("mentions_experiment")):
+        return True
+    return False
+
+
+def maybe_run_evidence_retrieval(project: Project, prompt: str, answers: str, objective: str, signals: dict[str, bool]) -> dict[str, Any]:
+    query = safe_intake_text(prompt or answers or "", 2000)
+    required = should_consult_evidence_index(prompt, answers, objective, signals)
+    result: dict[str, Any] = {
+        "schema_version": 1,
+        "required": required,
+        "available": False,
+        "consulted": False,
+        "query": query,
+        "decision": None,
+        "warnings": [],
+        "read_plan": [],
+        "hits": [],
+        "reason": "",
+        "tool": "",
+    }
+    if not required:
+        result["reason"] = "query does not currently require metadata-first evidence retrieval"
+        return result
+
+    index_root = evidence_index_root(project)
+    if not index_root.exists():
+        result["reason"] = f"project_index is not available under {index_root}"
+        return result
+
+    script = evidence_search_script(project)
+    if not script.exists():
+        result["available"] = True
+        result["reason"] = f"evidence search tool is missing: {script}"
+        return result
+
+    result["available"] = True
+    result["tool"] = str(script)
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable or "python3",
+                str(script),
+                "--project-root",
+                str(project.root),
+                "--query",
+                query,
+                "--json",
+            ],
+            cwd=str(project.root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:
+        result["consulted"] = True
+        result["decision"] = "index_error"
+        result["warnings"] = [f"evidence retrieval failed to start: {exc}"]
+        result["reason"] = "subprocess invocation failed"
+        return result
+
+    result["consulted"] = True
+    stderr = (completed.stderr or "").strip()
+    stdout = (completed.stdout or "").strip()
+    if completed.returncode != 0:
+        result["decision"] = "index_error"
+        result["warnings"] = [stderr or f"evidence retrieval exited with code {completed.returncode}"]
+        result["reason"] = "watchdog_doc_search.py returned a nonzero exit code"
+        return result
+    try:
+        payload = json.loads(stdout or "{}")
+    except json.JSONDecodeError as exc:
+        result["decision"] = "index_error"
+        result["warnings"] = [f"invalid JSON from evidence retrieval: {exc}"]
+        if stderr:
+            result["warnings"].append(stderr)
+        result["reason"] = "watchdog_doc_search.py returned invalid JSON"
+        return result
+    if not isinstance(payload, dict):
+        result["decision"] = "index_error"
+        result["warnings"] = ["evidence retrieval returned a non-object payload"]
+        result["reason"] = "watchdog_doc_search.py returned an unexpected payload shape"
+        return result
+
+    result["decision"] = payload.get("decision")
+    result["warnings"] = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
+    result["read_plan"] = payload.get("read_plan") if isinstance(payload.get("read_plan"), list) else []
+    result["hits"] = payload.get("hits") if isinstance(payload.get("hits"), list) else []
+    if not result["decision"]:
+        result["decision"] = "index_error"
+        result["warnings"].append("evidence retrieval did not return a decision")
+        result["reason"] = "missing decision in watchdog_doc_search.py payload"
+    else:
+        result["reason"] = "retrieval completed"
+    return result
+
+
+def evidence_retrieval_summary(evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "required": bool(evidence.get("required")),
+        "available": bool(evidence.get("available")),
+        "consulted": bool(evidence.get("consulted")),
+        "query": str(evidence.get("query") or ""),
+        "decision": evidence.get("decision"),
+        "warnings": list(evidence.get("warnings") or []),
+        "read_plan": list(evidence.get("read_plan") or []),
+        "reason": str(evidence.get("reason") or ""),
+    }
+
+
+def read_plan_markdown(evidence: dict[str, Any]) -> str:
+    lines = [
+        "# Evidence Retrieval",
+        "",
+        f"- required: {'true' if evidence.get('required') else 'false'}",
+        f"- available: {'true' if evidence.get('available') else 'false'}",
+        f"- consulted: {'true' if evidence.get('consulted') else 'false'}",
+        f"- decision: {evidence.get('decision') or 'none'}",
+        f"- reason: {evidence.get('reason') or 'none'}",
+        "",
+    ]
+    warnings = evidence.get("warnings") if isinstance(evidence.get("warnings"), list) else []
+    if warnings:
+        lines.append("## Warnings")
+        lines.append("")
+        for item in warnings:
+            lines.append(f"- {item}")
+        lines.append("")
+    read_plan = evidence.get("read_plan") if isinstance(evidence.get("read_plan"), list) else []
+    if read_plan:
+        lines.append("## Read Plan")
+        lines.append("")
+        for item in read_plan:
+            if isinstance(item, dict):
+                path = item.get("path") or "unknown"
+                reason = item.get("reason") or ""
+                lines.append(f"- {path}: {reason}")
+        lines.append("")
+    else:
+        lines.extend(["## Read Plan", "", "- No read-plan entries were produced.", ""])
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def clarification_questions(gray_areas: list[str], signals: dict[str, bool]) -> list[str]:
@@ -1281,6 +1464,7 @@ def make_task_contract(
     risk_class: str,
     signals: dict[str, bool],
     status: str,
+    evidence_retrieval: dict[str, Any],
 ) -> dict[str, Any]:
     decision_source = "user+answers" if answers else "user"
     requires_human = risk_class == "high"
@@ -1310,6 +1494,7 @@ def make_task_contract(
             "external_send_without_human_review",
             "service_or_secret_mutation",
         ],
+        "evidence_retrieval": evidence_retrieval_summary(evidence_retrieval),
         "signals": signals,
         "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
     }
@@ -1318,6 +1503,7 @@ def make_task_contract(
 def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
     objective = str(contract.get("objective") or "")
     decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
+    retrieval = contract.get("evidence_retrieval") if isinstance(contract.get("evidence_retrieval"), dict) else {}
     gate_required = bool(decision_gate.get("required"))
     gate_blocking = bool(decision_gate.get("blocking"))
     gate_status = "blocked" if gate_blocking else ("required_ready" if gate_required else "not_required")
@@ -1333,6 +1519,7 @@ def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
             "summary": "Report-only clarification result; no execution side effects.",
             "experiment_decision_gate": decision_gate,
             "experiment_gate_status": gate_status,
+            "evidence_retrieval": retrieval,
         }
     if objective == "bounded_cpu_eval":
         return {
@@ -1346,6 +1533,7 @@ def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
             "summary": "Bounded CPU evaluation or smoke-check task." if not gate_blocking else "Bounded CPU evaluation draft exists, but experiment decisions are still unresolved.",
             "experiment_decision_gate": decision_gate,
             "experiment_gate_status": gate_status,
+            "evidence_retrieval": retrieval,
         }
     if objective == "local_workspace_copy":
         return {
@@ -1359,6 +1547,7 @@ def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
             "summary": "Project-local copy task; shared files remain protected." if not gate_blocking else "Project-local copy draft exists, but experiment decisions are still unresolved.",
             "experiment_decision_gate": decision_gate,
             "experiment_gate_status": gate_status,
+            "evidence_retrieval": retrieval,
         }
     return {
         "schema_version": 1,
@@ -1371,10 +1560,17 @@ def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
         "summary": "High-risk or nondelegable task; requires human approval before execution.",
         "experiment_decision_gate": decision_gate,
         "experiment_gate_status": gate_status,
+        "evidence_retrieval": retrieval,
     }
 
 
-def make_policy_preflight(project: Project, contract: dict[str, Any], taskbox: dict[str, Any], questions: list[str]) -> dict[str, Any]:
+def make_policy_preflight(
+    project: Project,
+    contract: dict[str, Any],
+    taskbox: dict[str, Any],
+    questions: list[str],
+    evidence_retrieval: dict[str, Any],
+) -> dict[str, Any]:
     objective = str(contract.get("objective") or "")
     risk_class = str(contract.get("risk_class") or "low")
     decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
@@ -1396,6 +1592,15 @@ def make_policy_preflight(project: Project, contract: dict[str, Any], taskbox: d
     if objective not in {"report_only", "bounded_cpu_eval", "local_workspace_copy"} and risk_class != "high":
         blocked_by.append("unsupported_objective")
         reasons.append(f"Objective {objective} is not yet supported by the prepare pipeline.")
+    retrieval_decision = evidence_retrieval.get("decision")
+    retrieval_warnings = evidence_retrieval.get("warnings") if isinstance(evidence_retrieval.get("warnings"), list) else []
+    if evidence_retrieval.get("required"):
+        if evidence_retrieval.get("consulted") and retrieval_decision and retrieval_decision != "safe_to_answer":
+            reasons.append(
+                f"Evidence retrieval returned decision={retrieval_decision}; keep formal conclusion claims bounded until the referenced evidence is reviewed."
+            )
+        elif not evidence_retrieval.get("consulted"):
+            reasons.append("Evidence retrieval was expected for this request but is not currently available for the selected workspace.")
     ok = not blocked_by
     decision = "ready" if ok else "blocked"
     required_action = "run" if ok else ("reply_to_questions" if "clarification_required" in blocked_by else "human_review")
@@ -1410,11 +1615,17 @@ def make_policy_preflight(project: Project, contract: dict[str, Any], taskbox: d
         "allowed_runner": taskbox.get("allowed_runner"),
         "workspace_mode": taskbox.get("workspace_mode"),
         "experiment_decision_gate_required": bool(decision_gate.get("required")),
+        "evidence_retrieval_required": bool(evidence_retrieval.get("required")),
+        "evidence_retrieval_consulted": bool(evidence_retrieval.get("consulted")),
+        "evidence_retrieval_available": bool(evidence_retrieval.get("available")),
+        "evidence_retrieval_decision": retrieval_decision,
+        "evidence_retrieval_warnings": retrieval_warnings,
     }
 
 
 def intake_summary_markdown(contract: dict[str, Any], questions: list[str], preflight: dict[str, Any]) -> str:
     decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
+    retrieval = contract.get("evidence_retrieval") if isinstance(contract.get("evidence_retrieval"), dict) else {}
     lines = [
         "# Task Contract Summary",
         "",
@@ -1426,6 +1637,9 @@ def intake_summary_markdown(contract: dict[str, Any], questions: list[str], pref
         f"- status: {contract.get('status')}",
         f"- preflight_ok: {'true' if preflight.get('ok') else 'false'}",
         f"- experiment_decision_gate_required: {'true' if decision_gate.get('required') else 'false'}",
+        f"- evidence_retrieval_required: {'true' if retrieval.get('required') else 'false'}",
+        f"- evidence_retrieval_consulted: {'true' if retrieval.get('consulted') else 'false'}",
+        f"- evidence_retrieval_decision: {retrieval.get('decision') or 'none'}",
         "",
         "## Prompt",
         "",
@@ -1451,6 +1665,15 @@ def intake_summary_markdown(contract: dict[str, Any], questions: list[str], pref
                 f"- {item.get('decision_id')}: {item.get('title')} -> {'resolved' if item.get('resolved') else 'missing'}"
             )
         lines.append("")
+    if retrieval.get("required"):
+        lines.append("## Evidence Retrieval")
+        lines.append("")
+        lines.append(f"- decision: {retrieval.get('decision') or 'none'}")
+        lines.append(f"- available: {'true' if retrieval.get('available') else 'false'}")
+        lines.append(f"- consulted: {'true' if retrieval.get('consulted') else 'false'}")
+        for warning in retrieval.get("warnings", []):
+            lines.append(f"- warning: {warning}")
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -1464,6 +1687,7 @@ def persist_intake_artifacts(
     contract: dict[str, Any],
     taskbox: dict[str, Any],
     preflight: dict[str, Any],
+    evidence_retrieval: dict[str, Any],
     answers: str,
     event_type: str,
 ) -> None:
@@ -1483,6 +1707,8 @@ def persist_intake_artifacts(
     write_json_atomic(root / "TASKBOX_DRAFT.json", taskbox)
     write_json_atomic(root / "POLICY_PREFLIGHT.json", preflight)
     write_json_atomic(root / "DECISION_GATE.json", contract.get("experiment_decision_gate", {}))
+    write_json_atomic(root / "EVIDENCE_RETRIEVAL.json", evidence_retrieval)
+    write_text_atomic(root / "READ_PLAN.md", read_plan_markdown(evidence_retrieval))
     write_text_atomic(
         root / "ASSUMPTIONS.md",
         "\n".join([
@@ -1492,6 +1718,7 @@ def persist_intake_artifacts(
             f"- risk_class: {contract.get('risk_class')}",
             f"- workspace_mode: {taskbox.get('workspace_mode')}",
             f"- experiment_decision_gate_required: {'true' if (contract.get('experiment_decision_gate') or {}).get('required') else 'false'}",
+            f"- evidence_retrieval_decision: {(evidence_retrieval.get('decision') or 'none')}",
         ]).rstrip() + "\n",
     )
     write_text_atomic(root / f"TASK_CONTRACT_{intake_id}.md", intake_summary_markdown(contract, questions, preflight))
@@ -1504,6 +1731,7 @@ def persist_intake_artifacts(
             "objective": contract.get("objective"),
             "risk_class": contract.get("risk_class"),
             "preflight_ok": preflight.get("ok"),
+            "evidence_retrieval_decision": evidence_retrieval.get("decision"),
             "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
         },
     )
@@ -1542,6 +1770,7 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
     questions = clarification_questions(gray_areas, signals)
     risk_class = intake_risk_class(objective, signals)
     status = "blocked" if risk_class == "high" else ("clarifying" if questions else "compiled")
+    evidence_retrieval = maybe_run_evidence_retrieval(project, prompt, answers, objective, signals)
     contract = make_task_contract(
         intake_id=intake_id,
         project=project,
@@ -1553,9 +1782,10 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         risk_class=risk_class,
         signals=signals,
         status=status,
+        evidence_retrieval=evidence_retrieval,
     )
     taskbox = make_taskbox_draft(contract)
-    preflight = make_policy_preflight(project, contract, taskbox, questions)
+    preflight = make_policy_preflight(project, contract, taskbox, questions, evidence_retrieval)
     intent = {
         "schema_version": 1,
         "intake_id": intake_id,
@@ -1571,6 +1801,9 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         "signals": signals,
         "gray_area_count": len(gray_areas),
         "experiment_decision_gate_required": bool((contract.get("experiment_decision_gate") or {}).get("required")),
+        "evidence_retrieval_required": bool(evidence_retrieval.get("required")),
+        "evidence_retrieval_consulted": bool(evidence_retrieval.get("consulted")),
+        "evidence_retrieval_decision": evidence_retrieval.get("decision"),
         "answers_count": 1 if answers else 0,
         "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
     }
@@ -1583,6 +1816,7 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         contract=contract,
         taskbox=taskbox,
         preflight=preflight,
+        evidence_retrieval=evidence_retrieval,
         answers=answers,
         event_type="intake_replied" if answers else "intake_created",
     )
@@ -1597,6 +1831,7 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         "contract": contract,
         "taskbox": taskbox,
         "preflight": preflight,
+        "evidence_retrieval": evidence_retrieval,
         "artifacts_dir": str(intake_dir(config, intake_id)),
         "ready_to_run": bool(preflight.get("ok") and not questions),
     }

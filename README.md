@@ -216,6 +216,8 @@ POST /codex/result-page
 - classify low-risk report-only / bounded CPU / local-workspace-copy requests into a structured `TASK_CONTRACT`;
 - persist `INTENT_DRAFT`, `GRAY_AREAS`, `QUESTIONS`, `TASKBOX_DRAFT`, and `POLICY_PREFLIGHT`;
 - persist `DECISION_GATE.json` for expensive or scientifically ambiguous experiments;
+- consult project-local metadata-first evidence retrieval when the request asks for a current conclusion, comparison claim, or formal result;
+- persist `EVIDENCE_RETRIEVAL.json` and `READ_PLAN.md` so later runs can reuse the same `decision / warnings / read_plan` context;
 - block direct execution when experiment-defining decisions such as control-arm meaning, fairness constraints, or success criteria are still unresolved.
 
 Discord Adapter maps them to:

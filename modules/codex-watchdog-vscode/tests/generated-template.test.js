@@ -2,6 +2,7 @@
 
 const assert = require("assert");
 const cp = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -110,6 +111,15 @@ function writeJson(projectRoot, relativePath, value) {
   writeFile(projectRoot, relativePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function writeJsonl(projectRoot, relativePath, records) {
+  const lines = records.map((record) => JSON.stringify(record));
+  writeFile(projectRoot, relativePath, lines.length ? `${lines.join("\n")}\n` : "");
+}
+
+function sha256File(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
 function runRoute(projectRoot, env = {}) {
   const output = run("python3", [path.join(projectRoot, "agent", "bin", "route_skill.py")], {
     cwd: projectRoot,
@@ -146,6 +156,10 @@ async function main() {
   assert.match(manifest.template_hashes["agent/TASK_BOX.json"], /^sha256:[a-f0-9]{64}$/);
   assert.match(manifest.template_hashes["agent/ROUTE_CANONICAL.json"], /^sha256:[a-f0-9]{64}$/);
   assert.match(manifest.template_hashes["agent/EVIDENCE_LEDGER.jsonl"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["project_index/README.md"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["project_index/schema/document_index.schema.json"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["agent/bin/validate_watchdog_index.py"], /^sha256:[a-f0-9]{64}$/);
+  assert.match(manifest.template_hashes["agent/bin/watchdog_doc_search.py"], /^sha256:[a-f0-9]{64}$/);
   assert.ok(manifest.placeholder_policy.public_paths.includes("$PROJECT_ROOT"));
   assert.ok(manifest.placeholder_policy.public_paths.includes("$CONTROL_PLANE_ROOT"));
   assert.ok(manifest.placeholder_policy.public_paths.includes("$COLLAB_ROOT"));
@@ -157,13 +171,16 @@ async function main() {
   run("python3", ["-m", "py_compile",
     path.join(projectRoot, "agent", "bin", "render_report.py"),
     path.join(projectRoot, "agent", "bin", "route_skill.py"),
-    path.join(projectRoot, "agent", "bin", "validate_runtime.py")
+    path.join(projectRoot, "agent", "bin", "validate_runtime.py"),
+    path.join(projectRoot, "agent", "bin", "validate_watchdog_index.py"),
+    path.join(projectRoot, "agent", "bin", "watchdog_doc_search.py")
   ]);
 
   const validateOutput = run(path.join(projectRoot, "agent", "bin", "watchdog"), ["validate"], {
     cwd: projectRoot
   });
   assert.match(validateOutput, /generated manifest ok:/);
+  assert.match(validateOutput, /\[watchdog-index\] status=ok/);
 
   const watchSchema = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "schemas", "watch_decision.schema.json"), "utf8"));
   assert.deepStrictEqual(
@@ -202,6 +219,10 @@ async function main() {
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "SECONDARY_SKILLS.example.json")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "project_index", "README.md")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "project_index", "schema", "document_index.schema.json")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "project_index", "document_index.jsonl")));
+  assert.ok(fs.existsSync(path.join(projectRoot, "project_index", "current_conclusions.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "skills", "project-secondary-example", "SKILL.example.md")));
   const initialTaskBox = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "TASK_BOX.json"), "utf8"));
   assert.ok(initialTaskBox.project_question);
@@ -221,6 +242,144 @@ async function main() {
   assert.strictEqual(initialStateJson.route_task_id, null);
   const initialProgressJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "PROGRESS_STATE.json"), "utf8"));
   assert.strictEqual(initialProgressJson.route_task_id, null);
+
+  const initialIndexValidate = JSON.parse(run("python3", [path.join(projectRoot, "agent", "bin", "validate_watchdog_index.py"), "--project-root", projectRoot, "--json"], {
+    cwd: projectRoot
+  }));
+  assert.strictEqual(initialIndexValidate.ok, true);
+  assert.strictEqual(initialIndexValidate.counts.documents, 0);
+  assert.strictEqual(initialIndexValidate.counts.experiments, 0);
+  assert.strictEqual(initialIndexValidate.counts.current_conclusions, 0);
+
+  writeFile(projectRoot, "formal/current_best.md", "# Current Best Candidate\n\nModel A remains the current best candidate.\n");
+  writeFile(projectRoot, "analysis/aux_debug.md", "# Auxiliary Debug Note\n\nLoss spikes may be related to preprocessing drift.\n");
+  writeFile(projectRoot, "eval/model_a_metrics.json", `${JSON.stringify({ accuracy: 0.91 }, null, 2)}\n`);
+  writeFile(projectRoot, "configs/model_a.json", `${JSON.stringify({ model: "model-a" }, null, 2)}\n`);
+
+  writeJsonl(projectRoot, "project_index/document_index.jsonl", [
+    {
+      doc_id: "doc_current_best",
+      path: "formal/current_best.md",
+      title: "Current Best Candidate",
+      doc_type: "official_conclusion",
+      status: "active",
+      evidence_scope: "primary_only",
+      evidence_scope_note: "Reviewed project conclusion.",
+      project_area: "model_selection",
+      summary: "Model A remains the current best candidate under the latest bounded evaluation.",
+      tags: ["model-a", "current-best"],
+      supersedes: [],
+      superseded_by: [],
+      created_at: "2026-06-16T00:00:00Z",
+      updated_at: "2026-06-16T00:00:00Z",
+      checksum: sha256File(path.join(projectRoot, "formal", "current_best.md")),
+      checksum_scope: "raw_file_bytes",
+      indexed_at: "2026-06-16T00:00:00Z"
+    },
+    {
+      doc_id: "doc_aux_debug",
+      path: "analysis/aux_debug.md",
+      title: "Auxiliary Debug Note",
+      doc_type: "auxiliary_diagnostic",
+      status: "active",
+      evidence_scope: "auxiliary_only",
+      evidence_scope_note: "Diagnostic note only; not a formal conclusion.",
+      project_area: "training_stability",
+      summary: "Speculative note about preprocessing drift and loss spikes.",
+      tags: ["loss-spike", "debug"],
+      supersedes: [],
+      superseded_by: [],
+      created_at: "2026-06-16T00:00:00Z",
+      updated_at: "2026-06-16T00:00:00Z",
+      checksum: sha256File(path.join(projectRoot, "analysis", "aux_debug.md")),
+      checksum_scope: "raw_file_bytes",
+      indexed_at: "2026-06-16T00:00:00Z"
+    }
+  ]);
+
+  writeJsonl(projectRoot, "project_index/experiment_index.jsonl", [
+    {
+      experiment_id: "exp_model_a",
+      experiment_type: "bounded_experiment",
+      status: "active",
+      evidence_scope: "primary_only",
+      name: "Model A bounded evaluation",
+      purpose: "Validate the current best candidate selection.",
+      model: "model-a",
+      baseline_model: "model-b",
+      train_data: null,
+      test_data: "eval/model_a_metrics.json",
+      eval_protocol: "top1 accuracy",
+      with_definition: null,
+      without_definition: null,
+      primary_metrics: [
+        { name: "accuracy", value: 0.91, higher_is_better: true, notes: null }
+      ],
+      primary_metric_name: "accuracy",
+      best_epoch: 7,
+      primary_eval_path: "eval/model_a_metrics.json",
+      config_path: "configs/model_a.json",
+      code_commit: "deadbeef",
+      run_id: "run-001",
+      official_conclusion_doc: "doc_current_best"
+    }
+  ]);
+
+  writeJson(projectRoot, "project_index/current_conclusions.json", {
+    schema_version: "current_conclusions.v0.1",
+    updated_at: "2026-06-16T00:00:00Z",
+    items: [
+      {
+        topic_id: "current_best_candidate",
+        topic: "current best candidate",
+        conclusion_status: "confirmed",
+        claim: "Model A remains the current best candidate under the latest bounded evaluation.",
+        evidence_scope: "primary_only",
+        supporting_docs: ["doc_current_best"],
+        supporting_experiments: ["exp_model_a"],
+        last_reviewed_at: "2026-06-16T00:00:00Z",
+        stale_after_days: 30,
+        stale_severity: "warning",
+        owner: "watchdog",
+        invalidated_by: null,
+        risk_flags: []
+      }
+    ]
+  });
+
+  writeJson(projectRoot, "project_index/golden_queries.json", {
+    schema_version: "golden_queries.v0.1",
+    queries: [
+      {
+        query: "current best candidate",
+        expected_decision: "safe_to_answer",
+        notes: "Should surface the active primary conclusion before auxiliary notes."
+      },
+      {
+        query: "loss spike debug",
+        expected_decision: "only_auxiliary_found",
+        notes: "Should surface the auxiliary diagnostic note without overstating certainty."
+      }
+    ]
+  });
+
+  const curatedIndexValidate = JSON.parse(run("python3", [path.join(projectRoot, "agent", "bin", "validate_watchdog_index.py"), "--project-root", projectRoot, "--json"], {
+    cwd: projectRoot
+  }));
+  assert.strictEqual(curatedIndexValidate.ok, true);
+  assert.deepStrictEqual(curatedIndexValidate.errors, []);
+
+  const safeSearch = JSON.parse(run("python3", [path.join(projectRoot, "agent", "bin", "watchdog_doc_search.py"), "--project-root", projectRoot, "--query", "current best candidate", "--json"], {
+    cwd: projectRoot
+  }));
+  assert.strictEqual(safeSearch.decision, "safe_to_answer");
+  assert.ok(safeSearch.read_plan.some((item) => item.path === "formal/current_best.md"));
+
+  const auxiliarySearch = JSON.parse(run("python3", [path.join(projectRoot, "agent", "bin", "watchdog_doc_search.py"), "--project-root", projectRoot, "--query", "loss spike debug", "--json"], {
+    cwd: projectRoot
+  }));
+  assert.strictEqual(auxiliarySearch.decision, "only_auxiliary_found");
+  assert.ok(auxiliarySearch.hits.some((item) => item.id === "doc_aux_debug"));
 
   await api.writeBootstrapConversation(projectRoot, {
     updated_at: "2026-06-04T12:00:00Z",

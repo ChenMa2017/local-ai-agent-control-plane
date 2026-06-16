@@ -458,6 +458,7 @@ def format_prepare_response(
     contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
     preflight = data.get("preflight") if isinstance(data.get("preflight"), dict) else {}
     questions = data.get("questions") if isinstance(data.get("questions"), list) else []
+    evidence = data.get("evidence_retrieval") if isinstance(data.get("evidence_retrieval"), dict) else {}
     lines = [
         "任务准备结果：",
         "",
@@ -468,6 +469,8 @@ def format_prepare_response(
         f"risk_class: {contract.get('risk_class', 'unknown')}",
         f"preflight: {'ok' if preflight.get('ok') else 'blocked'}",
     ]
+    if evidence.get("required"):
+        lines.append(f"evidence: {evidence.get('decision') or 'unavailable'}")
     if questions:
         lines.extend(["", "还需要你补充："])
         for idx, question in enumerate(questions, start=1):
@@ -488,6 +491,26 @@ def format_prepare_response(
         lines.extend(["", "预检说明："])
         for reason in reasons[:3]:
             lines.append(f"- {sanitize_discord_text(str(reason))}")
+    warnings = evidence.get("warnings") if isinstance(evidence.get("warnings"), list) else []
+    if warnings:
+        lines.extend(["", "证据提醒："])
+        for warning in warnings[:3]:
+            lines.append(f"- {sanitize_discord_text(str(warning))}")
+    read_plan = evidence.get("read_plan") if isinstance(evidence.get("read_plan"), list) else []
+    if read_plan:
+        lines.extend(["", "建议先读："])
+        for item in read_plan[:3]:
+            if not isinstance(item, dict):
+                continue
+            path = sanitize_discord_text(str(item.get("path") or "unknown"))
+            reason = sanitize_discord_text(str(item.get("reason") or ""))
+            lines.append(f"- {path}" + (f": {reason}" if reason else ""))
+    if evidence.get("required") and evidence.get("decision") not in {None, "", "safe_to_answer"}:
+        lines.extend([
+            "",
+            "这类请求当前不应被当作正式已确认结论；请先按上面的 read plan 核对证据，或继续用 "
+            f"/{slash_command_name(command_prefix, 'prepare')} 补充上下文。",
+        ])
     return "\n".join(lines).strip()
 
 

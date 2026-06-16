@@ -3,11 +3,13 @@
 const { pythonRouteSkillTemplates } = require("./templatePythonRouteSkill");
 const { pythonValidateRuntimeTemplates } = require("./templatePythonValidateRuntime");
 const { pythonRenderReportTemplates } = require("./templatePythonRenderReport");
+const { pythonEvidenceToolTemplates } = require("./templatePythonEvidenceTools");
 
 const pythonScriptTemplates = {
   ...pythonRouteSkillTemplates,
   ...pythonValidateRuntimeTemplates,
-  ...pythonRenderReportTemplates
+  ...pythonRenderReportTemplates,
+  ...pythonEvidenceToolTemplates
 };
 
 module.exports = {

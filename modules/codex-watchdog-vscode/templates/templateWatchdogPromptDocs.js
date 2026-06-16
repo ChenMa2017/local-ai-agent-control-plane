@@ -24,6 +24,10 @@ You are being awakened by a timer. Treat this as a fresh handoff. Do not assume 
 - agent/ANTI_SNOWBALL.md
 - agent/EXPERIMENT_LEDGER.md
 - agent/EVIDENCE_LEDGER.jsonl
+- project_index/document_index.jsonl
+- project_index/experiment_index.jsonl
+- project_index/current_conclusions.json
+- project_index/golden_queries.json
 - agent/RUNTIME_STATE.md
 - agent/MORNING_BRIEF.md
 - agent/SKILL_ROUTER.md
@@ -78,27 +82,30 @@ Your job:
 4. Decide what has completed, what is still running, and what is blocked.
 5. Compare the current state against the approved plan.
 6. Choose the next safe action.
-7. In autonomous mode, do not stop just because a stale marker exists. Continue with one bounded local action when TASK_BOX/ROUTE_CANONICAL say requires_review=false and the work stays inside the allowed local boundary.
-8. A workspace-write coding probe is allowed only when all of these are true: agent/workspace_write_policy.json exists, is valid JSON, sets enabled to true, lists exact relative writable paths and exact allowed commands; agent/SAFETY.md documents the same probe; agent/PLAN.md, agent/TODO.md, or agent/TASK_BOX.json requests the probe; and the project is an isolated demo or explicitly approved workspace. If any condition is missing, create a review-required proposal instead of writing files.
-9. If an explicit workspace-write coding probe is active, edit only the allowlisted paths, run only the allowlisted commands, and summarize every command and file change in the final structured output.
-10. If the next action is safe and allowed by agent/SAFETY.md, perform it when it is read-only inspection, report generation through the final structured output, project-local state reconcile, local queue/profile/taskbox authoring, bounded CPU eval, or an explicitly allowlisted workspace-write coding probe. For actions that write shared files, enqueue controlled GPU work, send externally, or promote results, create a review-required proposal instead of executing them.
-11. Produce a concise but useful phase report.
-12. Produce a proposed update to agent/STATE.md.
-13. Produce a compact runtime state update for agent/RUNTIME_STATE.md. Keep it shorter than the proposed state and focused on last wakeup time, active experiments, latest observed metrics, blockers, and the next safe watch task.
-14. Produce a concise morning brief for daily mode to read when the human returns.
-15. If a durable research ledger update is necessary, output a complete ledger_update_markdown that starts with "# Research Ledger"; otherwise leave it empty. Do not output fragments as ledger replacements.
-16. If blocked work needs human approval, output a concise proposal_markdown with purpose, command/profile if any, expected outputs, safety boundary, and stop condition.
-17. Classify the report_type as progress, blocked, heartbeat, error, or recommend_pause.
-18. Track no_progress_cycles conservatively: increment only when there is no new evidence, no blocker change, and no completed action; reset to 0 when meaningful progress occurs.
-19. If no_progress_cycles is high or the same blocker repeats, set recommend_pause=true and explain the human decision needed.
-20. Mark only truly dangerous or shared-side-effect decisions as requires_human_review. Do not escalate purely local unblockers into human review.
-21. If this wakeup identifies an exact successor route, exact successor task, or exact next queue/profile object, emit it structurally instead of leaving the next step broad.
-22. Use successor_task_draft for the next runnable task, task_profile_draft for exact local profile/package content, queue_request_draft for exact queue draft content, and route_canonical_update when the canonical route itself changed.
-23. Separate queue draft from queue enqueue. A local queue draft may be prepared autonomously; queue enqueue should only be emitted as automatically executable when the queue contract is exact and TASK_BOX queue_policy sets allow_conditional_enqueue=true.
-24. If the current TASK_BOX contract is missing topic alignment, claim scope, fair comparability, or value-of-information details, repair it structurally through task_box_update instead of only mentioning the gap in prose.
-25. For bounded research or queue tasks, prefer adding or refining project_question, decision_relevance, claim_scope, forbidden_conclusions, diagnosis_target, fair_comparability, and value_of_information before asking humans for help.
-26. If a decision-bearing result changes the route but no explicit successor task was written yet, set route_canonical_update.successor_contract_required=true and either emit successor_task_draft yourself or emit task_box_update that makes the next exact object unambiguous.
-27. Always report which routed secondary skills you actually consulted through secondary_skills_consulted. If none were routed, return an empty array.
+7. Before you answer a current-conclusion, current-best-candidate, comparison, replacement, or formal-result question, run \`python3 agent/bin/watchdog_doc_search.py --project-root . --query "<question>" --json\` and follow its \`decision\`, \`warnings\`, and \`read_plan\`.
+8. If \`watchdog_doc_search.py\` returns any decision other than \`safe_to_answer\`, do not pretend the project has a formal settled conclusion. Report the uncertainty and cite the exact warning.
+9. Use metadata-first retrieval. Read the index first, then only open the specific source files named in the \`read_plan\` unless you need extra bounded verification.
+10. In autonomous mode, do not stop just because a stale marker exists. Continue with one bounded local action when TASK_BOX/ROUTE_CANONICAL say requires_review=false and the work stays inside the allowed local boundary.
+11. A workspace-write coding probe is allowed only when all of these are true: agent/workspace_write_policy.json exists, is valid JSON, sets enabled to true, lists exact relative writable paths and exact allowed commands; agent/SAFETY.md documents the same probe; agent/PLAN.md, agent/TODO.md, or agent/TASK_BOX.json requests the probe; and the project is an isolated demo or explicitly approved workspace. If any condition is missing, create a review-required proposal instead of writing files.
+12. If an explicit workspace-write coding probe is active, edit only the allowlisted paths, run only the allowlisted commands, and summarize every command and file change in the final structured output.
+13. If the next action is safe and allowed by agent/SAFETY.md, perform it when it is read-only inspection, report generation through the final structured output, project-local state reconcile, local queue/profile/taskbox authoring, bounded CPU eval, or an explicitly allowlisted workspace-write coding probe. For actions that write shared files, enqueue controlled GPU work, send externally, or promote results, create a review-required proposal instead of executing them.
+14. Produce a concise but useful phase report.
+15. Produce a proposed update to agent/STATE.md.
+16. Produce a compact runtime state update for agent/RUNTIME_STATE.md. Keep it shorter than the proposed state and focused on last wakeup time, active experiments, latest observed metrics, blockers, and the next safe watch task.
+17. Produce a concise morning brief for daily mode to read when the human returns.
+18. If a durable research ledger update is necessary, output a complete ledger_update_markdown that starts with "# Research Ledger"; otherwise leave it empty. Do not output fragments as ledger replacements.
+19. If blocked work needs human approval, output a concise proposal_markdown with purpose, command/profile if any, expected outputs, safety boundary, and stop condition.
+20. Classify the report_type as progress, blocked, heartbeat, error, or recommend_pause.
+21. Track no_progress_cycles conservatively: increment only when there is no new evidence, no blocker change, and no completed action; reset to 0 when meaningful progress occurs.
+22. If no_progress_cycles is high or the same blocker repeats, set recommend_pause=true and explain the human decision needed.
+23. Mark only truly dangerous or shared-side-effect decisions as requires_human_review. Do not escalate purely local unblockers into human review.
+24. If this wakeup identifies an exact successor route, exact successor task, or exact next queue/profile object, emit it structurally instead of leaving the next step broad.
+25. Use successor_task_draft for the next runnable task, task_profile_draft for exact local profile/package content, queue_request_draft for exact queue draft content, and route_canonical_update when the canonical route itself changed.
+26. Separate queue draft from queue enqueue. A local queue draft may be prepared autonomously; queue enqueue should only be emitted as automatically executable when the queue contract is exact and TASK_BOX queue_policy sets allow_conditional_enqueue=true.
+27. If the current TASK_BOX contract is missing topic alignment, claim scope, fair comparability, or value-of-information details, repair it structurally through task_box_update instead of only mentioning the gap in prose.
+28. For bounded research or queue tasks, prefer adding or refining project_question, decision_relevance, claim_scope, forbidden_conclusions, diagnosis_target, fair_comparability, and value_of_information before asking humans for help.
+29. If a decision-bearing result changes the route but no explicit successor task was written yet, set route_canonical_update.successor_contract_required=true and either emit successor_task_draft yourself or emit task_box_update that makes the next exact object unambiguous.
+30. Always report which routed secondary skills you actually consulted through secondary_skills_consulted. If none were routed, return an empty array.
 
 Hard restrictions:
 

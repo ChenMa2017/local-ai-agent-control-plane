@@ -25,6 +25,8 @@ Usage:
   ./agent/bin/watchdog queue
   ./agent/bin/watchdog route
   ./agent/bin/watchdog validate
+  ./agent/bin/watchdog evidence-validate
+  ./agent/bin/watchdog evidence-search --query "current conclusion" --json
   ./agent/bin/watchdog run-once
   ./agent/bin/watchdog latest
 	  ./agent/bin/watchdog login
@@ -58,6 +60,7 @@ Important files:
   agent/control/PAUSE            pause flag; if present, wakeups do not call Codex
   agent/status/SKILL_ROUTE.json  deterministic route chosen before Codex starts
   agent/status/QUEUE_STATUS.md   compact queue dashboard with no raw log tails
+  project_index/                 metadata-first evidence boundary and retrieval inputs
   agent/reports/latest.md        newest watchdog report
   agent/MORNING_BRIEF.md         morning handoff
 
@@ -74,6 +77,8 @@ Examples:
   ./agent/bin/watchdog queue
   ./agent/bin/watchdog route
   ./agent/bin/watchdog validate
+  ./agent/bin/watchdog evidence-validate
+  ./agent/bin/watchdog evidence-search --query "formal result" --json
   ./agent/bin/watchdog login
   ./agent/bin/watchdog run-once
   ./agent/bin/watchdog pause
@@ -119,6 +124,12 @@ case "$ACTION" in
     ;;
   validate|doctor-runtime)
     ./agent/bin/watchdog_guard.sh validate "$@"
+    ;;
+  evidence-validate|validate-index)
+    python3 ./agent/bin/validate_watchdog_index.py --project-root . "$@"
+    ;;
+  evidence-search|search-index)
+    python3 ./agent/bin/watchdog_doc_search.py --project-root . "$@"
     ;;
   stop)
     ./agent/bin/watchdog_guard.sh stop "$@"

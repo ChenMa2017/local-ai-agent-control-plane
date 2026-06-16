@@ -338,6 +338,33 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("请说明允许改动的文件范围", response)
         self.assertIn("/agent_prepare", response)
 
+    def test_format_prepare_response_shows_evidence_decision_and_read_plan(self):
+        response = bot.format_prepare_response(
+            {
+                "intake_id": "intake_20260616_000001_ab12cd",
+                "status": "prepared",
+                "questions": [],
+                "contract": {"objective": "report_only", "risk_class": "low"},
+                "preflight": {"ok": True, "required_action": "run", "reasons": ["Evidence retrieval returned decision=stale_conclusion; keep formal conclusion claims bounded until the referenced evidence is reviewed."]},
+                "ready_to_run": True,
+                "evidence_retrieval": {
+                    "required": True,
+                    "decision": "stale_conclusion",
+                    "warnings": ["matching current conclusion is stale and should be rechecked before citation"],
+                    "read_plan": [
+                        {"path": "formal/current_best.md", "reason": "supports current conclusion: current best candidate"}
+                    ],
+                },
+            },
+            "main_codex",
+            "agent",
+        )
+
+        self.assertIn("evidence: stale_conclusion", response)
+        self.assertIn("证据提醒", response)
+        self.assertIn("formal/current_best.md", response)
+        self.assertIn("不应被当作正式已确认结论", response)
+
     def test_format_health_summary_is_safe(self):
         response = bot.format_health_summary(
             {

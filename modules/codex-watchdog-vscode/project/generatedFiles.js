@@ -40,6 +40,7 @@ function createGeneratedFilesHelpers({
     await ensureDir(path.join(root, "agent", "logs"));
     await ensureDir(path.join(root, "workspace"));
     await ensureDir(path.join(root, "runs"));
+    await ensureDir(path.join(root, "project_index", "schema"));
     await ensureDir(path.join(root, "research", "proposals"));
     await ensureDir(path.join(root, "research", "analysis"));
   }
@@ -147,6 +148,30 @@ function createGeneratedFilesHelpers({
     if (!fs.existsSync(secondarySkillsExample)) {
       await fsp.writeFile(secondarySkillsExample, templates.secondarySkillsExample());
       output.appendLine("Created agent/SECONDARY_SKILLS.example.json");
+    }
+    const projectIndexDocumentIndex = path.join(root, "project_index", "document_index.jsonl");
+    if (!fs.existsSync(projectIndexDocumentIndex)) {
+      await ensureDir(path.dirname(projectIndexDocumentIndex));
+      await fsp.writeFile(projectIndexDocumentIndex, templates.projectIndexDocumentIndex());
+      output.appendLine("Created project_index/document_index.jsonl");
+    }
+    const projectIndexExperimentIndex = path.join(root, "project_index", "experiment_index.jsonl");
+    if (!fs.existsSync(projectIndexExperimentIndex)) {
+      await ensureDir(path.dirname(projectIndexExperimentIndex));
+      await fsp.writeFile(projectIndexExperimentIndex, templates.projectIndexExperimentIndex());
+      output.appendLine("Created project_index/experiment_index.jsonl");
+    }
+    const projectIndexCurrentConclusions = path.join(root, "project_index", "current_conclusions.json");
+    if (!fs.existsSync(projectIndexCurrentConclusions)) {
+      await ensureDir(path.dirname(projectIndexCurrentConclusions));
+      await fsp.writeFile(projectIndexCurrentConclusions, templates.projectIndexCurrentConclusions());
+      output.appendLine("Created project_index/current_conclusions.json");
+    }
+    const projectIndexGoldenQueries = path.join(root, "project_index", "golden_queries.json");
+    if (!fs.existsSync(projectIndexGoldenQueries)) {
+      await ensureDir(path.dirname(projectIndexGoldenQueries));
+      await fsp.writeFile(projectIndexGoldenQueries, templates.projectIndexGoldenQueries());
+      output.appendLine("Created project_index/golden_queries.json");
     }
     await ensureHandoffFiles(root);
   }

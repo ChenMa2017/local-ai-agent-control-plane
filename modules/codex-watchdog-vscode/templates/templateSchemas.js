@@ -2,10 +2,12 @@
 
 const { bootstrapSchemaTemplates } = require("./templateBootstrapSchemas");
 const { watchdogSchemaTemplates } = require("./templateWatchdogSchemas");
+const { watchdogEvidenceSchemaTemplates } = require("./templateWatchdogEvidenceSchemas");
 
 const schemaTemplates = {
   ...bootstrapSchemaTemplates,
-  ...watchdogSchemaTemplates
+  ...watchdogSchemaTemplates,
+  ...watchdogEvidenceSchemaTemplates
 };
 
 module.exports = {

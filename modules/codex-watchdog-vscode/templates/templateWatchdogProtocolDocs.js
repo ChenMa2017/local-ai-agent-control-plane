@@ -31,6 +31,10 @@ Each wakeup should leave these files coherent:
 - \`agent/ANTI_SNOWBALL.md\`: stopped routes, stale facts to avoid repeating, and compaction notes.
 - \`agent/EXPERIMENT_LEDGER.md\`: durable experimental hypotheses, model/loss/data protocol, provenance, results, and conclusions.
 - \`agent/EVIDENCE_LEDGER.jsonl\`: durable machine-readable evidence objects for later agents.
+- \`project_index/document_index.jsonl\`: document identity, lifecycle, and evidence-scope metadata.
+- \`project_index/experiment_index.jsonl\`: experiment identity, evaluation-path, and protocol metadata.
+- \`project_index/current_conclusions.json\`: current conclusions that are safe to cite when still supported.
+- \`project_index/golden_queries.json\`: regression queries that protect retrieval behavior over time.
 
 ## Supervisor Modes
 
@@ -49,6 +53,7 @@ The runtime writes the chosen mode to \`agent/status/SUPERVISOR_MODE.json\` and 
 - Queue draft authoring, local profile/package authoring, local workspace copy preparation, stale state cleanup, and bounded CPU eval are autonomy-preserving actions; do them when the task box and safety policy allow them.
 - Sandbox-local GPU visibility failures are advisory only. Do not conclude that the host has no GPU unless queue/host evidence agrees.
 - Direct GPU shell execution remains forbidden; convert it into a queue path or queue draft.
+- For conclusion-bearing questions or formal evidence claims, query the local evidence index first with \`python3 agent/bin/watchdog_doc_search.py --project-root . --query "current conclusion" --json\` and use its \`decision\`, \`warnings\`, and \`read_plan\` before opening many source files.
 
 ## Supervisor Rules
 

@@ -148,6 +148,8 @@ POST /codex/cancel
 - classify the request into a TASK_CONTRACT
 - persist INTENT_DRAFT / GRAY_AREAS / QUESTIONS / TASKBOX_DRAFT / POLICY_PREFLIGHT
 - persist DECISION_GATE.json for experiment-like requests
+- consult project-local evidence retrieval for current-conclusion / comparison / formal-result style requests when a workspace exposes project_index + watchdog_doc_search.py
+- persist EVIDENCE_RETRIEVAL.json and READ_PLAN.md beside the intake artifacts
 - block direct execution until missing experiment decisions are clarified
 ```
 
