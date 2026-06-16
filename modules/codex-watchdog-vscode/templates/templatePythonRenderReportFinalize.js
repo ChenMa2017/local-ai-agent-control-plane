@@ -64,10 +64,132 @@ def records_by_id(records, key):
             result[record_id] = record
     return result
 
-def research_conclusion_policy(program):
+VALID_DOC_TYPES = {
+    "official_conclusion",
+    "formal_report",
+    "requirement",
+    "execution_plan",
+    "experiment_card",
+    "primary_result",
+    "smoke_result",
+    "bounded_experiment",
+    "daily_log",
+    "meeting_minutes",
+    "auxiliary_diagnostic",
+    "debug_note",
+    "in_progress",
+    "legacy_note",
+    "unknown",
+}
+VALID_RECORD_STATUSES = {"active", "draft", "superseded", "deprecated", "archived", "invalidated"}
+VALID_EVIDENCE_SCOPES = {"primary_only", "mixed", "auxiliary_only", "none"}
+VALID_CONCLUSION_STATUSES = {"confirmed", "tentative", "auxiliary_only", "invalidated"}
+
+def safe_optional_string(value):
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    return text or None
+
+def ordered_unique_strings(items):
+    result = []
+    for item in items:
+        value = str(item or "").strip()
+        if value and value not in result:
+            result.append(value)
+    return result
+
+def require_nonempty_string(value, label, errors, allow_null=False):
+    if allow_null and value in (None, ""):
+        return
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"{label} must be a nonempty string")
+
+def require_string_array(value, label, errors):
+    if not isinstance(value, list):
+        errors.append(f"{label} must be an array")
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            errors.append(f"{label}[{index}] must be a nonempty string")
+
+def validate_primary_metrics(value, label, errors):
+    if not isinstance(value, list):
+        errors.append(f"{label} must be an array")
+        return []
+    normalized = []
+    for index, metric in enumerate(value):
+        metric_label = f"{label}[{index}]"
+        if not isinstance(metric, dict):
+            errors.append(f"{metric_label} must be an object")
+            continue
+        require_nonempty_string(metric.get("name"), f"{metric_label}.name", errors)
+        metric_value = metric.get("value")
+        if metric_value not in (None, "") and not isinstance(metric_value, (int, float)):
+            errors.append(f"{metric_label}.value must be a number or null")
+        if not isinstance(metric.get("higher_is_better"), bool):
+            errors.append(f"{metric_label}.higher_is_better must be a boolean")
+        notes = metric.get("notes")
+        if notes not in (None, "") and not isinstance(notes, str):
+            errors.append(f"{metric_label}.notes must be a string or null")
+        normalized.append({
+            "name": str(metric.get("name") or "").strip(),
+            "value": metric_value if metric_value not in ("",) else None,
+            "higher_is_better": metric.get("higher_is_better") is True,
+            "notes": safe_optional_string(notes),
+        })
+    return normalized
+
+def is_safe_relative_project_path(value):
+    if not isinstance(value, str) or not value.strip():
+        return False
+    candidate = Path(value)
+    return not candidate.is_absolute() and ".." not in candidate.parts
+
+def is_safe_project_area(value):
+    if not isinstance(value, str) or not value.strip():
+        return False
+    return all(char.isalnum() or char in {"_", "-", "/", "."} for char in value)
+
+def sha256_file(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+def write_jsonl_records(path, records):
+    lines = [json.dumps(record, sort_keys=True) for record in records]
+    atomic_write_text(path, ("\\n".join(lines) + "\\n") if lines else "")
+
+def upsert_records_by_key(existing_records, updates, key):
+    remaining = {}
+    ordered_keys = []
+    for record in existing_records if isinstance(existing_records, list) else []:
+        if not isinstance(record, dict):
+            continue
+        record_key = str(record.get(key) or "").strip()
+        if not record_key:
+            continue
+        remaining[record_key] = record
+        if record_key not in ordered_keys:
+            ordered_keys.append(record_key)
+    for update in updates if isinstance(updates, list) else []:
+        if not isinstance(update, dict):
+            continue
+        record_key = str(update.get(key) or "").strip()
+        if not record_key:
+            continue
+        remaining[record_key] = update
+        if record_key not in ordered_keys:
+            ordered_keys.append(record_key)
+    return [remaining[record_key] for record_key in ordered_keys if record_key in remaining]
+
+def research_program_policy(program):
+    domain = program.get("domain") if isinstance(program.get("domain"), dict) else {}
+    baseline_policy = program.get("baseline_policy") if isinstance(program.get("baseline_policy"), dict) else {}
     evidence_policy = program.get("evidence_policy") if isinstance(program.get("evidence_policy"), dict) else {}
     conclusion_policy = program.get("conclusion_policy") if isinstance(program.get("conclusion_policy"), dict) else {}
     return {
+        "allowed_project_areas": set(normalized_string_list(domain.get("allowed_project_areas"))),
+        "forbidden_project_areas": set(normalized_string_list(domain.get("forbidden_project_areas"))),
+        "baseline_required": baseline_policy.get("required") is True,
         "allowed_conclusion_statuses": set(normalized_string_list(conclusion_policy.get("allowed_conclusion_statuses"))),
         "publish_only_after_review": conclusion_policy.get("publish_only_after_review") is True,
         "require_staleness_tracking": conclusion_policy.get("require_staleness_tracking") is True,
@@ -75,6 +197,154 @@ def research_conclusion_policy(program):
         "require_primary_evidence_for_confirmed_claims": evidence_policy.get("require_primary_evidence_for_confirmed_claims") is True,
         "require_index_entry_for_cited_files": evidence_policy.get("require_index_entry_for_cited_files") is True,
     }
+
+def normalize_document_index_update(update, existing_record, updated_utc):
+    existing = existing_record if isinstance(existing_record, dict) else {}
+    checksum_scope = safe_optional_string(update.get("checksum_scope")) or safe_optional_string(existing.get("checksum_scope")) or "raw_file_bytes"
+    return {
+        "doc_id": str(update.get("doc_id") or "").strip(),
+        "path": str(update.get("path") or "").strip(),
+        "title": str(update.get("title") or "").strip(),
+        "doc_type": str(update.get("doc_type") or "").strip(),
+        "status": str(update.get("status") or "").strip(),
+        "evidence_scope": str(update.get("evidence_scope") or "").strip(),
+        "evidence_scope_note": str(update.get("evidence_scope_note") or "").strip(),
+        "project_area": str(update.get("project_area") or "").strip(),
+        "summary": str(update.get("summary") or "").strip(),
+        "tags": normalized_string_list(update.get("tags")),
+        "supersedes": normalized_string_list(update.get("supersedes")),
+        "superseded_by": normalized_string_list(update.get("superseded_by")),
+        "created_at": safe_optional_string(update.get("created_at")) or safe_optional_string(existing.get("created_at")) or updated_utc,
+        "updated_at": safe_optional_string(update.get("updated_at")) or updated_utc,
+        "checksum": safe_optional_string(update.get("checksum")) or safe_optional_string(existing.get("checksum")),
+        "checksum_scope": checksum_scope,
+        "indexed_at": safe_optional_string(update.get("indexed_at")) or updated_utc,
+    }
+
+def validate_document_index_update(update, existing_record, root, policy, updated_utc):
+    errors = []
+    if not isinstance(update, dict):
+        return None, ["document_index_updates item must be an object"]
+    normalized = normalize_document_index_update(update, existing_record, updated_utc)
+    for field in (
+        "doc_id",
+        "path",
+        "title",
+        "doc_type",
+        "status",
+        "evidence_scope",
+        "evidence_scope_note",
+        "project_area",
+        "summary",
+    ):
+        require_nonempty_string(normalized.get(field), f"document_index_updates.{normalized.get('doc_id') or '<unknown>'}.{field}", errors)
+    require_string_array(update.get("tags"), f"document_index_updates.{normalized.get('doc_id') or '<unknown>'}.tags", errors)
+    require_string_array(update.get("supersedes"), f"document_index_updates.{normalized.get('doc_id') or '<unknown>'}.supersedes", errors)
+    require_string_array(update.get("superseded_by"), f"document_index_updates.{normalized.get('doc_id') or '<unknown>'}.superseded_by", errors)
+    if normalized.get("doc_type") and normalized["doc_type"] not in VALID_DOC_TYPES:
+        errors.append(f"document_index_updates.{normalized['doc_id']}.doc_type is invalid: {normalized['doc_type']!r}")
+    if normalized.get("status") and normalized["status"] not in VALID_RECORD_STATUSES:
+        errors.append(f"document_index_updates.{normalized['doc_id']}.status is invalid: {normalized['status']!r}")
+    if normalized.get("evidence_scope") and normalized["evidence_scope"] not in VALID_EVIDENCE_SCOPES:
+        errors.append(f"document_index_updates.{normalized['doc_id']}.evidence_scope is invalid: {normalized['evidence_scope']!r}")
+    if normalized.get("checksum_scope") != "raw_file_bytes":
+        errors.append(f"document_index_updates.{normalized['doc_id']}.checksum_scope must be raw_file_bytes")
+    project_area = normalized.get("project_area")
+    if project_area and not is_safe_project_area(project_area):
+        errors.append(f"document_index_updates.{normalized['doc_id']}.project_area must be a safe nonempty label")
+    elif project_area and policy.get("allowed_project_areas") and project_area not in policy.get("allowed_project_areas"):
+        errors.append(f"document_index_updates.{normalized['doc_id']}.project_area is outside RESEARCH_PROGRAM allowed_project_areas: {project_area!r}")
+    if project_area and project_area in policy.get("forbidden_project_areas", set()):
+        errors.append(f"document_index_updates.{normalized['doc_id']}.project_area is forbidden by RESEARCH_PROGRAM: {project_area!r}")
+    target = None
+    rel_path = normalized.get("path")
+    if rel_path and not is_safe_relative_project_path(rel_path):
+        errors.append(f"document_index_updates.{normalized['doc_id']}.path must be a safe relative path")
+    elif rel_path:
+        target = root / rel_path
+        if not target.exists():
+            errors.append(f"document_index_updates.{normalized['doc_id']}.path does not exist: {rel_path}")
+    for field in ("created_at", "updated_at", "indexed_at"):
+        try:
+            parse_timestamp_or_none(normalized.get(field))
+        except Exception:
+            errors.append(f"document_index_updates.{normalized['doc_id']}.{field} must be ISO-8601 or null")
+    if target and target.exists():
+        computed_checksum = sha256_file(target)
+        if normalized.get("checksum") in (None, ""):
+            normalized["checksum"] = computed_checksum
+        elif normalized.get("checksum") != computed_checksum:
+            errors.append(f"document_index_updates.{normalized['doc_id']}.checksum does not match file bytes for {rel_path}")
+    return normalized, errors
+
+def normalize_experiment_index_update(update):
+    return {
+        "experiment_id": str(update.get("experiment_id") or "").strip(),
+        "experiment_type": str(update.get("experiment_type") or "").strip(),
+        "status": str(update.get("status") or "").strip(),
+        "evidence_scope": str(update.get("evidence_scope") or "").strip(),
+        "name": str(update.get("name") or "").strip(),
+        "purpose": str(update.get("purpose") or "").strip(),
+        "model": safe_optional_string(update.get("model")),
+        "baseline_model": safe_optional_string(update.get("baseline_model")),
+        "train_data": safe_optional_string(update.get("train_data")),
+        "test_data": safe_optional_string(update.get("test_data")),
+        "eval_protocol": safe_optional_string(update.get("eval_protocol")),
+        "with_definition": safe_optional_string(update.get("with_definition")),
+        "without_definition": safe_optional_string(update.get("without_definition")),
+        "primary_metrics": update.get("primary_metrics"),
+        "primary_metric_name": safe_optional_string(update.get("primary_metric_name")),
+        "best_epoch": update.get("best_epoch"),
+        "primary_eval_path": safe_optional_string(update.get("primary_eval_path")),
+        "config_path": safe_optional_string(update.get("config_path")),
+        "code_commit": safe_optional_string(update.get("code_commit")),
+        "run_id": safe_optional_string(update.get("run_id")),
+        "official_conclusion_doc": safe_optional_string(update.get("official_conclusion_doc")),
+    }
+
+def validate_experiment_index_update(update, docs_by_id, root, policy):
+    errors = []
+    if not isinstance(update, dict):
+        return None, ["experiment_index_updates item must be an object"]
+    normalized = normalize_experiment_index_update(update)
+    for field in ("experiment_id", "experiment_type", "status", "evidence_scope", "name", "purpose"):
+        require_nonempty_string(normalized.get(field), f"experiment_index_updates.{normalized.get('experiment_id') or '<unknown>'}.{field}", errors)
+    if normalized.get("status") and normalized["status"] not in VALID_RECORD_STATUSES:
+        errors.append(f"experiment_index_updates.{normalized['experiment_id']}.status is invalid: {normalized['status']!r}")
+    if normalized.get("evidence_scope") and normalized["evidence_scope"] not in VALID_EVIDENCE_SCOPES:
+        errors.append(f"experiment_index_updates.{normalized['experiment_id']}.evidence_scope is invalid: {normalized['evidence_scope']!r}")
+    if policy.get("baseline_required") and normalized.get("status") == "active" and normalized.get("baseline_model") in (None, ""):
+        errors.append(f"experiment_index_updates.{normalized['experiment_id']}.baseline_model must be set because RESEARCH_PROGRAM baseline_policy.required=true")
+    normalized["primary_metrics"] = validate_primary_metrics(
+        normalized.get("primary_metrics"),
+        f"experiment_index_updates.{normalized.get('experiment_id') or '<unknown>'}.primary_metrics",
+        errors,
+    )
+    primary_metric_name = normalized.get("primary_metric_name")
+    if primary_metric_name and not any(metric.get("name") == primary_metric_name for metric in normalized["primary_metrics"]):
+        errors.append(
+            f"experiment_index_updates.{normalized['experiment_id']}.primary_metric_name must match one primary_metrics.name"
+        )
+    best_epoch = normalized.get("best_epoch")
+    if best_epoch not in (None, "") and not isinstance(best_epoch, int):
+        errors.append(f"experiment_index_updates.{normalized['experiment_id']}.best_epoch must be an integer or null")
+    for field in ("model", "baseline_model", "train_data", "test_data", "eval_protocol", "with_definition", "without_definition", "code_commit", "run_id"):
+        value = normalized.get(field)
+        if value not in (None, "") and not isinstance(value, str):
+            errors.append(f"experiment_index_updates.{normalized['experiment_id']}.{field} must be a string or null")
+    for path_field in ("primary_eval_path", "config_path"):
+        path_value = normalized.get(path_field)
+        if path_value not in (None, ""):
+            if not is_safe_relative_project_path(path_value):
+                errors.append(f"experiment_index_updates.{normalized['experiment_id']}.{path_field} must be a safe relative path or null")
+            elif not (root / path_value).exists():
+                errors.append(f"experiment_index_updates.{normalized['experiment_id']}.{path_field} does not exist: {path_value}")
+    conclusion_doc = normalized.get("official_conclusion_doc")
+    if conclusion_doc not in (None, "") and conclusion_doc not in docs_by_id:
+        errors.append(
+            f"experiment_index_updates.{normalized['experiment_id']}.official_conclusion_doc references unknown doc_id: {conclusion_doc}"
+        )
+    return normalized, errors
 
 def validate_current_conclusion_update(update, docs_by_id, experiments_by_id, policy):
     errors = []
@@ -158,24 +428,91 @@ def upsert_current_conclusions(current_conclusions, update, updated_utc):
         "items": next_items,
     }
 
+def clean_object_list(value):
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+document_index_updates = clean_object_list(data.get("document_index_updates"))
+experiment_index_updates = clean_object_list(data.get("experiment_index_updates"))
 current_conclusion_update = clean_object(data.get("current_conclusion_update"))
+document_index_update_ids = []
+experiment_index_update_ids = []
+document_index_update_count = 0
+experiment_index_update_count = 0
+document_index_output_path = ""
+experiment_index_output_path = ""
 current_conclusion_update_status = "none"
 current_conclusion_output_path = ""
 current_conclusion_proposal_path = ""
 current_conclusion_topic_id = str(current_conclusion_update.get("topic_id") or "").strip() if current_conclusion_update else ""
+existing_document_records = load_jsonl_records("project_index/document_index.jsonl")
+existing_experiment_records = load_jsonl_records("project_index/experiment_index.jsonl")
+docs_by_id = records_by_id(existing_document_records, "doc_id")
+experiments_by_id = records_by_id(existing_experiment_records, "experiment_id")
+program_policy = research_program_policy(research_program if isinstance(research_program, dict) else {})
+staged_document_updates = []
+seen_document_ids = set()
+for index, update in enumerate(document_index_updates):
+    update_doc_id = str(update.get("doc_id") or "").strip()
+    if update_doc_id and update_doc_id in seen_document_ids:
+        raise SystemExit(f"document_index_updates contains duplicate doc_id in one wakeup: {update_doc_id}")
+    normalized_doc, doc_errors = validate_document_index_update(
+        update,
+        docs_by_id.get(update_doc_id),
+        Path("."),
+        program_policy,
+        updated,
+    )
+    if doc_errors:
+        raise SystemExit("document_index_updates violates RESEARCH_PROGRAM/project_index policy: " + "; ".join(doc_errors))
+    seen_document_ids.add(update_doc_id)
+    staged_document_updates.append(normalized_doc)
+staged_docs_by_id = dict(docs_by_id)
+for record in staged_document_updates:
+    staged_docs_by_id[record["doc_id"]] = record
+staged_experiment_updates = []
+seen_experiment_ids = set()
+for update in experiment_index_updates:
+    update_experiment_id = str(update.get("experiment_id") or "").strip()
+    if update_experiment_id and update_experiment_id in seen_experiment_ids:
+        raise SystemExit(f"experiment_index_updates contains duplicate experiment_id in one wakeup: {update_experiment_id}")
+    normalized_experiment, experiment_errors = validate_experiment_index_update(
+        update,
+        staged_docs_by_id,
+        Path("."),
+        program_policy,
+    )
+    if experiment_errors:
+        raise SystemExit("experiment_index_updates violates RESEARCH_PROGRAM/project_index policy: " + "; ".join(experiment_errors))
+    seen_experiment_ids.add(update_experiment_id)
+    staged_experiment_updates.append(normalized_experiment)
+staged_experiments_by_id = dict(experiments_by_id)
+for record in staged_experiment_updates:
+    staged_experiments_by_id[record["experiment_id"]] = record
 if current_conclusion_update:
-    docs_by_id = records_by_id(load_jsonl_records("project_index/document_index.jsonl"), "doc_id")
-    experiments_by_id = records_by_id(load_jsonl_records("project_index/experiment_index.jsonl"), "experiment_id")
-    conclusion_policy = research_conclusion_policy(research_program if isinstance(research_program, dict) else {})
     conclusion_errors = validate_current_conclusion_update(
         current_conclusion_update,
-        docs_by_id,
-        experiments_by_id,
-        conclusion_policy,
+        staged_docs_by_id,
+        staged_experiments_by_id,
+        program_policy,
     )
     if conclusion_errors:
         raise SystemExit("current_conclusion_update violates RESEARCH_PROGRAM/current_conclusions policy: " + "; ".join(conclusion_errors))
-    if conclusion_policy.get("publish_only_after_review") and not bool(data.get("requires_human_review")):
+if staged_document_updates:
+    updated_document_records = upsert_records_by_key(existing_document_records, staged_document_updates, "doc_id")
+    document_index_output_path = "project_index/document_index.jsonl"
+    write_jsonl_records(document_index_output_path, updated_document_records)
+    document_index_update_ids = [record["doc_id"] for record in staged_document_updates]
+    document_index_update_count = len(document_index_update_ids)
+if staged_experiment_updates:
+    updated_experiment_records = upsert_records_by_key(existing_experiment_records, staged_experiment_updates, "experiment_id")
+    experiment_index_output_path = "project_index/experiment_index.jsonl"
+    write_jsonl_records(experiment_index_output_path, updated_experiment_records)
+    experiment_index_update_ids = [record["experiment_id"] for record in staged_experiment_updates]
+    experiment_index_update_count = len(experiment_index_update_ids)
+if current_conclusion_update:
+    if program_policy.get("publish_only_after_review") and not bool(data.get("requires_human_review")):
         raise SystemExit("current_conclusion_update requires requires_human_review=true because RESEARCH_PROGRAM conclusion_policy.publish_only_after_review=true")
     if bool(data.get("requires_human_review")):
         proposal_dir = Path("research/proposals/current_conclusions")
@@ -186,8 +523,10 @@ if current_conclusion_update:
             "schema_version": 1,
             "generated_at": updated,
             "research_program_id": research_program_info.get("program_id"),
-            "publish_only_after_review": conclusion_policy.get("publish_only_after_review"),
+            "publish_only_after_review": program_policy.get("publish_only_after_review"),
             "current_conclusion_update": current_conclusion_update,
+            "document_index_update_ids": document_index_update_ids,
+            "experiment_index_update_ids": experiment_index_update_ids,
         })
         current_conclusion_update_status = "review_required"
     else:
@@ -249,6 +588,8 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Research autonomy mode: {research_program_info.get('autonomy_mode') or 'unknown'}",
     f"Research allowed areas: {', '.join(research_program_info.get('allowed_project_areas') or []) or 'unbounded'}",
     f"Research baseline required: {research_program_info.get('baseline_required')}",
+    f"Document index updates: {document_index_update_count}",
+    f"Experiment index updates: {experiment_index_update_count}",
     f"Current conclusion update: {current_conclusion_update_status}",
     f"Current conclusion topic: {current_conclusion_topic_id or 'none'}",
     "",
@@ -322,6 +663,12 @@ atomic_write_json("agent/RUN_STATE.json", {
     "research_autonomy_mode": research_program_info.get("autonomy_mode"),
     "research_allowed_project_areas": research_program_info.get("allowed_project_areas"),
     "research_baseline_required": research_program_info.get("baseline_required"),
+    "document_index_update_count": document_index_update_count,
+    "document_index_update_ids": document_index_update_ids,
+    "document_index_output_path": document_index_output_path or None,
+    "experiment_index_update_count": experiment_index_update_count,
+    "experiment_index_update_ids": experiment_index_update_ids,
+    "experiment_index_output_path": experiment_index_output_path or None,
     "current_conclusion_update_status": current_conclusion_update_status,
     "current_conclusion_topic_id": current_conclusion_topic_id or None,
     "current_conclusion_output_path": current_conclusion_output_path or None,
@@ -371,6 +718,8 @@ write_lines("agent/NEXT_ACTION.md", [
     f"- Claim scope: {task_box.get('claim_scope') or 'none'}",
     f"- Research program: {research_program_info.get('program_id') or 'none'}",
     f"- Research domain: {research_program_info.get('domain_name') or 'none'}",
+    f"- Document index updates: {document_index_update_count}",
+    f"- Experiment index updates: {experiment_index_update_count}",
     f"- Current conclusion update: {current_conclusion_update_status}",
     f"- Current conclusion topic: {current_conclusion_topic_id or 'none'}",
     "",
@@ -471,13 +820,16 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "experiment_decision_gate_required": experiment_gate_status in {"required_ready", "blocked"},
     "experiment_decision_gate_blocking": experiment_gate_status == "blocked",
     "task_box_id": task_box.get("task_box_id"),
-    "input_paths": [
+    "input_paths": ordered_unique_strings([
         "research/RESEARCH_PROGRAM.json",
         *([ "project_index/current_conclusions.json" ] if current_conclusion_update else []),
-        *([ "project_index/document_index.jsonl" ] if current_conclusion_update else []),
-        *([ "project_index/experiment_index.jsonl" ] if current_conclusion_update else []),
-    ],
-    "output_paths": [
+        *([ "project_index/document_index.jsonl" ] if document_index_updates or current_conclusion_update else []),
+        *([ "project_index/experiment_index.jsonl" ] if experiment_index_updates or current_conclusion_update else []),
+        *[record.get("path") for record in staged_document_updates],
+        *[record.get("primary_eval_path") for record in staged_experiment_updates if record.get("primary_eval_path")],
+        *[record.get("config_path") for record in staged_experiment_updates if record.get("config_path")],
+    ]),
+    "output_paths": ordered_unique_strings([
         "agent/reports/latest.md",
         "agent/STATE.json",
         "agent/CURRENT_STATE.md",
@@ -485,12 +837,14 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
         "agent/PROGRESS_STATE.json",
         "agent/NEXT_ACTION.md",
         "agent/ROUTE_CANONICAL.json",
+        *( [document_index_output_path] if document_index_output_path else [] ),
+        *( [experiment_index_output_path] if experiment_index_output_path else [] ),
         *( [current_conclusion_output_path] if current_conclusion_output_path else [] ),
         *( [current_conclusion_proposal_path] if current_conclusion_proposal_path else [] ),
         *( [next_task_draft_path] if next_task_draft_path else [] ),
         *( [task_profile_path] if task_profile_path else [] ),
         *( [queue_request_draft_path] if queue_request_draft_path else [] ),
-    ],
+    ]),
     "metrics": {},
     "caveats": data.get("blocked_items") or [],
     "next_safe_action": next_action.get("description", ""),
@@ -504,6 +858,10 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "research_autonomy_mode": research_program_info.get("autonomy_mode"),
     "research_allowed_project_areas": research_program_info.get("allowed_project_areas"),
     "research_baseline_required": research_program_info.get("baseline_required"),
+    "document_index_update_count": document_index_update_count,
+    "document_index_update_ids": document_index_update_ids,
+    "experiment_index_update_count": experiment_index_update_count,
+    "experiment_index_update_ids": experiment_index_update_ids,
     "current_conclusion_update_status": current_conclusion_update_status,
     "current_conclusion_topic_id": current_conclusion_topic_id or None,
     "fair_comparability": task_box.get("fair_comparability"),

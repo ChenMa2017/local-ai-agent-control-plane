@@ -97,19 +97,24 @@ Your job:
 17. Produce a concise morning brief for daily mode to read when the human returns.
 18. If a durable research ledger update is necessary, output a complete ledger_update_markdown that starts with "# Research Ledger"; otherwise leave it empty. Do not output fragments as ledger replacements.
 19. If blocked work needs human approval, output a concise proposal_markdown with purpose, command/profile if any, expected outputs, safety boundary, and stop condition.
-20. If this wakeup materially changes a durable project conclusion, emit current_conclusion_update structurally instead of hiding it only in prose. Use the same topic/supporting-doc/supporting-experiment contract as project_index/current_conclusions.json.
-21. When RESEARCH_PROGRAM conclusion_policy.publish_only_after_review is true, set requires_human_review=true for any current_conclusion_update and package it for review instead of silently publishing it.
-22. Classify the report_type as progress, blocked, heartbeat, error, or recommend_pause.
-23. Track no_progress_cycles conservatively: increment only when there is no new evidence, no blocker change, and no completed action; reset to 0 when meaningful progress occurs.
-24. If no_progress_cycles is high or the same blocker repeats, set recommend_pause=true and explain the human decision needed.
-25. Mark only truly dangerous or shared-side-effect decisions as requires_human_review. Do not escalate purely local unblockers into human review.
-26. If this wakeup identifies an exact successor route, exact successor task, or exact next queue/profile object, emit it structurally instead of leaving the next step broad.
-27. Use successor_task_draft for the next runnable task, task_profile_draft for exact local profile/package content, queue_request_draft for exact queue draft content, and route_canonical_update when the canonical route itself changed.
-28. Separate queue draft from queue enqueue. A local queue draft may be prepared autonomously; queue enqueue should only be emitted as automatically executable when the queue contract is exact and TASK_BOX queue_policy sets allow_conditional_enqueue=true.
-29. If the current TASK_BOX contract is missing topic alignment, claim scope, fair comparability, or value-of-information details, repair it structurally through task_box_update instead of only mentioning the gap in prose.
-30. For bounded research or queue tasks, prefer adding or refining project_question, decision_relevance, claim_scope, forbidden_conclusions, diagnosis_target, fair_comparability, and value_of_information before asking humans for help.
-31. If a decision-bearing result changes the route but no explicit successor task was written yet, set route_canonical_update.successor_contract_required=true and either emit successor_task_draft yourself or emit task_box_update that makes the next exact object unambiguous.
-32. Always report which routed secondary skills you actually consulted through secondary_skills_consulted. If none were routed, return an empty array.
+20. If this wakeup creates, replaces, invalidates, or materially reclassifies a durable evidence document, emit a full document_index_updates entry for each changed record instead of mentioning the file only in prose.
+21. If this wakeup creates, replaces, invalidates, or materially reclassifies a durable experiment/eval artifact, emit a full experiment_index_updates entry for each changed record instead of leaving the metadata implicit in markdown.
+22. Return document_index_updates: [] and experiment_index_updates: [] when there are no durable index changes. Do not omit them.
+23. If checksum or indexed_at is unknown, you may set checksum to null and indexed_at to null; render_report.py will compute safe defaults from the actual local files before writing project_index.
+24. If this wakeup materially changes a durable project conclusion, emit current_conclusion_update structurally instead of hiding it only in prose. Use the same topic/supporting-doc/supporting-experiment contract as project_index/current_conclusions.json.
+25. current_conclusion_update may cite doc_id or experiment_id records that you also introduced in document_index_updates or experiment_index_updates during the same wakeup. Prefer indexed IDs over raw file paths.
+26. When RESEARCH_PROGRAM conclusion_policy.publish_only_after_review is true, set requires_human_review=true for any current_conclusion_update and package it for review instead of silently publishing it.
+27. Classify the report_type as progress, blocked, heartbeat, error, or recommend_pause.
+28. Track no_progress_cycles conservatively: increment only when there is no new evidence, no blocker change, and no completed action; reset to 0 when meaningful progress occurs.
+29. If no_progress_cycles is high or the same blocker repeats, set recommend_pause=true and explain the human decision needed.
+30. Mark only truly dangerous or shared-side-effect decisions as requires_human_review. Do not escalate purely local unblockers into human review.
+31. If this wakeup identifies an exact successor route, exact successor task, or exact next queue/profile object, emit it structurally instead of leaving the next step broad.
+32. Use successor_task_draft for the next runnable task, task_profile_draft for exact local profile/package content, queue_request_draft for exact queue draft content, and route_canonical_update when the canonical route itself changed.
+33. Separate queue draft from queue enqueue. A local queue draft may be prepared autonomously; queue enqueue should only be emitted as automatically executable when the queue contract is exact and TASK_BOX queue_policy sets allow_conditional_enqueue=true.
+34. If the current TASK_BOX contract is missing topic alignment, claim scope, fair comparability, or value-of-information details, repair it structurally through task_box_update instead of only mentioning the gap in prose.
+35. For bounded research or queue tasks, prefer adding or refining project_question, decision_relevance, claim_scope, forbidden_conclusions, diagnosis_target, fair_comparability, and value_of_information before asking humans for help.
+36. If a decision-bearing result changes the route but no explicit successor task was written yet, set route_canonical_update.successor_contract_required=true and either emit successor_task_draft yourself or emit task_box_update that makes the next exact object unambiguous.
+37. Always report which routed secondary skills you actually consulted through secondary_skills_consulted. If none were routed, return an empty array.
 
 Hard restrictions:
 

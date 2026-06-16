@@ -192,6 +192,8 @@ async function main() {
   assert.ok(watchSchema.required.includes("review_scope"));
   assert.ok(watchSchema.required.includes("review_resolver"));
   assert.ok(watchSchema.required.includes("secondary_skills_consulted"));
+  assert.ok(watchSchema.required.includes("document_index_updates"));
+  assert.ok(watchSchema.required.includes("experiment_index_updates"));
   assert.ok(watchSchema.required.includes("current_conclusion_update"));
   assert.ok(watchSchema.required.includes("successor_task_draft"));
   assert.ok(watchSchema.required.includes("task_profile_draft"));
@@ -1361,6 +1363,18 @@ async function main() {
     route_locked: true,
     task_id: "stage06_g1_followup"
   });
+  writeFile(projectRoot, "formal/stage06_route_status.md", "# Stage06 Route Status\n\nThe successor contract is fully materialized and ready for controlled queue submission.\n");
+  writeFile(projectRoot, "eval/stage06_queue_contract_metrics.json", JSON.stringify({
+    contract_fields_complete: 1,
+    successor_contract_ready: true
+  }, null, 2) + "\n");
+  writeFile(projectRoot, "configs/stage06_queue_contract.json", JSON.stringify({
+    task_id: "stage06_g1_followup",
+    queue_target: "gpu_queue",
+    exact_profile_path: "agent/task_profiles/stage06_g1_followup.json"
+  }, null, 2) + "\n");
+  const stage06RouteDocPath = path.join(projectRoot, "formal", "stage06_route_status.md");
+  const stage06RouteDocChecksum = sha256File(stage06RouteDocPath);
   assert.throws(() => runRender(projectRoot, {
     timestamp_utc: "2026-06-08T12:00:00Z",
     report_markdown: "# Report\n\nAccepted successor route and prepared the next exact contract.",
@@ -1375,7 +1389,12 @@ async function main() {
     blocked_items: [],
     completed_items: ["Accepted successor route"],
     running_items: [],
-    evidence: ["agent/ROUTE_CANONICAL.json"],
+    evidence: [
+      "agent/ROUTE_CANONICAL.json",
+      "formal/stage06_route_status.md",
+      "eval/stage06_queue_contract_metrics.json",
+      "configs/stage06_queue_contract.json"
+    ],
     progress_changed: true,
     no_progress_cycles: 0,
     recommend_pause: false,
@@ -1393,6 +1412,8 @@ async function main() {
     morning_brief_markdown: "",
     proposal_markdown: "",
     ledger_update_markdown: "",
+    document_index_updates: [],
+    experiment_index_updates: [],
     current_conclusion_update: null,
     successor_task_draft: {
       task_id: "stage06_g1_followup",
@@ -1454,14 +1475,67 @@ async function main() {
     morning_brief_markdown: "",
     proposal_markdown: "",
     ledger_update_markdown: "",
+    document_index_updates: [
+      {
+        doc_id: "doc_stage06_route_status",
+        path: "formal/stage06_route_status.md",
+        title: "Stage06 Route Status",
+        doc_type: "formal_report",
+        status: "active",
+        evidence_scope: "mixed",
+        evidence_scope_note: "Summarizes the exact successor contract together with the supporting evaluation package.",
+        project_area: "route_contracts",
+        summary: "Durable report for the stage06 exact successor contract and its queue-ready package.",
+        tags: ["stage06", "route", "queue_contract"],
+        supersedes: [],
+        superseded_by: [],
+        created_at: "2026-06-08T12:00:00Z",
+        updated_at: "2026-06-08T12:00:00Z",
+        checksum: null,
+        checksum_scope: "raw_file_bytes",
+        indexed_at: null
+      }
+    ],
+    experiment_index_updates: [
+      {
+        experiment_id: "exp_stage06_queue_contract",
+        experiment_type: "queue_contract",
+        status: "active",
+        evidence_scope: "primary_only",
+        name: "Stage06 queue-ready contract package",
+        purpose: "Record the exact task/profile/queue package that can be submitted next.",
+        model: "stage06_g1_candidate",
+        baseline_model: "stage06_g0_baseline",
+        train_data: "n/a",
+        test_data: "n/a",
+        eval_protocol: "route_contract_materialization_check",
+        with_definition: "exact successor task plus profile and queue draft present",
+        without_definition: "missing any required successor contract artifact",
+        primary_metrics: [
+          {
+            name: "contract_fields_complete",
+            value: 1,
+            higher_is_better: true,
+            notes: "All exact successor contract files were materialized."
+          }
+        ],
+        primary_metric_name: "contract_fields_complete",
+        best_epoch: null,
+        primary_eval_path: "eval/stage06_queue_contract_metrics.json",
+        config_path: "configs/stage06_queue_contract.json",
+        code_commit: "abc1234",
+        run_id: "stage06_g1_followup",
+        official_conclusion_doc: "doc_stage06_route_status"
+      }
+    ],
     current_conclusion_update: {
       topic_id: "stage06_g1_route_status",
       topic: "stage06 g1 route status",
-      conclusion_status: "tentative",
-      claim: "The stage06 route now has an exact successor contract, but execution still depends on the controlled queue boundary.",
+      conclusion_status: "confirmed",
+      claim: "The stage06 route now has a fully materialized successor contract package; controlled queue execution is the remaining external step.",
       evidence_scope: "mixed",
-      supporting_docs: ["doc_current_best"],
-      supporting_experiments: ["exp_model_a"],
+      supporting_docs: ["doc_stage06_route_status"],
+      supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:00:00Z",
       stale_after_days: 14,
       stale_severity: "warning",
@@ -1542,6 +1616,12 @@ async function main() {
   assert.strictEqual(queueRunState.research_program_id, "replace_with_project_program_id");
   assert.strictEqual(queueRunState.research_domain, "replace_with_domain_name");
   assert.strictEqual(queueRunState.research_autonomy_mode, "domain_bounded");
+  assert.strictEqual(queueRunState.document_index_update_count, 1);
+  assert.deepStrictEqual(queueRunState.document_index_update_ids, ["doc_stage06_route_status"]);
+  assert.strictEqual(queueRunState.document_index_output_path, "project_index/document_index.jsonl");
+  assert.strictEqual(queueRunState.experiment_index_update_count, 1);
+  assert.deepStrictEqual(queueRunState.experiment_index_update_ids, ["exp_stage06_queue_contract"]);
+  assert.strictEqual(queueRunState.experiment_index_output_path, "project_index/experiment_index.jsonl");
   assert.strictEqual(queueRunState.current_conclusion_update_status, "applied");
   assert.strictEqual(queueRunState.current_conclusion_topic_id, "stage06_g1_route_status");
   const nextActionText = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
@@ -1552,6 +1632,8 @@ async function main() {
   assert.match(nextActionText, /Successor materialization status: queue_exact/);
   assert.match(nextActionText, /Exact object path: agent\/queue\/drafts\/stage06_g1_followup\.json/);
   assert.match(nextActionText, /Research program: replace_with_project_program_id/);
+  assert.match(nextActionText, /Document index updates: 1/);
+  assert.match(nextActionText, /Experiment index updates: 1/);
   assert.match(nextActionText, /Current conclusion update: applied/);
   const currentStateText = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
   assert.match(currentStateText, /Route ID: route-new/);
@@ -1561,22 +1643,49 @@ async function main() {
   assert.match(currentStateText, /Exact next object: agent\/queue\/drafts\/stage06_g1_followup\.json/);
   assert.match(currentStateText, /Research program: replace_with_project_program_id/);
   assert.match(currentStateText, /Research autonomy mode: domain_bounded/);
+  assert.match(currentStateText, /Document index updates: 1/);
+  assert.match(currentStateText, /Experiment index updates: 1/);
   assert.match(currentStateText, /Current conclusion update: applied/);
+  const updatedDocumentIndex = fs.readFileSync(path.join(projectRoot, "project_index", "document_index.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const stage06DocRecord = updatedDocumentIndex.find((record) => record.doc_id === "doc_stage06_route_status");
+  assert.ok(stage06DocRecord);
+  assert.strictEqual(stage06DocRecord.checksum, stage06RouteDocChecksum);
+  assert.match(stage06DocRecord.indexed_at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.ok(!Number.isNaN(Date.parse(stage06DocRecord.indexed_at)));
+  const updatedExperimentIndex = fs.readFileSync(path.join(projectRoot, "project_index", "experiment_index.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const stage06ExperimentRecord = updatedExperimentIndex.find((record) => record.experiment_id === "exp_stage06_queue_contract");
+  assert.ok(stage06ExperimentRecord);
+  assert.strictEqual(stage06ExperimentRecord.official_conclusion_doc, "doc_stage06_route_status");
+  assert.strictEqual(stage06ExperimentRecord.primary_eval_path, "eval/stage06_queue_contract_metrics.json");
   const updatedConclusions = JSON.parse(fs.readFileSync(path.join(projectRoot, "project_index", "current_conclusions.json"), "utf8"));
-  assert.ok(updatedConclusions.items.some((item) => item.topic_id === "stage06_g1_route_status"));
+  const stage06Conclusion = updatedConclusions.items.find((item) => item.topic_id === "stage06_g1_route_status");
+  assert.ok(stage06Conclusion);
+  assert.deepStrictEqual(stage06Conclusion.supporting_docs, ["doc_stage06_route_status"]);
+  assert.deepStrictEqual(stage06Conclusion.supporting_experiments, ["exp_stage06_queue_contract"]);
   const evidenceLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
   const latestLedgerEntry = JSON.parse(evidenceLedgerLines[evidenceLedgerLines.length - 1]);
   assert.ok(latestLedgerEntry.input_paths.includes("research/RESEARCH_PROGRAM.json"));
   assert.ok(latestLedgerEntry.input_paths.includes("project_index/current_conclusions.json"));
+  assert.ok(latestLedgerEntry.input_paths.includes("project_index/document_index.jsonl"));
+  assert.ok(latestLedgerEntry.input_paths.includes("project_index/experiment_index.jsonl"));
+  assert.ok(latestLedgerEntry.input_paths.includes("formal/stage06_route_status.md"));
+  assert.ok(latestLedgerEntry.input_paths.includes("eval/stage06_queue_contract_metrics.json"));
+  assert.ok(latestLedgerEntry.input_paths.includes("configs/stage06_queue_contract.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/status/NEXT_TASK_DRAFT.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/task_profiles/stage06_g1_followup.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/queue/drafts/stage06_g1_followup.json"));
+  assert.ok(latestLedgerEntry.output_paths.includes("project_index/document_index.jsonl"));
+  assert.ok(latestLedgerEntry.output_paths.includes("project_index/experiment_index.jsonl"));
   assert.ok(latestLedgerEntry.output_paths.includes("project_index/current_conclusions.json"));
   assert.deepStrictEqual(latestLedgerEntry.secondary_skills_consulted, ["research-comparability"]);
   assert.strictEqual(latestLedgerEntry.claim_scope, null);
   assert.strictEqual(latestLedgerEntry.successor_contract_generated, true);
   assert.strictEqual(latestLedgerEntry.exact_next_object_path, "agent/queue/drafts/stage06_g1_followup.json");
   assert.strictEqual(latestLedgerEntry.research_program_id, "replace_with_project_program_id");
+  assert.strictEqual(latestLedgerEntry.document_index_update_count, 1);
+  assert.deepStrictEqual(latestLedgerEntry.document_index_update_ids, ["doc_stage06_route_status"]);
+  assert.strictEqual(latestLedgerEntry.experiment_index_update_count, 1);
+  assert.deepStrictEqual(latestLedgerEntry.experiment_index_update_ids, ["exp_stage06_queue_contract"]);
   assert.strictEqual(latestLedgerEntry.current_conclusion_update_status, "applied");
   assert.strictEqual(latestLedgerEntry.current_conclusion_topic_id, "stage06_g1_route_status");
 
@@ -1620,6 +1729,8 @@ async function main() {
     morning_brief_markdown: "",
     proposal_markdown: "",
     ledger_update_markdown: "",
+    document_index_updates: [],
+    experiment_index_updates: [],
     current_conclusion_update: {
       topic_id: "review_required_route_conclusion",
       topic: "review required route conclusion",
@@ -1675,6 +1786,8 @@ async function main() {
     morning_brief_markdown: "",
     proposal_markdown: "",
     ledger_update_markdown: "",
+    document_index_updates: [],
+    experiment_index_updates: [],
     current_conclusion_update: {
       topic_id: "review_required_route_conclusion",
       topic: "review required route conclusion",

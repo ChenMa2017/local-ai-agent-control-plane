@@ -34,6 +34,8 @@ const watchdogSchemaTemplates = {
       "ledger_update_markdown",
       "proposal_markdown",
       "report_markdown",
+      "document_index_updates",
+      "experiment_index_updates",
       "current_conclusion_update",
       "successor_task_draft",
       "task_profile_draft",
@@ -117,6 +119,148 @@ const watchdogSchemaTemplates = {
       ledger_update_markdown: { type: "string" },
       proposal_markdown: { type: "string" },
       report_markdown: { type: "string" },
+      document_index_updates: {
+        type: "array",
+        items: {
+          type: "object",
+          required: [
+            "doc_id",
+            "path",
+            "title",
+            "doc_type",
+            "status",
+            "evidence_scope",
+            "evidence_scope_note",
+            "project_area",
+            "summary",
+            "tags",
+            "supersedes",
+            "superseded_by",
+            "created_at",
+            "updated_at",
+            "checksum",
+            "checksum_scope",
+            "indexed_at"
+          ],
+          properties: {
+            doc_id: { type: "string" },
+            path: { type: "string" },
+            title: { type: "string" },
+            doc_type: {
+              type: "string",
+              enum: [
+                "official_conclusion",
+                "formal_report",
+                "requirement",
+                "execution_plan",
+                "experiment_card",
+                "primary_result",
+                "smoke_result",
+                "bounded_experiment",
+                "daily_log",
+                "meeting_minutes",
+                "auxiliary_diagnostic",
+                "debug_note",
+                "in_progress",
+                "legacy_note",
+                "unknown"
+              ]
+            },
+            status: {
+              type: "string",
+              enum: ["active", "draft", "superseded", "deprecated", "archived", "invalidated"]
+            },
+            evidence_scope: {
+              type: "string",
+              enum: ["primary_only", "mixed", "auxiliary_only", "none"]
+            },
+            evidence_scope_note: { type: "string" },
+            project_area: { type: "string" },
+            summary: { type: "string" },
+            tags: { type: "array", items: { type: "string" } },
+            supersedes: { type: "array", items: { type: "string" } },
+            superseded_by: { type: "array", items: { type: "string" } },
+            created_at: { type: ["string", "null"] },
+            updated_at: { type: ["string", "null"] },
+            checksum: { type: ["string", "null"] },
+            checksum_scope: { type: ["string", "null"], enum: ["raw_file_bytes", null] },
+            indexed_at: { type: ["string", "null"] }
+          },
+          additionalProperties: false
+        }
+      },
+      experiment_index_updates: {
+        type: "array",
+        items: {
+          type: "object",
+          required: [
+            "experiment_id",
+            "experiment_type",
+            "status",
+            "evidence_scope",
+            "name",
+            "purpose",
+            "model",
+            "baseline_model",
+            "train_data",
+            "test_data",
+            "eval_protocol",
+            "with_definition",
+            "without_definition",
+            "primary_metrics",
+            "primary_metric_name",
+            "best_epoch",
+            "primary_eval_path",
+            "config_path",
+            "code_commit",
+            "run_id",
+            "official_conclusion_doc"
+          ],
+          properties: {
+            experiment_id: { type: "string" },
+            experiment_type: { type: "string" },
+            status: {
+              type: "string",
+              enum: ["active", "draft", "superseded", "deprecated", "archived", "invalidated"]
+            },
+            evidence_scope: {
+              type: "string",
+              enum: ["primary_only", "mixed", "auxiliary_only", "none"]
+            },
+            name: { type: "string" },
+            purpose: { type: "string" },
+            model: { type: ["string", "null"] },
+            baseline_model: { type: ["string", "null"] },
+            train_data: { type: ["string", "null"] },
+            test_data: { type: ["string", "null"] },
+            eval_protocol: { type: ["string", "null"] },
+            with_definition: { type: ["string", "null"] },
+            without_definition: { type: ["string", "null"] },
+            primary_metrics: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["name", "value", "higher_is_better"],
+                properties: {
+                  name: { type: "string" },
+                  value: { type: ["number", "null"] },
+                  higher_is_better: { type: "boolean" },
+                  notes: { type: ["string", "null"] }
+                },
+                additionalProperties: false
+              }
+            },
+            primary_metric_name: { type: ["string", "null"] },
+            best_epoch: { type: ["integer", "null"] },
+            primary_eval_path: { type: ["string", "null"] },
+            config_path: { type: ["string", "null"] },
+            code_commit: { type: ["string", "null"] },
+            run_id: { type: ["string", "null"] },
+            official_conclusion_doc: { type: ["string", "null"] }
+          },
+          additionalProperties: false
+        }
+      },
       current_conclusion_update: {
         type: ["object", "null"],
         required: [
