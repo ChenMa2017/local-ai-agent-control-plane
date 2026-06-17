@@ -31,6 +31,7 @@ from execution_evaluation import (
     ExecutionEvaluationDependencies,
     maybe_attach_execution_evaluation,
 )
+from http_routes import HttpRouteDependencies, dispatch_get, dispatch_post
 from result_streaming import (
     StreamLoopDependencies,
     cleanup_stream_tokens as cleanup_stream_token_records,
@@ -2085,6 +2086,27 @@ def stream_loop_dependencies(handler: Any) -> StreamLoopDependencies:
     )
 
 
+def http_route_dependencies() -> HttpRouteDependencies:
+    return HttpRouteDependencies(
+        authenticate_bearer=authenticate_bearer,
+        handle_health_summary=handle_health_summary,
+        handle_codex_workspaces=handle_codex_workspaces,
+        handle_codex_capabilities=handle_codex_capabilities,
+        handle_codex_tasks=handle_codex_tasks,
+        handle_codex_intake=handle_codex_intake,
+        handle_codex_result_page=handle_codex_result_page,
+        handle_codex_query=handle_codex_query,
+        handle_watchdog=handle_watchdog,
+        handle_codex_prepare=handle_codex_prepare,
+        handle_codex_run=handle_codex_run,
+        handle_stream_token=handle_stream_token,
+        index_html=index_html,
+        parse_body=parse_body,
+        mattermost_response=mattermost_response,
+        bridge_error_type=BridgeError,
+    )
+
+
 def handle_stream_token(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
     reject_frontend_identity(payload)
     task_id = validate_task_id(payload.get("task_id", ""))
@@ -2206,169 +2228,32 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path == "/health":
-            self.send_json(200, {"ok": True})
-            return
-        if parsed.path == "/health/summary":
-            try:
-                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
-                self.send_json(200, handle_health_summary(self.config, principal))
-            except BridgeError as exc:
-                self.send_api_error(exc)
-            except Exception as exc:
-                self.send_api_error(exc)
-            return
-        if parsed.path == "/whoami":
-            try:
-                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
-                self.send_json(200, {"ok": True, "user": principal.user, "role": principal.role})
-            except BridgeError as exc:
-                self.send_api_error(exc)
-            except Exception as exc:
-                self.send_api_error(exc)
-            return
-        if parsed.path in {"/", "/codex"}:
-            self.send_html(200, index_html(self.config))
-            return
-        if parsed.path == "/codex/events":
-            payload = {key: values[-1] if values else "" for key, values in parse_qs(parsed.query).items()}
-            try:
-                self.handle_codex_events(payload)
-            except BridgeError as exc:
-                self.send_api_error(exc)
-            except Exception as exc:
-                self.send_api_error(exc)
-            return
-        if parsed.path == "/codex/workspaces":
-            try:
-                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
-                self.send_json(200, handle_codex_workspaces(self.config, principal))
-            except BridgeError as exc:
-                self.send_api_error(exc)
-            except Exception as exc:
-                self.send_api_error(exc)
-            return
-        if parsed.path == "/codex/capabilities":
-            try:
-                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
-                self.send_json(200, handle_codex_capabilities(self.config, principal))
-            except BridgeError as exc:
-                self.send_api_error(exc)
-            except Exception as exc:
-                self.send_api_error(exc)
-            return
-        if parsed.path == "/codex/tasks":
-            payload = {key: values[-1] if values else "" for key, values in parse_qs(parsed.query).items()}
-            try:
-                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
-                self.send_json(200, handle_codex_tasks(payload, self.config, principal))
-            except BridgeError as exc:
-                self.send_api_error(exc)
-            except Exception as exc:
-                self.send_api_error(exc)
-            return
-        if parsed.path == "/codex/intake":
-            payload = {key: values[-1] if values else "" for key, values in parse_qs(parsed.query).items()}
-            try:
-                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
-                self.send_json(200, handle_codex_intake(payload, self.config, principal))
-            except BridgeError as exc:
-                self.send_api_error(exc)
-            except Exception as exc:
-                self.send_api_error(exc)
-            return
-        if parsed.path == "/codex/result-page":
-            payload = {key: values[-1] if values else "" for key, values in parse_qs(parsed.query).items()}
-            try:
-                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
-                self.send_json(200, handle_codex_result_page(payload, self.config, principal))
-            except BridgeError as exc:
-                self.send_api_error(exc)
-            except Exception as exc:
-                self.send_api_error(exc)
-            return
-        if parsed.path in {"/codex/status", "/codex/result", "/codex/logs", "/codex/cancel"}:
-            payload = {key: values[-1] if values else "" for key, values in parse_qs(parsed.query).items()}
-            try:
-                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
-                command = parsed.path.rsplit("/", 1)[-1]
-                self.send_json(200, handle_codex_query(payload, self.config, command, principal))
-            except BridgeError as exc:
-                self.send_api_error(exc)
-            except Exception as exc:
-                self.send_api_error(exc)
-            return
-        if parsed.path.startswith("/codex"):
-            self.send_api_error(BridgeError("not found", 404, "invalid_request"))
-        else:
-            self.send_json(404, mattermost_response("not found"))
+        dispatch_get(
+            self,
+            path=parsed.path,
+            query=parsed.query,
+            authorization=self.headers.get("Authorization", ""),
+            config=self.config,
+            deps=http_route_dependencies(),
+        )
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         route = parsed.path.rstrip("/")
-        if route not in {
-            "/mattermost/watchdog",
-            "/codex/prepare",
-            "/codex/intake",
-            "/codex/run",
-            "/codex/status",
-            "/codex/result",
-            "/codex/logs",
-            "/codex/cancel",
-            "/codex/result-page",
-            "/codex/stream-token",
-        }:
-            if route.startswith("/codex"):
-                self.send_api_error(BridgeError("not found", 404, "invalid_request"))
-            else:
-                self.send_json(404, mattermost_response("not found"))
-            return
-
         length = int(self.headers.get("Content-Length", "0") or "0")
         if length > MAX_BODY_BYTES:
             self.send_json(413, mattermost_response("request body too large"))
             return
         raw = self.rfile.read(length)
-
-        try:
-            payload = parse_body(self.headers.get("Content-Type", ""), raw)
-            if route == "/mattermost/watchdog":
-                response = handle_watchdog(payload, self.config)
-            else:
-                principal = authenticate_bearer(self.headers.get("Authorization", ""), self.config)
-                if route == "/codex/prepare":
-                    response = handle_codex_prepare(payload, self.config, principal)
-                    self.send_json(200, response)
-                    return
-                if route == "/codex/intake":
-                    response = handle_codex_intake(payload, self.config, principal)
-                    self.send_json(200, response)
-                    return
-                if route == "/codex/run":
-                    response = handle_codex_run(payload, self.config, principal)
-                    self.send_json(200, response)
-                    return
-                if route == "/codex/stream-token":
-                    response = handle_stream_token(payload, self.config, principal)
-                    self.send_json(200, response)
-                    return
-                if route == "/codex/result-page":
-                    response = handle_codex_result_page(payload, self.config, principal)
-                    self.send_json(200, response)
-                    return
-                command = route.rsplit("/", 1)[-1]
-                response = handle_codex_query(payload, self.config, command, principal)
-            self.send_json(200, response)
-        except BridgeError as exc:
-            if route == "/mattermost/watchdog":
-                self.send_json(exc.status, mattermost_response(str(exc)))
-            else:
-                self.send_api_error(exc)
-        except Exception as exc:  # Keep webhook failures visible but bounded.
-            if route == "/mattermost/watchdog":
-                self.send_json(500, {"ok": False, "text": f"bridge error: {exc}"})
-            else:
-                self.send_api_error(exc)
+        dispatch_post(
+            self,
+            route=route,
+            content_type=self.headers.get("Content-Type", ""),
+            raw=raw,
+            authorization=self.headers.get("Authorization", ""),
+            config=self.config,
+            deps=http_route_dependencies(),
+        )
 
 
 def writable_directory_check(path: Path) -> tuple[bool, str]:

@@ -12,7 +12,7 @@ echo "== codex-bridge =="
 
 echo
 echo "== agent-host =="
-(cd "$ROOT/modules/agent-host" && python3 -m py_compile bridge.py post_run_artifacts.py prepare_intent.py prepared_context.py evidence_retrieval.py execution_evaluation.py result_streaming.py web_ui.py tests/test_bridge.py tests/test_prepare_intent.py tests/test_prepared_context.py tests/test_evidence_retrieval.py tests/test_execution_evaluation.py tests/test_result_streaming.py tests/test_web_ui.py && python3 -m unittest discover -s tests)
+(cd "$ROOT/modules/agent-host" && python3 -m py_compile bridge.py post_run_artifacts.py prepare_intent.py prepared_context.py evidence_retrieval.py execution_evaluation.py result_streaming.py web_ui.py http_routes.py tests/test_bridge.py tests/test_prepare_intent.py tests/test_prepared_context.py tests/test_evidence_retrieval.py tests/test_execution_evaluation.py tests/test_result_streaming.py tests/test_web_ui.py tests/test_http_routes.py && python3 -m unittest discover -s tests)
 
 echo
 echo "== discord-adapter =="
