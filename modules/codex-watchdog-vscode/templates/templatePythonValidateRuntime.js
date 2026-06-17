@@ -47,6 +47,65 @@ def require_type(value, expected, label):
         return False
     return True
 
+def validate_string_array(value, label):
+    if not isinstance(value, list):
+        errors.append(f"{label} must be an array")
+        return
+    for idx, item in enumerate(value):
+        if not isinstance(item, str):
+            errors.append(f"{label}[{idx}] must be a string")
+
+def validate_next_action(value, label):
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object")
+        return
+    for key in ("kind", "description", "reason"):
+        if key in value and value.get(key) is not None and not isinstance(value.get(key), str):
+            errors.append(f"{label}.{key} must be string or null")
+    if "can_execute_automatically" in value and not isinstance(value.get("can_execute_automatically"), bool):
+        errors.append(f"{label}.can_execute_automatically must be boolean")
+
+def validate_successor_provenance_payload(value, label):
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object")
+        return
+    for key in (
+        "artifact_role",
+        "source",
+        "repair_origin",
+        "generated_by",
+        "parent_route_id",
+        "parent_route_epoch",
+        "parent_task_box_id",
+        "generated_at_utc",
+    ):
+        if key in value and value.get(key) is not None and not isinstance(value.get(key), str):
+            errors.append(f"{label}.{key} must be string or null")
+    for key in ("model_authored", "route_repair_authored", "fallback_synthesized"):
+        if key in value and not isinstance(value.get(key), bool):
+            errors.append(f"{label}.{key} must be boolean")
+    derived = value.get("derived_from_report")
+    if derived is not None:
+        if not isinstance(derived, dict):
+            errors.append(f"{label}.derived_from_report must be an object")
+        else:
+            for key in ("path", "timestamp_utc", "report_type"):
+                if key in derived and derived.get(key) is not None and not isinstance(derived.get(key), str):
+                    errors.append(f"{label}.derived_from_report.{key} must be string or null")
+
+def validate_successor_provenance_summary(value, label):
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object")
+        return
+    for key, item in value.items():
+        if key not in {"successor_task_draft", "task_profile_draft", "queue_request_draft"}:
+            warnings.append(f"{label} contains unknown provenance entry: {key}")
+        validate_successor_provenance_payload(item, f"{label}.{key}")
+
 def validate_state():
     state = load_json("agent/STATE.json", required=True)
     if not isinstance(state, dict):
@@ -63,6 +122,7 @@ def validate_state():
     for key in ("successor_contract_required", "experiment_decision_gate_required", "experiment_decision_gate_blocking", "derived_from_route_canonical"):
         if key in state and not isinstance(state.get(key), bool):
             errors.append(f"agent/STATE.json {key} must be boolean")
+    validate_successor_provenance_summary(state.get("successor_provenance"), "agent/STATE.json successor_provenance")
     if "important_paths" in state and not isinstance(state.get("important_paths"), list):
         errors.append("agent/STATE.json important_paths must be an array")
     tasks = state.get("tasks")
@@ -87,6 +147,7 @@ def validate_state():
             errors.append(f"{label}.status is invalid")
         if task.get("allowed_runner") not in VALID_RUNNERS:
             errors.append(f"{label}.allowed_runner is invalid")
+        validate_successor_provenance_payload(task.get("provenance"), f"{label}.provenance")
         if task.get("status") in {"queued", "running"} and tid:
             active.append(tid)
     for tid in set(active):
@@ -111,6 +172,7 @@ def validate_progress():
     for key in ("experiment_decision_gate_required", "experiment_decision_gate_blocking"):
         if key in progress and not isinstance(progress.get(key), bool):
             errors.append(f"agent/PROGRESS_STATE.json {key} must be boolean")
+    validate_successor_provenance_summary(progress.get("successor_provenance"), "agent/PROGRESS_STATE.json successor_provenance")
 
 def validate_task_box():
     task_box = load_json("agent/TASK_BOX.json", required=False)
@@ -155,6 +217,7 @@ def validate_task_box():
     for key in ("successor_contract_required", "experiment_decision_gate_required", "experiment_decision_gate_blocking"):
         if key in task_box and not isinstance(task_box.get(key), bool):
             errors.append(f"agent/TASK_BOX.json {key} must be boolean")
+    validate_successor_provenance_summary(task_box.get("successor_provenance"), "agent/TASK_BOX.json successor_provenance")
 
 def validate_route_canonical():
     route = load_json("agent/ROUTE_CANONICAL.json", required=False)
@@ -185,6 +248,95 @@ def validate_route_canonical():
     for key in ("experiment_decision_gate_required", "experiment_decision_gate_blocking"):
         if key in route and not isinstance(route.get(key), bool):
             errors.append(f"agent/ROUTE_CANONICAL.json {key} must be boolean")
+    validate_successor_provenance_summary(route.get("successor_provenance"), "agent/ROUTE_CANONICAL.json successor_provenance")
+
+def validate_run_state():
+    run_state = load_json("agent/RUN_STATE.json", required=True)
+    if not isinstance(run_state, dict):
+        return
+    if not isinstance(run_state.get("schema_version"), int):
+        errors.append("agent/RUN_STATE.json schema_version must be an integer")
+    for key in (
+        "updated_utc",
+        "role",
+        "supervisor_mode",
+        "runner_run_count",
+        "runner_completed_count",
+        "runner_started_count",
+        "runner_failure_drift",
+        "supervisor_audit_every_runner_runs",
+        "status",
+        "primary_skill",
+        "route_capability",
+        "report_type",
+        "active_task_id",
+        "route_task_id",
+        "route_id",
+        "route_epoch",
+        "task_box_id",
+        "owner_mode",
+        "current_allowed_step",
+        "blocker_type",
+        "exact_next_task_id",
+        "exact_profile_path",
+        "exact_queue_draft_path",
+        "exact_next_object_path",
+        "required_successor_exactness",
+        "successor_materialization_status",
+        "experiment_gate_status",
+        "project_question",
+        "decision_relevance",
+        "claim_scope",
+        "diagnosis_target",
+        "research_program_id",
+        "research_domain",
+        "research_autonomy_mode",
+        "document_index_output_path",
+        "experiment_index_output_path",
+        "current_conclusion_contract_topic_id",
+        "current_conclusion_contract_query",
+        "current_conclusion_golden_query_status",
+        "current_conclusion_golden_query_expected_decision",
+        "current_conclusion_evidence_status",
+        "current_conclusion_evidence_query",
+        "current_conclusion_evidence_decision",
+        "current_conclusion_evidence_output_path",
+        "current_conclusion_update_status",
+        "current_conclusion_topic_id",
+        "current_conclusion_output_path",
+        "current_conclusion_proposal_path",
+    ):
+        if key in run_state and run_state.get(key) is not None and not isinstance(run_state.get(key), str):
+            errors.append(f"agent/RUN_STATE.json {key} must be string or null")
+    for key in (
+        "progress_changed",
+        "requires_human_review",
+        "successor_contract_required",
+        "experiment_decision_gate_required",
+        "experiment_decision_gate_blocking",
+        "research_baseline_required",
+    ):
+        if key in run_state and not isinstance(run_state.get(key), bool):
+            errors.append(f"agent/RUN_STATE.json {key} must be boolean")
+    for key in ("document_index_update_count", "experiment_index_update_count"):
+        if key in run_state and not isinstance(run_state.get(key), int):
+            errors.append(f"agent/RUN_STATE.json {key} must be an integer")
+    for key in (
+        "secondary_skills_expected",
+        "secondary_skills_consulted",
+        "research_allowed_project_areas",
+        "document_index_update_ids",
+        "experiment_index_update_ids",
+        "current_conclusion_evidence_warnings",
+        "current_conclusion_evidence_read_plan_paths",
+        "evidence",
+    ):
+        if key in run_state:
+            validate_string_array(run_state.get(key), f"agent/RUN_STATE.json {key}")
+    next_action = run_state.get("next_action")
+    if next_action is not None:
+        validate_next_action(next_action, "agent/RUN_STATE.json next_action")
+    validate_successor_provenance_summary(run_state.get("successor_provenance"), "agent/RUN_STATE.json successor_provenance")
 
 def validate_next_task_draft():
     draft = load_json("agent/status/NEXT_TASK_DRAFT.json", required=False)
@@ -199,6 +351,7 @@ def validate_next_task_draft():
         errors.append("agent/status/NEXT_TASK_DRAFT.json status is invalid")
     if "allowed_runner" in draft and draft.get("allowed_runner") not in VALID_RUNNERS:
         errors.append("agent/status/NEXT_TASK_DRAFT.json allowed_runner is invalid")
+    validate_successor_provenance_payload(draft.get("provenance"), "agent/status/NEXT_TASK_DRAFT.json provenance")
 
 def validate_schema_files():
     for rel in (
@@ -387,6 +540,7 @@ validate_state()
 validate_progress()
 validate_task_box()
 validate_route_canonical()
+validate_run_state()
 validate_next_task_draft()
 validate_schema_files()
 validate_jobs()

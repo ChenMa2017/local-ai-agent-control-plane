@@ -1,5 +1,42 @@
 "use strict";
 
+const successorProvenanceSchema = {
+  type: "object",
+  properties: {
+    artifact_role: { type: ["string", "null"] },
+    source: { type: ["string", "null"] },
+    repair_origin: { type: ["string", "null"] },
+    generated_by: { type: ["string", "null"] },
+    derived_from_report: {
+      type: ["object", "null"],
+      properties: {
+        path: { type: ["string", "null"] },
+        timestamp_utc: { type: ["string", "null"] },
+        report_type: { type: ["string", "null"] }
+      },
+      additionalProperties: true
+    },
+    parent_route_id: { type: ["string", "null"] },
+    parent_route_epoch: { type: ["string", "null"] },
+    parent_task_box_id: { type: ["string", "null"] },
+    generated_at_utc: { type: ["string", "null"] },
+    model_authored: { type: "boolean" },
+    route_repair_authored: { type: "boolean" },
+    fallback_synthesized: { type: "boolean" }
+  },
+  additionalProperties: true
+};
+
+const successorProvenanceSummarySchema = {
+  type: "object",
+  properties: {
+    successor_task_draft: successorProvenanceSchema,
+    task_profile_draft: successorProvenanceSchema,
+    queue_request_draft: successorProvenanceSchema
+  },
+  additionalProperties: true
+};
+
 const watchdogSchemaTemplates = {
   schema: () => JSON.stringify({
     type: "object",
@@ -352,7 +389,8 @@ const watchdogSchemaTemplates = {
             success_gates: { type: "array" },
             stop_conditions: { type: "array", items: { type: "string" } },
             next_allowed_tasks: { type: "array", items: { type: "string" } },
-            requires_review_after: { type: "boolean" }
+            requires_review_after: { type: "boolean" },
+            provenance: successorProvenanceSchema
           },
           additionalProperties: true
         }
@@ -370,6 +408,7 @@ const watchdogSchemaTemplates = {
       experiment_gate_status: { type: "string" },
       experiment_decision_gate_required: { type: "boolean" },
       experiment_decision_gate_blocking: { type: "boolean" },
+      successor_provenance: successorProvenanceSummarySchema,
       owner_mode: { type: ["string", "null"] },
       current_allowed_step: { type: ["string", "null"] },
       important_paths: { type: "array", items: { type: "string" } }
@@ -412,6 +451,7 @@ const watchdogSchemaTemplates = {
       experiment_gate_status: { type: "string" },
       experiment_decision_gate_required: { type: "boolean" },
       experiment_decision_gate_blocking: { type: "boolean" },
+      successor_provenance: successorProvenanceSummarySchema,
       active_target: { type: "string" },
       project_question: { type: "string" },
       decision_relevance: { type: "string" },
@@ -474,6 +514,7 @@ const watchdogSchemaTemplates = {
       experiment_gate_status: { type: "string" },
       experiment_decision_gate_required: { type: "boolean" },
       experiment_decision_gate_blocking: { type: "boolean" },
+      successor_provenance: successorProvenanceSummarySchema,
       current_conclusion_topic_id: { type: ["string", "null"] },
       current_conclusion_query: { type: ["string", "null"] }
     },

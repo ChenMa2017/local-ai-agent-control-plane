@@ -219,6 +219,13 @@ async function main() {
   );
   assert.ok(bootstrapConversationSchema.required.includes("assistant_reply"));
   assert.ok(bootstrapConversationSchema.required.includes("suggested_next_step"));
+  const stateSchema = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "schemas", "state.schema.json"), "utf8"));
+  assert.ok(stateSchema.properties.successor_provenance);
+  assert.ok(stateSchema.properties.tasks.items.properties.provenance);
+  const taskBoxSchema = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "schemas", "task_box.schema.json"), "utf8"));
+  assert.ok(taskBoxSchema.properties.successor_provenance);
+  const routeCanonicalSchema = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "schemas", "route_canonical.schema.json"), "utf8"));
+  assert.ok(routeCanonicalSchema.properties.successor_provenance);
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "TASK_BOX.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json")));
   assert.ok(fs.existsSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl")));
@@ -2060,6 +2067,33 @@ async function main() {
   assert.strictEqual(queueRunState.current_conclusion_evidence_output_path, "agent/status/CURRENT_CONCLUSION_EVIDENCE_SEARCH.json");
   assert.strictEqual(queueRunState.current_conclusion_update_status, "applied");
   assert.strictEqual(queueRunState.current_conclusion_topic_id, "stage06_g1_route_status");
+  assert.strictEqual(queueRunState.successor_provenance.successor_task_draft.source, "model_authored");
+  writeJson(projectRoot, "agent/status/NEXT_TASK_DRAFT.json", {
+    ...nextTaskDraft,
+    provenance: {
+      ...nextTaskDraft.provenance,
+      source: { invalid: true }
+    }
+  });
+  writeJson(projectRoot, "agent/RUN_STATE.json", {
+    ...queueRunState,
+    successor_provenance: []
+  });
+  let provenanceValidationError = null;
+  try {
+    run("python3", [path.join(projectRoot, "agent", "bin", "validate_runtime.py")], {
+      cwd: projectRoot
+    });
+  } catch (error) {
+    provenanceValidationError = error;
+  }
+  assert.ok(provenanceValidationError, "invalid successor provenance should fail runtime validation");
+  assert.match(
+    String(provenanceValidationError.stderr || "") + String(provenanceValidationError.stdout || "") + String(provenanceValidationError.message || ""),
+    /NEXT_TASK_DRAFT\.json provenance\.source|RUN_STATE\.json successor_provenance/i
+  );
+  writeJson(projectRoot, "agent/status/NEXT_TASK_DRAFT.json", nextTaskDraft);
+  writeJson(projectRoot, "agent/RUN_STATE.json", queueRunState);
   const nextActionText = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
   assert.match(nextActionText, /Exact next task: stage06_g1_followup/);
   assert.match(nextActionText, /Exact profile path: agent\/task_profiles\/stage06_g1_followup\.json/);
