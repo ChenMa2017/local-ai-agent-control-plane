@@ -32,6 +32,17 @@ from execution_evaluation import (
     ExecutionEvaluationDependencies,
     maybe_attach_execution_evaluation,
 )
+from result_streaming import (
+    StreamLoopDependencies,
+    cleanup_stream_tokens as cleanup_stream_token_records,
+    issue_stream_token,
+    redact_url_secrets,
+    remaining_seconds as compute_remaining_seconds,
+    resolve_stream_principal,
+    safe_log_snapshot as load_safe_log_snapshot,
+    stream_task_events,
+    task_snapshot as build_task_snapshot,
+)
 from prepared_context import (
     count_jsonl_records,
     filter_source_task_artifact,
@@ -2053,15 +2064,25 @@ def handle_codex_result_page(
 
 
 def cleanup_stream_tokens() -> None:
-    now = utc_now()
-    with STREAM_TOKEN_LOCK:
-        expired = [
-            token
-            for token, record in STREAM_TOKENS.items()
-            if record.get("expires_at_dt") and record["expires_at_dt"] <= now
-        ]
-        for token in expired:
-            STREAM_TOKENS.pop(token, None)
+    cleanup_stream_token_records(STREAM_TOKENS, STREAM_TOKEN_LOCK, utc_now)
+
+
+def stream_loop_dependencies(handler: Any) -> StreamLoopDependencies:
+    return StreamLoopDependencies(
+        authorize_task=authorize_codex_task,
+        safe_log_snapshot=safe_log_snapshot,
+        has_safe_result=has_safe_result,
+        send_sse_event=handler.send_sse_event,
+        task_snapshot=task_snapshot,
+        remaining_seconds=remaining_seconds,
+        utc_now=utc_now,
+        monotonic=time.monotonic,
+        sleep=time.sleep,
+        final_statuses=CODEX_FINAL_STATUSES,
+        heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
+        poll_seconds=SSE_POLL_SECONDS,
+        log_event_max_chars=SSE_LOG_EVENT_MAX_CHARS,
+    )
 
 
 def handle_stream_token(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
@@ -2069,85 +2090,57 @@ def handle_stream_token(payload: dict[str, str], config: BridgeConfig, principal
     task_id = validate_task_id(payload.get("task_id", ""))
     authorize_codex_task(config, principal, task_id)
     cleanup_stream_tokens()
-    token = secrets.token_urlsafe(32)
-    expires_at = utc_now() + dt.timedelta(seconds=STREAM_TOKEN_TTL_SECONDS)
-    with STREAM_TOKEN_LOCK:
-        STREAM_TOKENS[token] = {
-            "task_id": task_id,
-            "user": principal.user,
-            "role": principal.role,
-            "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
-            "expires_at_dt": expires_at,
-        }
+    token_payload = issue_stream_token(
+        task_id,
+        principal.user,
+        principal.role,
+        STREAM_TOKENS,
+        STREAM_TOKEN_LOCK,
+        utc_now,
+        STREAM_TOKEN_TTL_SECONDS,
+    )
     return {
         "ok": True,
         "task_id": task_id,
-        "stream_token": token,
-        "expires_in": STREAM_TOKEN_TTL_SECONDS,
-        "events_url": f"/codex/events?task_id={task_id}&stream_token={token}",
+        **token_payload,
     }
 
 
 def principal_from_stream_token(task_id: str, stream_token: str) -> AuthPrincipal:
-    cleanup_stream_tokens()
-    if not stream_token:
-        raise BridgeError("unauthorized: stream token required", 401)
-    with STREAM_TOKEN_LOCK:
-        record = STREAM_TOKENS.get(stream_token)
-    if not record:
-        raise BridgeError("unauthorized: invalid or expired stream token", 401)
-    if record.get("task_id") != task_id:
-        raise BridgeError("unauthorized: stream token is not valid for this task", 403)
-    return AuthPrincipal(user=str(record.get("user", "")), role=str(record.get("role", "user")))
+    user, role = resolve_stream_principal(
+        task_id,
+        stream_token,
+        STREAM_TOKENS,
+        STREAM_TOKEN_LOCK,
+        utc_now,
+        lambda message, status: BridgeError(message, status),
+    )
+    return AuthPrincipal(user=user, role=role)
 
 
 def remaining_seconds(task: dict[str, Any]) -> int | None:
-    deadline = parse_iso_datetime(task.get("deadline_at"))
-    if not deadline:
-        return None
-    return max(0, int((deadline - utc_now()).total_seconds()))
+    return compute_remaining_seconds(task, parse_iso_datetime, utc_now)
 
 
 def task_snapshot(task: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "task_id": str(task.get("task_id", "")),
-        "project": str(task.get("project", "")),
-        "status": str(task.get("status", "")),
-        "created_at": str(task.get("created_at", "")),
-        "started_at": str(task.get("started_at", "")),
-        "updated_at": str(task.get("updated_at", "")),
-        "timeout_seconds": task.get("timeout_seconds"),
-        "remaining_sec": remaining_seconds(task),
-        "exit_code": task.get("exit_code") if isinstance(task.get("exit_code"), int) else None,
-    }
+    return build_task_snapshot(task, remaining_seconds)
 
 
 def safe_log_snapshot(config: BridgeConfig, task_id: str) -> dict[str, Any]:
-    args = [
-        "logs",
+    return load_safe_log_snapshot(
+        config,
         task_id,
-        "--json-output",
-        "--tail",
-        str(SSE_LOG_TAIL_LINES),
-        "--max-chars",
-        str(SSE_LOG_MAX_CHARS),
-    ]
-    output = require_success(run_codex_bridge(config, args, timeout=10))
-    try:
-        data = json.loads(output)
-    except json.JSONDecodeError as exc:
-        raise BridgeError(f"codex-bridge logs returned invalid JSON: {exc}", 500) from exc
-    return data
+        run_codex_bridge,
+        require_success,
+        tail_lines=SSE_LOG_TAIL_LINES,
+        max_chars=SSE_LOG_MAX_CHARS,
+        timeout=10,
+        error_factory=lambda message, status: BridgeError(message, status),
+    )
 
 
 def has_safe_result(task_dir: Path) -> bool:
     return (task_dir / "result.safe.md").exists() or (task_dir / "result.md").exists()
-
-
-def redact_url_secrets(text: str) -> str:
-    text = re.sub(r"(stream_token=)[^&\s]+", r"\1[REDACTED]", text)
-    text = re.sub(r"([?&]token=)[^&\s]+", r"\1[REDACTED]", text)
-    return text
 
 
 def index_html(config: BridgeConfig) -> str:
@@ -2943,78 +2936,14 @@ class WatchdogBridgeHandler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
-        last_status = ""
-        last_log_text = ""
-        sent_snapshot = False
-        sent_result = False
-        last_heartbeat = 0.0
-
-        while True:
-            try:
-                task_dir, task = authorize_codex_task(self.config, principal, task_id)
-                status = str(task.get("status", ""))
-
-                if not sent_snapshot:
-                    self.send_sse_event("snapshot", task_snapshot(task))
-                    sent_snapshot = True
-                    last_status = status
-                elif status != last_status:
-                    self.send_sse_event("status", {
-                        "task_id": task_id,
-                        "status": status,
-                        "updated_at": str(task.get("updated_at", "")),
-                        "remaining_sec": remaining_seconds(task),
-                    })
-                    last_status = status
-
-                logs = safe_log_snapshot(self.config, task_id)
-                log_text = str(logs.get("text", ""))
-                if log_text != last_log_text:
-                    if log_text.startswith(last_log_text):
-                        delta = log_text[len(last_log_text) :]
-                    else:
-                        delta = "[log snapshot refreshed]\n" + log_text[-SSE_LOG_EVENT_MAX_CHARS:]
-                    if len(delta) > SSE_LOG_EVENT_MAX_CHARS:
-                        delta = "[log event trimmed]\n" + delta[-SSE_LOG_EVENT_MAX_CHARS:]
-                    if delta.strip():
-                        self.send_sse_event("log", {
-                            "task_id": task_id,
-                            "source": "safe logs",
-                            "text": delta,
-                            "redacted": bool(logs.get("redacted", True)),
-                            "truncated": bool(logs.get("truncated", False)),
-                        })
-                    last_log_text = log_text
-
-                if not sent_result and has_safe_result(task_dir):
-                    self.send_sse_event("result", {
-                        "task_id": task_id,
-                        "has_result": True,
-                        "safe": True,
-                    })
-                    sent_result = True
-
-                if status in CODEX_FINAL_STATUSES:
-                    self.send_sse_event("done", {
-                        "task_id": task_id,
-                        "status": status,
-                        "exit_code": task.get("exit_code") if isinstance(task.get("exit_code"), int) else None,
-                    })
-                    return
-
-                now = time.monotonic()
-                if now - last_heartbeat >= SSE_HEARTBEAT_SECONDS:
-                    self.send_sse_event("heartbeat", {"ts": utc_now().isoformat().replace("+00:00", "Z")})
-                    last_heartbeat = now
-                time.sleep(SSE_POLL_SECONDS)
-            except (BrokenPipeError, ConnectionResetError):
-                return
-            except BridgeError as exc:
-                self.send_sse_event("error", {"message": str(exc), "status": exc.status})
-                return
-            except Exception as exc:
-                self.send_sse_event("error", {"message": f"bridge error: {exc}", "status": 500})
-                return
+        try:
+            stream_task_events(self.config, task_id, principal, stream_loop_dependencies(self))
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except BridgeError as exc:
+            self.send_sse_event("error", {"message": str(exc), "status": exc.status})
+        except Exception as exc:
+            self.send_sse_event("error", {"message": f"bridge error: {exc}", "status": 500})
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
