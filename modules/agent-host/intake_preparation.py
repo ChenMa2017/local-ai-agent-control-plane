@@ -1,0 +1,942 @@
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+import re
+import secrets
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+from evidence_retrieval import maybe_run_evidence_retrieval
+from execution_evaluation import ExecutionEvaluationDependencies
+from prepared_context import (
+    count_jsonl_records,
+    filter_source_task_artifact,
+    load_intake_questions_from_sources,
+)
+from prepare_intent import (
+    build_experiment_decision_gate,
+    build_gray_areas,
+    clarification_questions,
+    evidence_retrieval_summary,
+    infer_objective,
+    intake_risk_class,
+    parse_intent_signals,
+    read_plan_markdown,
+    should_consult_evidence_index,
+)
+
+JsonObject = dict[str, Any]
+Payload = dict[str, str]
+ErrorFactory = Callable[[str, int, str | None], Exception]
+
+
+@dataclass(frozen=True)
+class IntakePreparationDependencies:
+    utc_now: Callable[[], dt.datetime]
+    reject_frontend_identity: Callable[[Payload], None]
+    can_access_intake: Callable[[JsonObject, Any], bool]
+    validate_task_id: Callable[[str], str]
+    authorize_task: Callable[[Any, Any, str], tuple[Path, JsonObject]]
+    task_intake_id: Callable[[JsonObject], str]
+    safe_adapter_source: Callable[[str], str]
+    prompt_preview: Callable[[Any], str]
+    project_name_re: re.Pattern[str]
+    error_factory: ErrorFactory
+
+
+def validate_codex_project(
+    config: Any,
+    project: str,
+    *,
+    project_name_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> Any:
+    if not project_name_re.match(project):
+        raise error_factory("project is required and must be a safe project name", 400, "invalid_request")
+    if project not in getattr(config, "projects", {}):
+        raise error_factory(f"project is not allowlisted: {project}", 403, "workspace_not_found")
+    item = config.projects[project]
+    if not item.root.exists() or not item.root.is_dir():
+        raise error_factory(f"project root does not exist: {item.root}", 500, None)
+    return item
+
+
+def validate_intake_id(
+    intake_id: str,
+    *,
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> str:
+    if not intake_id_re.match(intake_id or ""):
+        raise error_factory("invalid intake_id", 400, "invalid_request")
+    return intake_id
+
+
+def new_intake_id(
+    *,
+    utc_now: Callable[[], dt.datetime],
+    token_hex_factory: Callable[[int], str] | None = None,
+) -> str:
+    token_hex_factory = token_hex_factory or secrets.token_hex
+    stamp = utc_now().strftime("%Y%m%d_%H%M%S")
+    return f"intake_{stamp}_{token_hex_factory(3)}"
+
+
+def intake_root(config: Any) -> Path:
+    return Path(getattr(config, "codex_bridge_root")) / ".codex-bridge" / "intake"
+
+
+def intake_dir(
+    config: Any,
+    intake_id: str,
+    *,
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> Path:
+    return intake_root(config) / validate_intake_id(intake_id, intake_id_re=intake_id_re, error_factory=error_factory)
+
+
+def read_json_object_if_exists(path: Path) -> JsonObject:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_json_atomic(path: Path, data: JsonObject) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    os.replace(temp, path)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    temp.write_text(text)
+    os.replace(temp, path)
+
+
+def append_jsonl(path: Path, event: JsonObject) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def load_intake_intent(
+    config: Any,
+    intake_id: str,
+    *,
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> JsonObject:
+    path = intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=error_factory) / "INTENT_DRAFT.json"
+    if not path.exists():
+        raise error_factory(f"intake not found: {intake_id}", 404, "intake_not_found")
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise error_factory(f"intake metadata is invalid: {intake_id}: {exc}", 500, None) from exc
+    if not isinstance(data, dict):
+        raise error_factory(f"intake metadata is invalid: {intake_id}", 500, None)
+    return data
+
+
+def load_intake_json_artifact(
+    config: Any,
+    intake_id: str,
+    filename: str,
+    *,
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> JsonObject:
+    path = intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=error_factory) / filename
+    if not path.exists():
+        raise error_factory(f"intake artifact is missing: {intake_id}/{filename}", 409, "prepare_artifact_missing")
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise error_factory(f"intake artifact is invalid: {intake_id}/{filename}: {exc}", 500, None) from exc
+    if not isinstance(data, dict):
+        raise error_factory(f"intake artifact is invalid: {intake_id}/{filename}", 500, None)
+    return data
+
+
+def load_optional_intake_json_artifact(
+    config: Any,
+    intake_id: str,
+    filename: str,
+    *,
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> JsonObject | None:
+    path = intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=error_factory) / filename
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise error_factory(f"intake artifact is invalid: {intake_id}/{filename}: {exc}", 500, None) from exc
+    if not isinstance(data, dict):
+        raise error_factory(f"intake artifact is invalid: {intake_id}/{filename}", 500, None)
+    return data
+
+
+def load_intake_questions(
+    config: Any,
+    intake_id: str,
+    *,
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> list[str]:
+    questions_data = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "QUESTIONS.json",
+        intake_id_re=intake_id_re,
+        error_factory=error_factory,
+    )
+    path = intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=error_factory) / "QUESTIONS.md"
+    questions_markdown = path.read_text() if path.exists() else ""
+    return load_intake_questions_from_sources(questions_data, questions_markdown)
+
+
+def load_prepared_run_context(
+    config: Any,
+    intake_id: str,
+    principal: Any,
+    *,
+    can_access_intake: Callable[[JsonObject, Any], bool],
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> JsonObject:
+    intent = load_intake_intent(config, intake_id, intake_id_re=intake_id_re, error_factory=error_factory)
+    if not can_access_intake(intent, principal):
+        raise error_factory(f"permission denied for intake: {intake_id}", 403, "permission_denied")
+    contract = load_intake_json_artifact(
+        config,
+        intake_id,
+        "TASK_CONTRACT.json",
+        intake_id_re=intake_id_re,
+        error_factory=error_factory,
+    )
+    taskbox = load_intake_json_artifact(
+        config,
+        intake_id,
+        "TASKBOX_DRAFT.json",
+        intake_id_re=intake_id_re,
+        error_factory=error_factory,
+    )
+    preflight = load_intake_json_artifact(
+        config,
+        intake_id,
+        "POLICY_PREFLIGHT.json",
+        intake_id_re=intake_id_re,
+        error_factory=error_factory,
+    )
+    evidence = load_intake_json_artifact(
+        config,
+        intake_id,
+        "EVIDENCE_RETRIEVAL.json",
+        intake_id_re=intake_id_re,
+        error_factory=error_factory,
+    )
+    return {
+        "intake_id": intake_id,
+        "intent": intent,
+        "contract": contract,
+        "taskbox": taskbox,
+        "preflight": preflight,
+        "evidence_retrieval": evidence,
+    }
+
+
+def handle_codex_intake(
+    payload: Payload,
+    config: Any,
+    principal: Any,
+    *,
+    deps: IntakePreparationDependencies,
+    intake_id_re: re.Pattern[str],
+) -> JsonObject:
+    deps.reject_frontend_identity(payload)
+    intake_id = validate_intake_id((payload.get("intake_id") or "").strip(), intake_id_re=intake_id_re, error_factory=deps.error_factory)
+    bundle = load_prepared_run_context(
+        config,
+        intake_id,
+        principal,
+        can_access_intake=deps.can_access_intake,
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    root = intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=deps.error_factory)
+    gray_areas_artifact = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "GRAY_AREAS.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    ) or {}
+    decision_gate = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "DECISION_GATE.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    ) or {}
+    questions = load_intake_questions(config, intake_id, intake_id_re=intake_id_re, error_factory=deps.error_factory)
+    execution_evaluation = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "EXECUTION_EVALUATION.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    followup_task_draft = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "FOLLOWUP_TASK_DRAFT.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    ledger_note_draft = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "LEDGER_NOTE_DRAFT.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    review_proposal_draft = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "REVIEW_PROPOSAL_DRAFT.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    events_path = root / "TASK_INTAKE.events.jsonl"
+    event_count = count_jsonl_records(events_path.read_text() if events_path.exists() else "")
+    return {
+        "ok": True,
+        "intake_id": intake_id,
+        "intent": bundle["intent"],
+        "gray_areas": list(gray_areas_artifact.get("items") or []),
+        "questions": questions,
+        "contract": bundle["contract"],
+        "taskbox": bundle["taskbox"],
+        "preflight": bundle["preflight"],
+        "decision_gate": decision_gate,
+        "evidence_retrieval": bundle["evidence_retrieval"],
+        "execution_evaluation": execution_evaluation,
+        "followup_task_draft": followup_task_draft,
+        "ledger_note_draft": ledger_note_draft,
+        "review_proposal_draft": review_proposal_draft,
+        "event_count": event_count,
+        "ready_to_run": bool(bundle["preflight"].get("ok") and not questions),
+    }
+
+
+def load_followup_prepare_seed(
+    config: Any,
+    followup_task_id: str,
+    principal: Any,
+    *,
+    authorize_task: Callable[[Any, Any, str], tuple[Path, JsonObject]],
+    task_intake_id: Callable[[JsonObject], str],
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> JsonObject:
+    _task_dir, task = authorize_task(config, principal, followup_task_id)
+    intake_id = task_intake_id(task)
+    if not intake_id:
+        raise error_factory(
+            f"follow-up draft is not available for task {followup_task_id}; the task is not linked to a prepared intake",
+            409,
+            "followup_draft_unavailable",
+        )
+    draft = load_intake_json_artifact(
+        config,
+        intake_id,
+        "FOLLOWUP_TASK_DRAFT.json",
+        intake_id_re=intake_id_re,
+        error_factory=error_factory,
+    )
+    if str(draft.get("source_task_id") or "") not in {"", followup_task_id}:
+        raise error_factory(
+            f"follow-up draft source does not match task {followup_task_id}",
+            409,
+            "followup_draft_invalid",
+        )
+    root = intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=error_factory)
+    execution_evaluation = filter_source_task_artifact(
+        read_json_object_if_exists(root / "EXECUTION_EVALUATION.json"),
+        followup_task_id,
+        "task_id",
+    )
+    ledger_note_draft = filter_source_task_artifact(
+        read_json_object_if_exists(root / "LEDGER_NOTE_DRAFT.json"),
+        followup_task_id,
+        "source_task_id",
+    )
+    review_proposal_draft = filter_source_task_artifact(
+        read_json_object_if_exists(root / "REVIEW_PROPOSAL_DRAFT.json"),
+        followup_task_id,
+        "source_task_id",
+    )
+    return {
+        "task_id": followup_task_id,
+        "source_intake_id": intake_id,
+        "task": task,
+        "draft": draft,
+        "execution_evaluation": execution_evaluation,
+        "ledger_note_draft": ledger_note_draft,
+        "review_proposal_draft": review_proposal_draft,
+    }
+
+
+def execution_evaluation_dependencies(
+    *,
+    utc_now: Callable[[], dt.datetime],
+    task_intake_id: Callable[[JsonObject], str],
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> ExecutionEvaluationDependencies:
+    return ExecutionEvaluationDependencies(
+        utc_now=utc_now,
+        intake_dir=lambda config, intake_id: intake_dir(
+            config,
+            intake_id,
+            intake_id_re=intake_id_re,
+            error_factory=error_factory,
+        ),
+        read_json_object_if_exists=read_json_object_if_exists,
+        write_json_atomic=write_json_atomic,
+        write_text_atomic=write_text_atomic,
+        append_jsonl=append_jsonl,
+        task_intake_id=task_intake_id,
+    )
+
+
+def safe_intake_text(
+    value: str,
+    max_chars: int,
+    *,
+    error_factory: ErrorFactory,
+) -> str:
+    text = str(value or "").strip()
+    if len(text) > max_chars:
+        raise error_factory(f"text is too long; max {max_chars} chars", 400, "invalid_request")
+    return text
+
+
+def intake_answers_text(
+    payload: Payload,
+    *,
+    error_factory: ErrorFactory,
+) -> str:
+    return safe_intake_text(
+        payload.get("answers") or payload.get("answer") or "",
+        4000,
+        error_factory=error_factory,
+    )
+
+
+def make_task_contract(
+    *,
+    intake_id: str,
+    project: Any,
+    prompt: str,
+    answers: str,
+    objective: str,
+    mode: str,
+    reference_task_id: str,
+    risk_class: str,
+    signals: JsonObject,
+    status: str,
+    evidence_retrieval: JsonObject,
+    prompt_preview: Callable[[Any], str],
+    utc_now: Callable[[], dt.datetime],
+) -> JsonObject:
+    decision_source = "user+answers" if answers else "user"
+    requires_human = risk_class == "high"
+    decision_gate = build_experiment_decision_gate(prompt, answers, objective, signals)
+    write_scope: list[str] = []
+    if objective == "local_workspace_copy":
+        write_scope = ["workspace/<task_id>/", "runs/<task_id>/", "agent/status/", "agent/reports/"]
+    return {
+        "schema_version": 1,
+        "intake_id": intake_id,
+        "workspace": project.name,
+        "status": status,
+        "objective": objective,
+        "mode": mode,
+        "risk_class": risk_class,
+        "decision_source": decision_source,
+        "requires_human": requires_human,
+        "reference_task_id": reference_task_id or "",
+        "prompt": prompt,
+        "answers_summary": answers,
+        "summary": prompt_preview(prompt),
+        "experiment_decision_gate": decision_gate,
+        "write_scope": write_scope,
+        "blocked_actions": [
+            "shared_file_promotion_without_human_review",
+            "dataset_or_checkpoint_mutation",
+            "external_send_without_human_review",
+            "service_or_secret_mutation",
+        ],
+        "evidence_retrieval": evidence_retrieval_summary(evidence_retrieval),
+        "signals": signals,
+        "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
+    }
+
+
+def make_taskbox_draft(contract: JsonObject) -> JsonObject:
+    objective = str(contract.get("objective") or "")
+    decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
+    retrieval = contract.get("evidence_retrieval") if isinstance(contract.get("evidence_retrieval"), dict) else {}
+    gate_required = bool(decision_gate.get("required"))
+    gate_blocking = bool(decision_gate.get("blocking"))
+    gate_status = "blocked" if gate_blocking else ("required_ready" if gate_required else "not_required")
+    if objective == "report_only":
+        return {
+            "schema_version": 1,
+            "intake_id": contract["intake_id"],
+            "status": "blocked" if gate_blocking else "ready",
+            "allowed_runner": "report_only",
+            "workspace_mode": "readonly",
+            "allowed_write_paths": [],
+            "blocked_actions": contract.get("blocked_actions", []),
+            "summary": "Report-only clarification result; no execution side effects.",
+            "experiment_decision_gate": decision_gate,
+            "experiment_gate_status": gate_status,
+            "evidence_retrieval": retrieval,
+        }
+    if objective == "bounded_cpu_eval":
+        return {
+            "schema_version": 1,
+            "intake_id": contract["intake_id"],
+            "status": "blocked" if gate_blocking else "ready",
+            "allowed_runner": "cpu",
+            "workspace_mode": "readonly",
+            "allowed_write_paths": ["runs/<task_id>/", "agent/status/", "agent/reports/"],
+            "blocked_actions": contract.get("blocked_actions", []),
+            "summary": "Bounded CPU evaluation or smoke-check task."
+            if not gate_blocking
+            else "Bounded CPU evaluation draft exists, but experiment decisions are still unresolved.",
+            "experiment_decision_gate": decision_gate,
+            "experiment_gate_status": gate_status,
+            "evidence_retrieval": retrieval,
+        }
+    if objective == "local_workspace_copy":
+        return {
+            "schema_version": 1,
+            "intake_id": contract["intake_id"],
+            "status": "blocked" if gate_blocking else "ready",
+            "allowed_runner": "cpu",
+            "workspace_mode": "project_local_copy",
+            "allowed_write_paths": contract.get("write_scope", []),
+            "blocked_actions": contract.get("blocked_actions", []),
+            "summary": "Project-local copy task; shared files remain protected."
+            if not gate_blocking
+            else "Project-local copy draft exists, but experiment decisions are still unresolved.",
+            "experiment_decision_gate": decision_gate,
+            "experiment_gate_status": gate_status,
+            "evidence_retrieval": retrieval,
+        }
+    return {
+        "schema_version": 1,
+        "intake_id": contract["intake_id"],
+        "status": "blocked",
+        "allowed_runner": "none",
+        "workspace_mode": "none",
+        "allowed_write_paths": [],
+        "blocked_actions": contract.get("blocked_actions", []),
+        "summary": "High-risk or nondelegable task; requires human approval before execution.",
+        "experiment_decision_gate": decision_gate,
+        "experiment_gate_status": gate_status,
+        "evidence_retrieval": retrieval,
+    }
+
+
+def make_policy_preflight(
+    project: Any,
+    contract: JsonObject,
+    taskbox: JsonObject,
+    questions: list[str],
+    evidence_retrieval: JsonObject,
+) -> JsonObject:
+    objective = str(contract.get("objective") or "")
+    risk_class = str(contract.get("risk_class") or "low")
+    decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
+    blocked_by: list[str] = []
+    reasons: list[str] = []
+    if questions:
+        blocked_by.append("clarification_required")
+        reasons.append("Task intent still has unresolved gray areas.")
+    if decision_gate.get("required") and decision_gate.get("blocking"):
+        blocked_by.append("experiment_decision_gate_required")
+        unresolved = ", ".join(str(item) for item in decision_gate.get("unresolved_items", []))
+        reasons.append(f"Experiment decision gate is still unresolved: {unresolved}.")
+    if risk_class == "high":
+        blocked_by.append("human_review_required")
+        reasons.append(f"Objective {objective} is intentionally held for human approval.")
+    if str(contract.get("mode") or "") not in project.allowed_modes:
+        blocked_by.append("workspace_mode_not_allowed")
+        reasons.append(f"Workspace {project.name} does not allow mode={contract.get('mode')}.")
+    if objective not in {"report_only", "bounded_cpu_eval", "local_workspace_copy"} and risk_class != "high":
+        blocked_by.append("unsupported_objective")
+        reasons.append(f"Objective {objective} is not yet supported by the prepare pipeline.")
+    retrieval_decision = evidence_retrieval.get("decision")
+    retrieval_warnings = evidence_retrieval.get("warnings") if isinstance(evidence_retrieval.get("warnings"), list) else []
+    if evidence_retrieval.get("required"):
+        if evidence_retrieval.get("consulted") and retrieval_decision and retrieval_decision != "safe_to_answer":
+            reasons.append(
+                f"Evidence retrieval returned decision={retrieval_decision}; keep formal conclusion claims bounded until the referenced evidence is reviewed."
+            )
+        elif not evidence_retrieval.get("consulted"):
+            reasons.append("Evidence retrieval was expected for this request but is not currently available for the selected workspace.")
+    ok = not blocked_by
+    decision = "ready" if ok else "blocked"
+    required_action = "run" if ok else ("reply_to_questions" if "clarification_required" in blocked_by else "human_review")
+    return {
+        "schema_version": 1,
+        "intake_id": contract["intake_id"],
+        "ok": ok,
+        "decision": decision,
+        "blocked_by": blocked_by,
+        "required_action": required_action,
+        "reasons": reasons,
+        "allowed_runner": taskbox.get("allowed_runner"),
+        "workspace_mode": taskbox.get("workspace_mode"),
+        "experiment_decision_gate_required": bool(decision_gate.get("required")),
+        "evidence_retrieval_required": bool(evidence_retrieval.get("required")),
+        "evidence_retrieval_consulted": bool(evidence_retrieval.get("consulted")),
+        "evidence_retrieval_available": bool(evidence_retrieval.get("available")),
+        "evidence_retrieval_decision": retrieval_decision,
+        "evidence_retrieval_warnings": retrieval_warnings,
+    }
+
+
+def intake_summary_markdown(contract: JsonObject, questions: list[str], preflight: JsonObject) -> str:
+    decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
+    retrieval = contract.get("evidence_retrieval") if isinstance(contract.get("evidence_retrieval"), dict) else {}
+    lines = [
+        "# Task Contract Summary",
+        "",
+        f"- intake_id: {contract.get('intake_id')}",
+        f"- workspace: {contract.get('workspace')}",
+        f"- objective: {contract.get('objective')}",
+        f"- risk_class: {contract.get('risk_class')}",
+        f"- decision_source: {contract.get('decision_source')}",
+        f"- status: {contract.get('status')}",
+        f"- preflight_ok: {'true' if preflight.get('ok') else 'false'}",
+        f"- experiment_decision_gate_required: {'true' if decision_gate.get('required') else 'false'}",
+        f"- evidence_retrieval_required: {'true' if retrieval.get('required') else 'false'}",
+        f"- evidence_retrieval_consulted: {'true' if retrieval.get('consulted') else 'false'}",
+        f"- evidence_retrieval_decision: {retrieval.get('decision') or 'none'}",
+        "",
+        "## Prompt",
+        "",
+        str(contract.get("prompt") or ""),
+        "",
+    ]
+    answers = str(contract.get("answers_summary") or "")
+    if answers:
+        lines.extend(["## Answers", "", answers, ""])
+    if questions:
+        lines.append("## Pending Questions")
+        lines.append("")
+        for idx, question in enumerate(questions, start=1):
+            lines.append(f"{idx}. {question}")
+        lines.append("")
+    if decision_gate.get("required"):
+        lines.append("## Experiment Decision Gate")
+        lines.append("")
+        lines.append(f"- resolved_count: {decision_gate.get('resolved_count', 0)} / {decision_gate.get('decision_count', 0)}")
+        lines.append(f"- blocking: {'true' if decision_gate.get('blocking') else 'false'}")
+        for item in decision_gate.get("decisions", []):
+            lines.append(
+                f"- {item.get('decision_id')}: {item.get('title')} -> {'resolved' if item.get('resolved') else 'missing'}"
+            )
+        lines.append("")
+    if retrieval.get("required"):
+        lines.append("## Evidence Retrieval")
+        lines.append("")
+        lines.append(f"- decision: {retrieval.get('decision') or 'none'}")
+        lines.append(f"- available: {'true' if retrieval.get('available') else 'false'}")
+        lines.append(f"- consulted: {'true' if retrieval.get('consulted') else 'false'}")
+        for warning in retrieval.get("warnings", []):
+            lines.append(f"- warning: {warning}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def persist_intake_artifacts(
+    *,
+    config: Any,
+    intake_id: str,
+    intent: JsonObject,
+    gray_areas: list[str],
+    questions: list[str],
+    contract: JsonObject,
+    taskbox: JsonObject,
+    preflight: JsonObject,
+    evidence_retrieval: JsonObject,
+    answers: str,
+    event_type: str,
+    utc_now: Callable[[], dt.datetime],
+    intake_id_re: re.Pattern[str],
+    error_factory: ErrorFactory,
+) -> None:
+    root = intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=error_factory)
+    write_json_atomic(root / "INTENT_DRAFT.json", intent)
+    write_json_atomic(root / "GRAY_AREAS.json", {"schema_version": 1, "intake_id": intake_id, "items": gray_areas})
+    write_json_atomic(root / "QUESTIONS.json", {"schema_version": 1, "intake_id": intake_id, "items": questions})
+    write_text_atomic(
+        root / "QUESTIONS.md",
+        "\n".join(
+            ["# Clarification Questions", ""]
+            + (
+                [f"{idx}. {question}" for idx, question in enumerate(questions, start=1)]
+                if questions
+                else ["No pending clarification questions."]
+            )
+        ).rstrip()
+        + "\n",
+    )
+    if answers:
+        append_jsonl(root / "ANSWERS.jsonl", {"received_at": utc_now().isoformat().replace("+00:00", "Z"), "text": answers})
+    write_json_atomic(root / "TASK_CONTRACT.json", contract)
+    write_json_atomic(root / "TASKBOX_DRAFT.json", taskbox)
+    write_json_atomic(root / "POLICY_PREFLIGHT.json", preflight)
+    write_json_atomic(root / "DECISION_GATE.json", contract.get("experiment_decision_gate", {}))
+    write_json_atomic(root / "EVIDENCE_RETRIEVAL.json", evidence_retrieval)
+    write_text_atomic(root / "READ_PLAN.md", read_plan_markdown(evidence_retrieval))
+    write_text_atomic(
+        root / "ASSUMPTIONS.md",
+        "\n".join(
+            [
+                "# Assumptions",
+                "",
+                f"- objective_guess: {contract.get('objective')}",
+                f"- risk_class: {contract.get('risk_class')}",
+                f"- workspace_mode: {taskbox.get('workspace_mode')}",
+                f"- experiment_decision_gate_required: {'true' if (contract.get('experiment_decision_gate') or {}).get('required') else 'false'}",
+                f"- evidence_retrieval_decision: {(evidence_retrieval.get('decision') or 'none')}",
+            ]
+        ).rstrip()
+        + "\n",
+    )
+    write_text_atomic(root / f"TASK_CONTRACT_{intake_id}.md", intake_summary_markdown(contract, questions, preflight))
+    append_jsonl(
+        root / "TASK_INTAKE.events.jsonl",
+        {
+            "event": event_type,
+            "intake_id": intake_id,
+            "status": contract.get("status"),
+            "objective": contract.get("objective"),
+            "risk_class": contract.get("risk_class"),
+            "preflight_ok": preflight.get("ok"),
+            "evidence_retrieval_decision": evidence_retrieval.get("decision"),
+            "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
+        },
+    )
+
+
+def handle_codex_prepare(
+    payload: Payload,
+    config: Any,
+    principal: Any,
+    *,
+    deps: IntakePreparationDependencies,
+    intake_id_re: re.Pattern[str],
+    max_task_chars: int,
+) -> JsonObject:
+    deps.reject_frontend_identity(payload)
+    intake_id = (payload.get("intake_id") or "").strip()
+    followup_task_id = (payload.get("followup_task_id") or payload.get("followupTaskId") or "").strip()
+    if intake_id and followup_task_id:
+        raise deps.error_factory("intake_id and followup_task_id cannot be used together", 400, "invalid_request")
+    existing_intent: JsonObject = {}
+    followup_seed: JsonObject = {}
+    if intake_id:
+        intake_id = validate_intake_id(intake_id, intake_id_re=intake_id_re, error_factory=deps.error_factory)
+        existing_intent = load_intake_intent(config, intake_id, intake_id_re=intake_id_re, error_factory=deps.error_factory)
+    else:
+        intake_id = new_intake_id(utc_now=deps.utc_now)
+    if followup_task_id:
+        followup_task_id = deps.validate_task_id(followup_task_id)
+        followup_seed = load_followup_prepare_seed(
+            config,
+            followup_task_id,
+            principal,
+            authorize_task=deps.authorize_task,
+            task_intake_id=deps.task_intake_id,
+            intake_id_re=intake_id_re,
+            error_factory=deps.error_factory,
+        )
+    followup_draft = followup_seed.get("draft") if isinstance(followup_seed.get("draft"), dict) else {}
+
+    project_name = (
+        (payload.get("workspace") or payload.get("project", "")).strip()
+        or str(existing_intent.get("workspace") or "")
+        or str(followup_draft.get("workspace") or "")
+        or str((followup_seed.get("task") or {}).get("project") or "")
+    )
+    prompt = safe_intake_text(
+        payload.get("prompt", "") or str(existing_intent.get("prompt") or "") or str(followup_draft.get("prompt") or ""),
+        max_task_chars,
+        error_factory=deps.error_factory,
+    )
+    if not prompt:
+        raise deps.error_factory("prompt is required", 400, "invalid_request")
+    project = validate_codex_project(
+        config,
+        project_name,
+        project_name_re=deps.project_name_re,
+        error_factory=deps.error_factory,
+    )
+    mode = (
+        payload.get("mode")
+        or str(existing_intent.get("desired_mode") or "")
+        or str(followup_draft.get("suggested_mode") or "")
+        or project.default_mode
+    ).strip() or project.default_mode
+    if mode not in project.allowed_modes:
+        allowed = ", ".join(project.allowed_modes)
+        raise deps.error_factory(
+            f"mode {mode} is not allowed for workspace {project.name}; allowed: {allowed}",
+            400,
+            "invalid_request",
+        )
+
+    answers = intake_answers_text(payload, error_factory=deps.error_factory)
+    reference_task_id = (
+        payload.get("reference_task_id")
+        or payload.get("referenceTaskId")
+        or str(existing_intent.get("reference_task_id") or "")
+        or str(followup_draft.get("reference_task_id") or "")
+    ).strip()
+    if reference_task_id:
+        reference_task_id = deps.validate_task_id(reference_task_id)
+        deps.authorize_task(config, principal, reference_task_id)
+
+    source = deps.safe_adapter_source(payload.get("source", "web"))
+    signals = parse_intent_signals(prompt, answers)
+    objective = infer_objective(signals)
+    gray_areas = build_gray_areas(prompt, answers, reference_task_id, signals)
+    questions = clarification_questions(gray_areas, signals)
+    risk_class = intake_risk_class(objective, signals)
+    status = "blocked" if risk_class == "high" else ("clarifying" if questions else "compiled")
+    evidence_retrieval = maybe_run_evidence_retrieval(
+        project.root,
+        prompt,
+        answers,
+        objective,
+        signals,
+        lambda text, max_chars: safe_intake_text(text, max_chars, error_factory=deps.error_factory),
+        should_consult_evidence_index,
+    )
+    contract = make_task_contract(
+        intake_id=intake_id,
+        project=project,
+        prompt=prompt,
+        answers=answers,
+        objective=objective,
+        mode=mode,
+        reference_task_id=reference_task_id,
+        risk_class=risk_class,
+        signals=signals,
+        status=status,
+        evidence_retrieval=evidence_retrieval,
+        prompt_preview=deps.prompt_preview,
+        utc_now=deps.utc_now,
+    )
+    taskbox = make_taskbox_draft(contract)
+    preflight = make_policy_preflight(project, contract, taskbox, questions, evidence_retrieval)
+    intent = {
+        "schema_version": 1,
+        "intake_id": intake_id,
+        "workspace": project.name,
+        "source": source,
+        "user": principal.user,
+        "reference_task_id": reference_task_id or "",
+        "followup_task_id": followup_task_id or "",
+        "followup_source_intake_id": str(followup_seed.get("source_intake_id") or ""),
+        "prompt": prompt,
+        "prompt_preview": deps.prompt_preview(prompt),
+        "desired_mode": mode,
+        "status": status,
+        "objective_guess": objective,
+        "signals": signals,
+        "gray_area_count": len(gray_areas),
+        "experiment_decision_gate_required": bool((contract.get("experiment_decision_gate") or {}).get("required")),
+        "evidence_retrieval_required": bool(evidence_retrieval.get("required")),
+        "evidence_retrieval_consulted": bool(evidence_retrieval.get("consulted")),
+        "evidence_retrieval_decision": evidence_retrieval.get("decision"),
+        "answers_count": 1 if answers else 0,
+        "updated_at": deps.utc_now().isoformat().replace("+00:00", "Z"),
+    }
+    persist_intake_artifacts(
+        config=config,
+        intake_id=intake_id,
+        intent=intent,
+        gray_areas=gray_areas,
+        questions=questions,
+        contract=contract,
+        taskbox=taskbox,
+        preflight=preflight,
+        evidence_retrieval=evidence_retrieval,
+        answers=answers,
+        event_type="intake_replied"
+        if answers and existing_intent
+        else ("intake_created_from_followup" if followup_task_id else "intake_created"),
+        utc_now=deps.utc_now,
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    return {
+        "ok": True,
+        "intake_id": intake_id,
+        "workspace": project.name,
+        "followup_task_id": followup_task_id or None,
+        "followup_source_intake_id": str(followup_seed.get("source_intake_id") or "") or None,
+        "followup_context": {
+            "source_task_id": followup_task_id or None,
+            "source_intake_id": str(followup_seed.get("source_intake_id") or "") or None,
+            "execution_evaluation": (
+                followup_seed.get("execution_evaluation")
+                if isinstance(followup_seed.get("execution_evaluation"), dict) and followup_seed.get("execution_evaluation")
+                else None
+            ),
+            "followup_task_draft": followup_draft or None,
+            "ledger_note_draft": (
+                followup_seed.get("ledger_note_draft")
+                if isinstance(followup_seed.get("ledger_note_draft"), dict) and followup_seed.get("ledger_note_draft")
+                else None
+            ),
+            "review_proposal_draft": (
+                followup_seed.get("review_proposal_draft")
+                if isinstance(followup_seed.get("review_proposal_draft"), dict) and followup_seed.get("review_proposal_draft")
+                else None
+            ),
+        }
+        if followup_task_id
+        else None,
+        "status": "blocked" if risk_class == "high" else ("need_user_reply" if questions else ("blocked" if not preflight.get("ok") else "prepared")),
+        "questions": questions,
+        "gray_areas": gray_areas,
+        "decision_gate": contract.get("experiment_decision_gate"),
+        "contract": contract,
+        "taskbox": taskbox,
+        "preflight": preflight,
+        "evidence_retrieval": evidence_retrieval,
+        "artifacts_dir": str(intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=deps.error_factory)),
+        "ready_to_run": bool(preflight.get("ok") and not questions),
+    }

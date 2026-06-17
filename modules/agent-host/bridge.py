@@ -13,7 +13,6 @@ import datetime as dt
 import json
 import os
 import re
-import secrets
 import shlex
 import subprocess
 import sys
@@ -37,7 +36,6 @@ from auth_policy import (
     reject_frontend_identity as reject_frontend_payload_identity,
     validate_auth as validate_mattermost_auth,
 )
-from evidence_retrieval import maybe_run_evidence_retrieval
 from execution_evaluation import (
     ExecutionEvaluationDependencies,
     maybe_attach_execution_evaluation,
@@ -101,6 +99,34 @@ from health_summary import (
     workspace_supervisor_signal as build_workspace_supervisor_signal,
     workspace_supervisor_signals as build_workspace_supervisor_signals,
 )
+from intake_preparation import (
+    IntakePreparationDependencies,
+    append_jsonl as append_intake_jsonl,
+    execution_evaluation_dependencies as build_execution_evaluation_dependencies,
+    handle_codex_intake as read_codex_intake,
+    handle_codex_prepare as prepare_codex_intake,
+    intake_answers_text as read_intake_answers_text,
+    intake_dir as resolve_intake_dir,
+    intake_root as resolve_intake_root,
+    intake_summary_markdown as render_intake_summary_markdown,
+    load_followup_prepare_seed as load_followup_seed,
+    load_intake_intent as load_intake_draft,
+    load_intake_json_artifact as load_intake_required_json_artifact,
+    load_intake_questions as load_intake_question_list,
+    load_optional_intake_json_artifact as load_intake_optional_json_artifact,
+    load_prepared_run_context as load_prepared_intake_bundle,
+    make_policy_preflight as build_policy_preflight,
+    make_task_contract as build_task_contract,
+    make_taskbox_draft as build_taskbox_draft,
+    new_intake_id as generate_intake_id,
+    persist_intake_artifacts as write_intake_artifacts,
+    read_json_object_if_exists as read_intake_json_object_if_exists,
+    safe_intake_text as validate_intake_text,
+    validate_codex_project as resolve_codex_project,
+    validate_intake_id as resolve_intake_id,
+    write_json_atomic as write_intake_json_atomic,
+    write_text_atomic as write_intake_text_atomic,
+)
 from web_ui import render_index_html
 from watchdog_commands import (
     brief_text as build_watchdog_brief_text,
@@ -114,22 +140,8 @@ from watchdog_commands import (
     write_task as persist_watchdog_task,
 )
 from prepared_context import (
-    count_jsonl_records,
-    filter_source_task_artifact,
-    load_intake_questions_from_sources,
     prepared_run_prompt,
     prepared_run_summary,
-)
-from prepare_intent import (
-    build_experiment_decision_gate,
-    build_gray_areas,
-    clarification_questions,
-    evidence_retrieval_summary,
-    infer_objective,
-    intake_risk_class,
-    parse_intent_signals,
-    read_plan_markdown,
-    should_consult_evidence_index,
 )
 from startup_runtime import build_parser, check_config, serve_bridge
 
@@ -681,229 +693,159 @@ def safe_codex_status_text(config: BridgeConfig, task: dict[str, Any], text: str
 
 
 def validate_codex_project(config: BridgeConfig, project: str) -> Project:
-    if not PROJECT_NAME_RE.match(project):
-        raise BridgeError("project is required and must be a safe project name", 400, "invalid_request")
-    if project not in config.projects:
-        raise BridgeError(f"project is not allowlisted: {project}", 403, "workspace_not_found")
-    item = config.projects[project]
-    if not item.root.exists() or not item.root.is_dir():
-        raise BridgeError(f"project root does not exist: {item.root}", 500)
-    return item
+    return resolve_codex_project(
+        config,
+        project,
+        project_name_re=PROJECT_NAME_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def validate_intake_id(intake_id: str) -> str:
-    if not INTAKE_ID_RE.match(intake_id or ""):
-        raise BridgeError("invalid intake_id", 400, "invalid_request")
-    return intake_id
+    return resolve_intake_id(
+        intake_id,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def new_intake_id() -> str:
-    stamp = utc_now().strftime("%Y%m%d_%H%M%S")
-    return f"intake_{stamp}_{secrets.token_hex(3)}"
+    return generate_intake_id(utc_now=utc_now)
 
 
 def intake_root(config: BridgeConfig) -> Path:
-    return config.codex_bridge_root / ".codex-bridge" / "intake"
+    return resolve_intake_root(config)
 
 
 def intake_dir(config: BridgeConfig, intake_id: str) -> Path:
-    return intake_root(config) / validate_intake_id(intake_id)
+    return resolve_intake_dir(
+        config,
+        intake_id,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def load_intake_intent(config: BridgeConfig, intake_id: str) -> dict[str, Any]:
-    path = intake_dir(config, intake_id) / "INTENT_DRAFT.json"
-    if not path.exists():
-        raise BridgeError(f"intake not found: {intake_id}", 404, "intake_not_found")
-    try:
-        data = json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise BridgeError(f"intake metadata is invalid: {intake_id}: {exc}", 500) from exc
-    if not isinstance(data, dict):
-        raise BridgeError(f"intake metadata is invalid: {intake_id}", 500)
-    return data
+    return load_intake_draft(
+        config,
+        intake_id,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def load_intake_json_artifact(config: BridgeConfig, intake_id: str, filename: str) -> dict[str, Any]:
-    path = intake_dir(config, intake_id) / filename
-    if not path.exists():
-        raise BridgeError(f"intake artifact is missing: {intake_id}/{filename}", 409, "prepare_artifact_missing")
-    try:
-        data = json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise BridgeError(f"intake artifact is invalid: {intake_id}/{filename}: {exc}", 500) from exc
-    if not isinstance(data, dict):
-        raise BridgeError(f"intake artifact is invalid: {intake_id}/{filename}", 500)
-    return data
+    return load_intake_required_json_artifact(
+        config,
+        intake_id,
+        filename,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def load_optional_intake_json_artifact(config: BridgeConfig, intake_id: str, filename: str) -> dict[str, Any] | None:
-    path = intake_dir(config, intake_id) / filename
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise BridgeError(f"intake artifact is invalid: {intake_id}/{filename}: {exc}", 500) from exc
-    if not isinstance(data, dict):
-        raise BridgeError(f"intake artifact is invalid: {intake_id}/{filename}", 500)
-    return data
+    return load_intake_optional_json_artifact(
+        config,
+        intake_id,
+        filename,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def load_intake_questions(config: BridgeConfig, intake_id: str) -> list[str]:
-    questions_data = load_optional_intake_json_artifact(config, intake_id, "QUESTIONS.json")
-    path = intake_dir(config, intake_id) / "QUESTIONS.md"
-    questions_markdown = path.read_text() if path.exists() else ""
-    return load_intake_questions_from_sources(questions_data, questions_markdown)
+    return load_intake_question_list(
+        config,
+        intake_id,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def load_prepared_run_context(config: BridgeConfig, intake_id: str, principal: AuthPrincipal) -> dict[str, Any]:
-    intent = load_intake_intent(config, intake_id)
-    if not can_access_intake(intent, principal):
-        raise BridgeError(f"permission denied for intake: {intake_id}", 403, "permission_denied")
-    contract = load_intake_json_artifact(config, intake_id, "TASK_CONTRACT.json")
-    taskbox = load_intake_json_artifact(config, intake_id, "TASKBOX_DRAFT.json")
-    preflight = load_intake_json_artifact(config, intake_id, "POLICY_PREFLIGHT.json")
-    evidence = load_intake_json_artifact(config, intake_id, "EVIDENCE_RETRIEVAL.json")
-    return {
-        "intake_id": intake_id,
-        "intent": intent,
-        "contract": contract,
-        "taskbox": taskbox,
-        "preflight": preflight,
-        "evidence_retrieval": evidence,
-    }
+    return load_prepared_intake_bundle(
+        config,
+        intake_id,
+        principal,
+        can_access_intake=can_access_intake,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def handle_codex_intake(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
-    reject_frontend_identity(payload)
-    intake_id = validate_intake_id((payload.get("intake_id") or "").strip())
-    bundle = load_prepared_run_context(config, intake_id, principal)
-    root = intake_dir(config, intake_id)
-    gray_areas_artifact = load_optional_intake_json_artifact(config, intake_id, "GRAY_AREAS.json") or {}
-    decision_gate = load_optional_intake_json_artifact(config, intake_id, "DECISION_GATE.json") or {}
-    questions = load_intake_questions(config, intake_id)
-    execution_evaluation = load_optional_intake_json_artifact(config, intake_id, "EXECUTION_EVALUATION.json")
-    followup_task_draft = load_optional_intake_json_artifact(config, intake_id, "FOLLOWUP_TASK_DRAFT.json")
-    ledger_note_draft = load_optional_intake_json_artifact(config, intake_id, "LEDGER_NOTE_DRAFT.json")
-    review_proposal_draft = load_optional_intake_json_artifact(config, intake_id, "REVIEW_PROPOSAL_DRAFT.json")
-    events_path = root / "TASK_INTAKE.events.jsonl"
-    event_count = count_jsonl_records(events_path.read_text() if events_path.exists() else "")
-    return {
-        "ok": True,
-        "intake_id": intake_id,
-        "intent": bundle["intent"],
-        "gray_areas": list(gray_areas_artifact.get("items") or []),
-        "questions": questions,
-        "contract": bundle["contract"],
-        "taskbox": bundle["taskbox"],
-        "preflight": bundle["preflight"],
-        "decision_gate": decision_gate,
-        "evidence_retrieval": bundle["evidence_retrieval"],
-        "execution_evaluation": execution_evaluation,
-        "followup_task_draft": followup_task_draft,
-        "ledger_note_draft": ledger_note_draft,
-        "review_proposal_draft": review_proposal_draft,
-        "event_count": event_count,
-        "ready_to_run": bool(bundle["preflight"].get("ok") and not questions),
-    }
+    return read_codex_intake(
+        payload,
+        config,
+        principal,
+        deps=IntakePreparationDependencies(
+            utc_now=utc_now,
+            reject_frontend_identity=reject_frontend_identity,
+            can_access_intake=can_access_intake,
+            validate_task_id=validate_task_id,
+            authorize_task=authorize_codex_task,
+            task_intake_id=task_intake_id,
+            safe_adapter_source=safe_adapter_source,
+            prompt_preview=prompt_preview,
+            project_name_re=PROJECT_NAME_RE,
+            error_factory=lambda message, status, code: BridgeError(message, status, code),
+        ),
+        intake_id_re=INTAKE_ID_RE,
+    )
 
 
 def load_followup_prepare_seed(config: BridgeConfig, followup_task_id: str, principal: AuthPrincipal) -> dict[str, Any]:
-    _task_dir, task = authorize_codex_task(config, principal, followup_task_id)
-    intake_id = task_intake_id(task)
-    if not intake_id:
-        raise BridgeError(
-            f"follow-up draft is not available for task {followup_task_id}; the task is not linked to a prepared intake",
-            409,
-            "followup_draft_unavailable",
-        )
-    draft = load_intake_json_artifact(config, intake_id, "FOLLOWUP_TASK_DRAFT.json")
-    if str(draft.get("source_task_id") or "") not in {"", followup_task_id}:
-        raise BridgeError(
-            f"follow-up draft source does not match task {followup_task_id}",
-            409,
-            "followup_draft_invalid",
-        )
-    root = intake_dir(config, intake_id)
-    execution_evaluation = filter_source_task_artifact(
-        read_json_object_if_exists(root / "EXECUTION_EVALUATION.json"),
+    return load_followup_seed(
+        config,
         followup_task_id,
-        "task_id",
+        principal,
+        authorize_task=authorize_codex_task,
+        task_intake_id=task_intake_id,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
     )
-    ledger_note_draft = filter_source_task_artifact(
-        read_json_object_if_exists(root / "LEDGER_NOTE_DRAFT.json"),
-        followup_task_id,
-        "source_task_id",
-    )
-    review_proposal_draft = filter_source_task_artifact(
-        read_json_object_if_exists(root / "REVIEW_PROPOSAL_DRAFT.json"),
-        followup_task_id,
-        "source_task_id",
-    )
-    return {
-        "task_id": followup_task_id,
-        "source_intake_id": intake_id,
-        "task": task,
-        "draft": draft,
-        "execution_evaluation": execution_evaluation,
-        "ledger_note_draft": ledger_note_draft,
-        "review_proposal_draft": review_proposal_draft,
-    }
 
 
 def read_json_object_if_exists(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if isinstance(data, dict):
-        return data
-    return {}
+    return read_intake_json_object_if_exists(path)
 
 
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
-    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-    os.replace(temp, path)
+    write_intake_json_atomic(path, data)
 
 
 def write_text_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
-    temp.write_text(text)
-    os.replace(temp, path)
+    write_intake_text_atomic(path, text)
 
 
 def append_jsonl(path: Path, event: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    append_intake_jsonl(path, event)
 
 
 def execution_evaluation_dependencies() -> ExecutionEvaluationDependencies:
-    return ExecutionEvaluationDependencies(
+    return build_execution_evaluation_dependencies(
         utc_now=utc_now,
-        intake_dir=intake_dir,
-        read_json_object_if_exists=read_json_object_if_exists,
-        write_json_atomic=write_json_atomic,
-        write_text_atomic=write_text_atomic,
-        append_jsonl=append_jsonl,
         task_intake_id=task_intake_id,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
     )
 
 
 def safe_intake_text(value: str, max_chars: int = 6000) -> str:
-    text = str(value or "").strip()
-    if len(text) > max_chars:
-        raise BridgeError(f"text is too long; max {max_chars} chars", 400, "invalid_request")
-    return text
+    return validate_intake_text(
+        value,
+        max_chars,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def intake_answers_text(payload: dict[str, str]) -> str:
-    return safe_intake_text(payload.get("answers") or payload.get("answer") or "", 4000)
+    return read_intake_answers_text(
+        payload,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 
@@ -921,102 +863,25 @@ def make_task_contract(
     status: str,
     evidence_retrieval: dict[str, Any],
 ) -> dict[str, Any]:
-    decision_source = "user+answers" if answers else "user"
-    requires_human = risk_class == "high"
-    decision_gate = build_experiment_decision_gate(prompt, answers, objective, signals)
-    write_scope = []
-    if objective == "local_workspace_copy":
-        write_scope = ["workspace/<task_id>/", "runs/<task_id>/", "agent/status/", "agent/reports/"]
-    return {
-        "schema_version": 1,
-        "intake_id": intake_id,
-        "workspace": project.name,
-        "status": status,
-        "objective": objective,
-        "mode": mode,
-        "risk_class": risk_class,
-        "decision_source": decision_source,
-        "requires_human": requires_human,
-        "reference_task_id": reference_task_id or "",
-        "prompt": prompt,
-        "answers_summary": answers,
-        "summary": prompt_preview(prompt),
-        "experiment_decision_gate": decision_gate,
-        "write_scope": write_scope,
-        "blocked_actions": [
-            "shared_file_promotion_without_human_review",
-            "dataset_or_checkpoint_mutation",
-            "external_send_without_human_review",
-            "service_or_secret_mutation",
-        ],
-        "evidence_retrieval": evidence_retrieval_summary(evidence_retrieval),
-        "signals": signals,
-        "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
-    }
+    return build_task_contract(
+        intake_id=intake_id,
+        project=project,
+        prompt=prompt,
+        answers=answers,
+        objective=objective,
+        mode=mode,
+        reference_task_id=reference_task_id,
+        risk_class=risk_class,
+        signals=signals,
+        status=status,
+        evidence_retrieval=evidence_retrieval,
+        prompt_preview=prompt_preview,
+        utc_now=utc_now,
+    )
 
 
 def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
-    objective = str(contract.get("objective") or "")
-    decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
-    retrieval = contract.get("evidence_retrieval") if isinstance(contract.get("evidence_retrieval"), dict) else {}
-    gate_required = bool(decision_gate.get("required"))
-    gate_blocking = bool(decision_gate.get("blocking"))
-    gate_status = "blocked" if gate_blocking else ("required_ready" if gate_required else "not_required")
-    if objective == "report_only":
-        return {
-            "schema_version": 1,
-            "intake_id": contract["intake_id"],
-            "status": "blocked" if gate_blocking else "ready",
-            "allowed_runner": "report_only",
-            "workspace_mode": "readonly",
-            "allowed_write_paths": [],
-            "blocked_actions": contract.get("blocked_actions", []),
-            "summary": "Report-only clarification result; no execution side effects.",
-            "experiment_decision_gate": decision_gate,
-            "experiment_gate_status": gate_status,
-            "evidence_retrieval": retrieval,
-        }
-    if objective == "bounded_cpu_eval":
-        return {
-            "schema_version": 1,
-            "intake_id": contract["intake_id"],
-            "status": "blocked" if gate_blocking else "ready",
-            "allowed_runner": "cpu",
-            "workspace_mode": "readonly",
-            "allowed_write_paths": ["runs/<task_id>/", "agent/status/", "agent/reports/"],
-            "blocked_actions": contract.get("blocked_actions", []),
-            "summary": "Bounded CPU evaluation or smoke-check task." if not gate_blocking else "Bounded CPU evaluation draft exists, but experiment decisions are still unresolved.",
-            "experiment_decision_gate": decision_gate,
-            "experiment_gate_status": gate_status,
-            "evidence_retrieval": retrieval,
-        }
-    if objective == "local_workspace_copy":
-        return {
-            "schema_version": 1,
-            "intake_id": contract["intake_id"],
-            "status": "blocked" if gate_blocking else "ready",
-            "allowed_runner": "cpu",
-            "workspace_mode": "project_local_copy",
-            "allowed_write_paths": contract.get("write_scope", []),
-            "blocked_actions": contract.get("blocked_actions", []),
-            "summary": "Project-local copy task; shared files remain protected." if not gate_blocking else "Project-local copy draft exists, but experiment decisions are still unresolved.",
-            "experiment_decision_gate": decision_gate,
-            "experiment_gate_status": gate_status,
-            "evidence_retrieval": retrieval,
-        }
-    return {
-        "schema_version": 1,
-        "intake_id": contract["intake_id"],
-        "status": "blocked",
-        "allowed_runner": "none",
-        "workspace_mode": "none",
-        "allowed_write_paths": [],
-        "blocked_actions": contract.get("blocked_actions", []),
-        "summary": "High-risk or nondelegable task; requires human approval before execution.",
-        "experiment_decision_gate": decision_gate,
-        "experiment_gate_status": gate_status,
-        "evidence_retrieval": retrieval,
-    }
+    return build_taskbox_draft(contract)
 
 
 def make_policy_preflight(
@@ -1026,110 +891,11 @@ def make_policy_preflight(
     questions: list[str],
     evidence_retrieval: dict[str, Any],
 ) -> dict[str, Any]:
-    objective = str(contract.get("objective") or "")
-    risk_class = str(contract.get("risk_class") or "low")
-    decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
-    blocked_by: list[str] = []
-    reasons: list[str] = []
-    if questions:
-        blocked_by.append("clarification_required")
-        reasons.append("Task intent still has unresolved gray areas.")
-    if decision_gate.get("required") and decision_gate.get("blocking"):
-        blocked_by.append("experiment_decision_gate_required")
-        unresolved = ", ".join(str(item) for item in decision_gate.get("unresolved_items", []))
-        reasons.append(f"Experiment decision gate is still unresolved: {unresolved}.")
-    if risk_class == "high":
-        blocked_by.append("human_review_required")
-        reasons.append(f"Objective {objective} is intentionally held for human approval.")
-    if str(contract.get("mode") or "") not in project.allowed_modes:
-        blocked_by.append("workspace_mode_not_allowed")
-        reasons.append(f"Workspace {project.name} does not allow mode={contract.get('mode')}.")
-    if objective not in {"report_only", "bounded_cpu_eval", "local_workspace_copy"} and risk_class != "high":
-        blocked_by.append("unsupported_objective")
-        reasons.append(f"Objective {objective} is not yet supported by the prepare pipeline.")
-    retrieval_decision = evidence_retrieval.get("decision")
-    retrieval_warnings = evidence_retrieval.get("warnings") if isinstance(evidence_retrieval.get("warnings"), list) else []
-    if evidence_retrieval.get("required"):
-        if evidence_retrieval.get("consulted") and retrieval_decision and retrieval_decision != "safe_to_answer":
-            reasons.append(
-                f"Evidence retrieval returned decision={retrieval_decision}; keep formal conclusion claims bounded until the referenced evidence is reviewed."
-            )
-        elif not evidence_retrieval.get("consulted"):
-            reasons.append("Evidence retrieval was expected for this request but is not currently available for the selected workspace.")
-    ok = not blocked_by
-    decision = "ready" if ok else "blocked"
-    required_action = "run" if ok else ("reply_to_questions" if "clarification_required" in blocked_by else "human_review")
-    return {
-        "schema_version": 1,
-        "intake_id": contract["intake_id"],
-        "ok": ok,
-        "decision": decision,
-        "blocked_by": blocked_by,
-        "required_action": required_action,
-        "reasons": reasons,
-        "allowed_runner": taskbox.get("allowed_runner"),
-        "workspace_mode": taskbox.get("workspace_mode"),
-        "experiment_decision_gate_required": bool(decision_gate.get("required")),
-        "evidence_retrieval_required": bool(evidence_retrieval.get("required")),
-        "evidence_retrieval_consulted": bool(evidence_retrieval.get("consulted")),
-        "evidence_retrieval_available": bool(evidence_retrieval.get("available")),
-        "evidence_retrieval_decision": retrieval_decision,
-        "evidence_retrieval_warnings": retrieval_warnings,
-    }
+    return build_policy_preflight(project, contract, taskbox, questions, evidence_retrieval)
 
 
 def intake_summary_markdown(contract: dict[str, Any], questions: list[str], preflight: dict[str, Any]) -> str:
-    decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
-    retrieval = contract.get("evidence_retrieval") if isinstance(contract.get("evidence_retrieval"), dict) else {}
-    lines = [
-        "# Task Contract Summary",
-        "",
-        f"- intake_id: {contract.get('intake_id')}",
-        f"- workspace: {contract.get('workspace')}",
-        f"- objective: {contract.get('objective')}",
-        f"- risk_class: {contract.get('risk_class')}",
-        f"- decision_source: {contract.get('decision_source')}",
-        f"- status: {contract.get('status')}",
-        f"- preflight_ok: {'true' if preflight.get('ok') else 'false'}",
-        f"- experiment_decision_gate_required: {'true' if decision_gate.get('required') else 'false'}",
-        f"- evidence_retrieval_required: {'true' if retrieval.get('required') else 'false'}",
-        f"- evidence_retrieval_consulted: {'true' if retrieval.get('consulted') else 'false'}",
-        f"- evidence_retrieval_decision: {retrieval.get('decision') or 'none'}",
-        "",
-        "## Prompt",
-        "",
-        str(contract.get("prompt") or ""),
-        "",
-    ]
-    answers = str(contract.get("answers_summary") or "")
-    if answers:
-        lines.extend(["## Answers", "", answers, ""])
-    if questions:
-        lines.append("## Pending Questions")
-        lines.append("")
-        for idx, question in enumerate(questions, start=1):
-            lines.append(f"{idx}. {question}")
-        lines.append("")
-    if decision_gate.get("required"):
-        lines.append("## Experiment Decision Gate")
-        lines.append("")
-        lines.append(f"- resolved_count: {decision_gate.get('resolved_count', 0)} / {decision_gate.get('decision_count', 0)}")
-        lines.append(f"- blocking: {'true' if decision_gate.get('blocking') else 'false'}")
-        for item in decision_gate.get("decisions", []):
-            lines.append(
-                f"- {item.get('decision_id')}: {item.get('title')} -> {'resolved' if item.get('resolved') else 'missing'}"
-            )
-        lines.append("")
-    if retrieval.get("required"):
-        lines.append("## Evidence Retrieval")
-        lines.append("")
-        lines.append(f"- decision: {retrieval.get('decision') or 'none'}")
-        lines.append(f"- available: {'true' if retrieval.get('available') else 'false'}")
-        lines.append(f"- consulted: {'true' if retrieval.get('consulted') else 'false'}")
-        for warning in retrieval.get("warnings", []):
-            lines.append(f"- warning: {warning}")
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+    return render_intake_summary_markdown(contract, questions, preflight)
 
 
 def persist_intake_artifacts(
@@ -1146,162 +912,7 @@ def persist_intake_artifacts(
     answers: str,
     event_type: str,
 ) -> None:
-    root = intake_dir(config, intake_id)
-    write_json_atomic(root / "INTENT_DRAFT.json", intent)
-    write_json_atomic(root / "GRAY_AREAS.json", {"schema_version": 1, "intake_id": intake_id, "items": gray_areas})
-    write_json_atomic(root / "QUESTIONS.json", {"schema_version": 1, "intake_id": intake_id, "items": questions})
-    write_text_atomic(
-        root / "QUESTIONS.md",
-        "\n".join(
-            ["# Clarification Questions", ""] +
-            ([f"{idx}. {question}" for idx, question in enumerate(questions, start=1)] if questions else ["No pending clarification questions."])
-        ).rstrip() + "\n",
-    )
-    if answers:
-        append_jsonl(root / "ANSWERS.jsonl", {"received_at": utc_now().isoformat().replace("+00:00", "Z"), "text": answers})
-    write_json_atomic(root / "TASK_CONTRACT.json", contract)
-    write_json_atomic(root / "TASKBOX_DRAFT.json", taskbox)
-    write_json_atomic(root / "POLICY_PREFLIGHT.json", preflight)
-    write_json_atomic(root / "DECISION_GATE.json", contract.get("experiment_decision_gate", {}))
-    write_json_atomic(root / "EVIDENCE_RETRIEVAL.json", evidence_retrieval)
-    write_text_atomic(root / "READ_PLAN.md", read_plan_markdown(evidence_retrieval))
-    write_text_atomic(
-        root / "ASSUMPTIONS.md",
-        "\n".join([
-            "# Assumptions",
-            "",
-            f"- objective_guess: {contract.get('objective')}",
-            f"- risk_class: {contract.get('risk_class')}",
-            f"- workspace_mode: {taskbox.get('workspace_mode')}",
-            f"- experiment_decision_gate_required: {'true' if (contract.get('experiment_decision_gate') or {}).get('required') else 'false'}",
-            f"- evidence_retrieval_decision: {(evidence_retrieval.get('decision') or 'none')}",
-        ]).rstrip() + "\n",
-    )
-    write_text_atomic(root / f"TASK_CONTRACT_{intake_id}.md", intake_summary_markdown(contract, questions, preflight))
-    append_jsonl(
-        root / "TASK_INTAKE.events.jsonl",
-        {
-            "event": event_type,
-            "intake_id": intake_id,
-            "status": contract.get("status"),
-            "objective": contract.get("objective"),
-            "risk_class": contract.get("risk_class"),
-            "preflight_ok": preflight.get("ok"),
-            "evidence_retrieval_decision": evidence_retrieval.get("decision"),
-            "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
-        },
-    )
-
-
-def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
-    reject_frontend_identity(payload)
-    intake_id = (payload.get("intake_id") or "").strip()
-    followup_task_id = (payload.get("followup_task_id") or payload.get("followupTaskId") or "").strip()
-    if intake_id and followup_task_id:
-        raise BridgeError("intake_id and followup_task_id cannot be used together", 400, "invalid_request")
-    existing_intent: dict[str, Any] = {}
-    followup_seed: dict[str, Any] = {}
-    if intake_id:
-        intake_id = validate_intake_id(intake_id)
-        existing_intent = load_intake_intent(config, intake_id)
-    else:
-        intake_id = new_intake_id()
-    if followup_task_id:
-        followup_task_id = validate_task_id(followup_task_id)
-        followup_seed = load_followup_prepare_seed(config, followup_task_id, principal)
-    followup_draft = followup_seed.get("draft") if isinstance(followup_seed.get("draft"), dict) else {}
-
-    project_name = (
-        (payload.get("workspace") or payload.get("project", "")).strip()
-        or str(existing_intent.get("workspace") or "")
-        or str(followup_draft.get("workspace") or "")
-        or str((followup_seed.get("task") or {}).get("project") or "")
-    )
-    prompt = safe_intake_text(
-        payload.get("prompt", "")
-        or str(existing_intent.get("prompt") or "")
-        or str(followup_draft.get("prompt") or ""),
-        MAX_TASK_CHARS,
-    )
-    if not prompt:
-        raise BridgeError("prompt is required", 400, "invalid_request")
-    project = validate_codex_project(config, project_name)
-    mode = (
-        payload.get("mode")
-        or str(existing_intent.get("desired_mode") or "")
-        or str(followup_draft.get("suggested_mode") or "")
-        or project.default_mode
-    ).strip() or project.default_mode
-    if mode not in project.allowed_modes:
-        allowed = ", ".join(project.allowed_modes)
-        raise BridgeError(f"mode {mode} is not allowed for workspace {project.name}; allowed: {allowed}", 400, "invalid_request")
-
-    answers = intake_answers_text(payload)
-    reference_task_id = (
-        payload.get("reference_task_id")
-        or payload.get("referenceTaskId")
-        or str(existing_intent.get("reference_task_id") or "")
-        or str(followup_draft.get("reference_task_id") or "")
-    ).strip()
-    if reference_task_id:
-        reference_task_id = validate_task_id(reference_task_id)
-        authorize_codex_task(config, principal, reference_task_id)
-
-    source = safe_adapter_source(payload.get("source", "web"))
-    signals = parse_intent_signals(prompt, answers)
-    objective = infer_objective(signals)
-    gray_areas = build_gray_areas(prompt, answers, reference_task_id, signals)
-    questions = clarification_questions(gray_areas, signals)
-    risk_class = intake_risk_class(objective, signals)
-    status = "blocked" if risk_class == "high" else ("clarifying" if questions else "compiled")
-    evidence_retrieval = maybe_run_evidence_retrieval(
-        project.root,
-        prompt,
-        answers,
-        objective,
-        signals,
-        safe_intake_text,
-        should_consult_evidence_index,
-    )
-    contract = make_task_contract(
-        intake_id=intake_id,
-        project=project,
-        prompt=prompt,
-        answers=answers,
-        objective=objective,
-        mode=mode,
-        reference_task_id=reference_task_id,
-        risk_class=risk_class,
-        signals=signals,
-        status=status,
-        evidence_retrieval=evidence_retrieval,
-    )
-    taskbox = make_taskbox_draft(contract)
-    preflight = make_policy_preflight(project, contract, taskbox, questions, evidence_retrieval)
-    intent = {
-        "schema_version": 1,
-        "intake_id": intake_id,
-        "workspace": project.name,
-        "source": source,
-        "user": principal.user,
-        "reference_task_id": reference_task_id or "",
-        "followup_task_id": followup_task_id or "",
-        "followup_source_intake_id": str(followup_seed.get("source_intake_id") or ""),
-        "prompt": prompt,
-        "prompt_preview": prompt_preview(prompt),
-        "desired_mode": mode,
-        "status": status,
-        "objective_guess": objective,
-        "signals": signals,
-        "gray_area_count": len(gray_areas),
-        "experiment_decision_gate_required": bool((contract.get("experiment_decision_gate") or {}).get("required")),
-        "evidence_retrieval_required": bool(evidence_retrieval.get("required")),
-        "evidence_retrieval_consulted": bool(evidence_retrieval.get("consulted")),
-        "evidence_retrieval_decision": evidence_retrieval.get("decision"),
-        "answers_count": 1 if answers else 0,
-        "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
-    }
-    persist_intake_artifacts(
+    write_intake_artifacts(
         config=config,
         intake_id=intake_id,
         intent=intent,
@@ -1312,45 +923,33 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
         preflight=preflight,
         evidence_retrieval=evidence_retrieval,
         answers=answers,
-        event_type="intake_replied" if answers and existing_intent else ("intake_created_from_followup" if followup_task_id else "intake_created"),
+        event_type=event_type,
+        utc_now=utc_now,
+        intake_id_re=INTAKE_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
     )
-    return {
-        "ok": True,
-        "intake_id": intake_id,
-        "workspace": project.name,
-        "followup_task_id": followup_task_id or None,
-        "followup_source_intake_id": str(followup_seed.get("source_intake_id") or "") or None,
-        "followup_context": {
-            "source_task_id": followup_task_id or None,
-            "source_intake_id": str(followup_seed.get("source_intake_id") or "") or None,
-            "execution_evaluation": (
-                followup_seed.get("execution_evaluation")
-                if isinstance(followup_seed.get("execution_evaluation"), dict) and followup_seed.get("execution_evaluation")
-                else None
-            ),
-            "followup_task_draft": followup_draft or None,
-            "ledger_note_draft": (
-                followup_seed.get("ledger_note_draft")
-                if isinstance(followup_seed.get("ledger_note_draft"), dict) and followup_seed.get("ledger_note_draft")
-                else None
-            ),
-            "review_proposal_draft": (
-                followup_seed.get("review_proposal_draft")
-                if isinstance(followup_seed.get("review_proposal_draft"), dict) and followup_seed.get("review_proposal_draft")
-                else None
-            ),
-        } if followup_task_id else None,
-        "status": "blocked" if risk_class == "high" else ("need_user_reply" if questions else ("blocked" if not preflight.get("ok") else "prepared")),
-        "questions": questions,
-        "gray_areas": gray_areas,
-        "decision_gate": contract.get("experiment_decision_gate"),
-        "contract": contract,
-        "taskbox": taskbox,
-        "preflight": preflight,
-        "evidence_retrieval": evidence_retrieval,
-        "artifacts_dir": str(intake_dir(config, intake_id)),
-        "ready_to_run": bool(preflight.get("ok") and not questions),
-    }
+
+
+def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
+    return prepare_codex_intake(
+        payload,
+        config,
+        principal,
+        deps=IntakePreparationDependencies(
+            utc_now=utc_now,
+            reject_frontend_identity=reject_frontend_identity,
+            can_access_intake=can_access_intake,
+            validate_task_id=validate_task_id,
+            authorize_task=authorize_codex_task,
+            task_intake_id=task_intake_id,
+            safe_adapter_source=safe_adapter_source,
+            prompt_preview=prompt_preview,
+            project_name_re=PROJECT_NAME_RE,
+            error_factory=lambda message, status, code: BridgeError(message, status, code),
+        ),
+        intake_id_re=INTAKE_ID_RE,
+        max_task_chars=MAX_TASK_CHARS,
+    )
 
 
 def safe_adapter_source(value: str) -> str:
