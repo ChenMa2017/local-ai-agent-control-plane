@@ -18,7 +18,7 @@ Canonical route truth now starts with:
 
 - \`agent/ROUTE_CANONICAL.json\`: route_id, route_epoch, owner_mode, active step, and downstream gates.
 - \`agent/TASK_BOX.json\`: machine-readable bounded assignment, allowed actions, allowed write paths, queue policy, and concrete tasks.
-- For decision-bearing work, keep \`agent/TASK_BOX.json\` and \`agent/ROUTE_CANONICAL.json\` aligned on \`current_conclusion_topic_id\` and \`current_conclusion_query\` so durable conclusion updates can be verified against the same local retrieval contract.
+- For decision-bearing work, keep \`agent/TASK_BOX.json\` and \`agent/ROUTE_CANONICAL.json\` aligned on \`current_conclusion_topic_id\` and \`current_conclusion_query\`, and register that exact query in \`project_index/golden_queries.json\` with \`expected_decision: "safe_to_answer"\`, so durable conclusion updates can be verified against the same local retrieval contract.
 
 Derived/project-local watchdog files should be reconciled against the canonical route/task box when they drift:
 

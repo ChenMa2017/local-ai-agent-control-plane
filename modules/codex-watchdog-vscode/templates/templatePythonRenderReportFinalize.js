@@ -208,6 +208,63 @@ def run_watchdog_doc_search(query):
         raise SystemExit("current_conclusion_update verification expected watchdog_doc_search.py to return a JSON object")
     return payload
 
+def load_golden_queries_registry():
+    golden_queries = load_json_default("project_index/golden_queries.json", {})
+    if not isinstance(golden_queries, dict):
+        raise SystemExit("current_conclusion_update requires project_index/golden_queries.json to be a JSON object")
+    if golden_queries.get("schema_version") != "golden_queries.v0.1":
+        raise SystemExit("current_conclusion_update requires project_index/golden_queries.json schema_version=golden_queries.v0.1")
+    queries = golden_queries.get("queries")
+    if not isinstance(queries, list):
+        raise SystemExit("current_conclusion_update requires project_index/golden_queries.json queries to be an array")
+    registry = {}
+    duplicate_queries = []
+    for index, item in enumerate(queries):
+        label = f"project_index/golden_queries.json queries[{index}]"
+        if not isinstance(item, dict):
+            raise SystemExit(f"current_conclusion_update requires {label} to be an object")
+        query = str(item.get("query") or "").strip()
+        if not query:
+            raise SystemExit(f"current_conclusion_update requires {label}.query to be a nonempty string")
+        expected_decision = safe_optional_string(item.get("expected_decision"))
+        if expected_decision and expected_decision not in VALID_SEARCH_DECISIONS:
+            raise SystemExit(
+                f"current_conclusion_update requires {label}.expected_decision to be one of {sorted(VALID_SEARCH_DECISIONS)}"
+            )
+        if query in registry:
+            duplicate_queries.append(query)
+            continue
+        registry[query] = {
+            "query": query,
+            "expected_decision": expected_decision,
+            "notes": safe_optional_string(item.get("notes")),
+        }
+    if duplicate_queries:
+        raise SystemExit(
+            "current_conclusion_update requires unique project_index/golden_queries.json query values; duplicates: "
+            + ", ".join(sorted(set(duplicate_queries)))
+        )
+    return registry
+
+def require_safe_to_answer_golden_query(query):
+    normalized_query = str(query or "").strip()
+    if not normalized_query:
+        raise SystemExit("current_conclusion_update requires a nonempty retrieval query before checking golden_queries.json")
+    entry = load_golden_queries_registry().get(normalized_query)
+    if not entry:
+        raise SystemExit(
+            "current_conclusion_update requires project_index/golden_queries.json to contain the exact retrieval query with expected_decision=safe_to_answer: "
+            + repr(normalized_query)
+        )
+    expected_decision = str(entry.get("expected_decision") or "").strip()
+    if expected_decision != "safe_to_answer":
+        raise SystemExit(
+            "current_conclusion_update requires project_index/golden_queries.json expected_decision=safe_to_answer for query "
+            + repr(normalized_query)
+            + f"; found {expected_decision!r}"
+        )
+    return entry
+
 def upsert_records_by_key(existing_records, updates, key):
     remaining = {}
     ordered_keys = []
@@ -516,6 +573,8 @@ current_conclusion_evidence_read_plan_paths = []
 current_conclusion_update_status = "none"
 current_conclusion_output_path = ""
 current_conclusion_proposal_path = ""
+current_conclusion_golden_query_status = "none"
+current_conclusion_golden_query_expected_decision = ""
 current_conclusion_topic_id = str(current_conclusion_update.get("topic_id") or "").strip() if current_conclusion_update else ""
 contract_current_conclusion_topic_id = route_or_task_box_value("current_conclusion_topic_id")
 contract_current_conclusion_query = route_or_task_box_value("current_conclusion_query")
@@ -649,6 +708,9 @@ if current_conclusion_update:
             "current_conclusion_update requires a safe_to_answer retrieval decision from watchdog_doc_search.py; "
             + f"got {current_conclusion_evidence_decision}: {warning_text}"
         )
+    matched_golden_query = require_safe_to_answer_golden_query(current_conclusion_evidence_query)
+    current_conclusion_golden_query_status = "matched_safe_to_answer"
+    current_conclusion_golden_query_expected_decision = str(matched_golden_query.get("expected_decision") or "").strip()
     conclusion_errors = validate_current_conclusion_update(
         current_conclusion_update,
         staged_docs_by_id,
@@ -746,6 +808,8 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Experiment index updates: {experiment_index_update_count}",
     f"Current conclusion contract topic: {contract_current_conclusion_topic_id or 'none'}",
     f"Current conclusion contract query: {contract_current_conclusion_query or 'none'}",
+    f"Current conclusion golden query: {current_conclusion_golden_query_status}",
+    f"Current conclusion golden expected decision: {current_conclusion_golden_query_expected_decision or 'none'}",
     f"Current conclusion evidence search: {current_conclusion_evidence_status}",
     f"Current conclusion evidence decision: {current_conclusion_evidence_decision or 'none'}",
     f"Current conclusion update: {current_conclusion_update_status}",
@@ -830,6 +894,8 @@ atomic_write_json("agent/RUN_STATE.json", {
     "current_conclusion_contract_topic_id": contract_current_conclusion_topic_id or None,
     "current_conclusion_contract_query": contract_current_conclusion_query or None,
     "current_conclusion_gate_required": contract_current_conclusion_gate_required,
+    "current_conclusion_golden_query_status": current_conclusion_golden_query_status,
+    "current_conclusion_golden_query_expected_decision": current_conclusion_golden_query_expected_decision or None,
     "current_conclusion_evidence_status": current_conclusion_evidence_status,
     "current_conclusion_evidence_query": current_conclusion_evidence_query or None,
     "current_conclusion_evidence_decision": current_conclusion_evidence_decision or None,
@@ -889,6 +955,8 @@ write_lines("agent/NEXT_ACTION.md", [
     f"- Experiment index updates: {experiment_index_update_count}",
     f"- Current conclusion contract topic: {contract_current_conclusion_topic_id or 'none'}",
     f"- Current conclusion contract query: {contract_current_conclusion_query or 'none'}",
+    f"- Current conclusion golden query: {current_conclusion_golden_query_status}",
+    f"- Current conclusion golden expected decision: {current_conclusion_golden_query_expected_decision or 'none'}",
     f"- Current conclusion evidence search: {current_conclusion_evidence_status}",
     f"- Current conclusion evidence decision: {current_conclusion_evidence_decision or 'none'}",
     f"- Current conclusion update: {current_conclusion_update_status}",
@@ -995,6 +1063,7 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
         "research/RESEARCH_PROGRAM.json",
         *([ "agent/bin/watchdog_doc_search.py" ] if current_conclusion_update else []),
         *([ "project_index/current_conclusions.json" ] if current_conclusion_update else []),
+        *([ "project_index/golden_queries.json" ] if current_conclusion_update else []),
         *([ "project_index/document_index.jsonl" ] if document_index_updates or current_conclusion_update else []),
         *([ "project_index/experiment_index.jsonl" ] if experiment_index_updates or current_conclusion_update else []),
         *[record.get("path") for record in staged_document_updates],
@@ -1038,6 +1107,8 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "current_conclusion_contract_topic_id": contract_current_conclusion_topic_id or None,
     "current_conclusion_contract_query": contract_current_conclusion_query or None,
     "current_conclusion_gate_required": contract_current_conclusion_gate_required,
+    "current_conclusion_golden_query_status": current_conclusion_golden_query_status,
+    "current_conclusion_golden_query_expected_decision": current_conclusion_golden_query_expected_decision or None,
     "current_conclusion_evidence_status": current_conclusion_evidence_status,
     "current_conclusion_evidence_query": current_conclusion_evidence_query or None,
     "current_conclusion_evidence_decision": current_conclusion_evidence_decision or None,

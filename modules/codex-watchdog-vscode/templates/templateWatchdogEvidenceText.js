@@ -30,6 +30,7 @@ Update discipline:
 2. When you add a new formal experiment result, update \`experiment_index.jsonl\` and any referenced documents in the same change.
 3. When a conclusion or report becomes stale, superseded, deprecated, or invalidated, mark that status explicitly instead of leaving old files ambiguous.
 4. Prefer metadata-first retrieval. Call \`watchdog_doc_search.py\` before reading many source files when the question asks for a current conclusion, a current best candidate, a comparison claim, or a formal experiment result.
+5. When you want a durable \`current_conclusion_update\`, register the exact retrieval query in \`golden_queries.json\` with \`expected_decision: "safe_to_answer"\` so later wakeups can regression-check the same answer path.
 `,
 
   projectIndexSchemaReadme: () => `# Project Evidence Index Schemas

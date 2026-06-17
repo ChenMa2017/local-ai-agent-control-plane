@@ -367,21 +367,29 @@ async function main() {
     ]
   });
 
-  writeJson(projectRoot, "project_index/golden_queries.json", {
+  const defaultGoldenQueries = [
+    {
+      query: "current best candidate",
+      expected_decision: "safe_to_answer",
+      notes: "Should surface the active primary conclusion before auxiliary notes."
+    },
+    {
+      query: "loss spike debug",
+      expected_decision: "only_auxiliary_found",
+      notes: "Should surface the auxiliary diagnostic note without overstating certainty."
+    }
+  ];
+  const stage06GoldenQuery = {
+    query: "stage06 route status",
+    expected_decision: "safe_to_answer",
+    notes: "Should keep the stage06 successor-contract conclusion answerable from the local regression query."
+  };
+  const writeGoldenQueries = (queries) => writeJson(projectRoot, "project_index/golden_queries.json", {
     schema_version: "golden_queries.v0.1",
-    queries: [
-      {
-        query: "current best candidate",
-        expected_decision: "safe_to_answer",
-        notes: "Should surface the active primary conclusion before auxiliary notes."
-      },
-      {
-        query: "loss spike debug",
-        expected_decision: "only_auxiliary_found",
-        notes: "Should surface the auxiliary diagnostic note without overstating certainty."
-      }
-    ]
+    queries
   });
+
+  writeGoldenQueries(defaultGoldenQueries);
 
   const curatedIndexValidate = JSON.parse(run("python3", [path.join(projectRoot, "agent", "bin", "validate_watchdog_index.py"), "--project-root", projectRoot, "--json"], {
     cwd: projectRoot
@@ -1695,6 +1703,127 @@ async function main() {
     route_canonical_update: {},
     task_box_update: {}
   }), /safe_to_answer retrieval decision/);
+  assert.throws(() => runRender(projectRoot, {
+    timestamp_utc: "2026-06-08T12:00:45Z",
+    report_markdown: "# Report\n\nPrepared a durable conclusion, but the exact retrieval query is not yet protected by golden query regression coverage.",
+    overall_status: "blocked",
+    report_type: "blocked",
+    primary_skill: "watchdog-orchestrator",
+    secondary_skills_consulted: ["research-comparability"],
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "The stage06 route conclusion has a safe retrieval receipt, but the exact query is still missing from golden regression coverage.",
+    blocked_items: ["missing_conclusion_golden_query"],
+    completed_items: [],
+    running_items: [],
+    evidence: [
+      "formal/stage06_route_status.md",
+      "eval/stage06_queue_contract_metrics.json",
+      "configs/stage06_queue_contract.json"
+    ],
+    progress_changed: false,
+    no_progress_cycles: 1,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "repair_index",
+      description: "Register the exact durable-conclusion query in golden_queries.json before publishing the conclusion.",
+      can_execute_automatically: true,
+      reason: "Durable conclusions now require regression protection for the exact retrieval query."
+    },
+    skill_stop_condition: "Do not publish a durable conclusion until the exact query is registered as safe_to_answer.",
+    state_update_markdown: "",
+    runtime_state_markdown: "",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    document_index_updates: [
+      {
+        doc_id: "doc_stage06_route_status",
+        path: "formal/stage06_route_status.md",
+        title: "Stage06 Route Status",
+        doc_type: "formal_report",
+        status: "active",
+        evidence_scope: "mixed",
+        evidence_scope_note: "Summarizes the exact successor contract together with the supporting evaluation package.",
+        project_area: "route_contracts",
+        summary: "Durable report for the stage06 exact successor contract and its queue-ready package.",
+        tags: ["stage06", "route", "queue_contract"],
+        supersedes: [],
+        superseded_by: [],
+        created_at: "2026-06-08T12:00:45Z",
+        updated_at: "2026-06-08T12:00:45Z",
+        checksum: null,
+        checksum_scope: "raw_file_bytes",
+        indexed_at: null
+      }
+    ],
+    experiment_index_updates: [
+      {
+        experiment_id: "exp_stage06_queue_contract",
+        experiment_type: "queue_contract",
+        status: "active",
+        evidence_scope: "primary_only",
+        name: "Stage06 queue-ready contract package",
+        purpose: "Record the exact task/profile/queue package that can be submitted next.",
+        model: "stage06_g1_candidate",
+        baseline_model: "stage06_g0_baseline",
+        train_data: "n/a",
+        test_data: "n/a",
+        eval_protocol: "route_contract_materialization_check",
+        with_definition: "exact successor task plus profile and queue draft present",
+        without_definition: "missing any required successor contract artifact",
+        primary_metrics: [
+          {
+            name: "contract_fields_complete",
+            value: 1,
+            higher_is_better: true,
+            notes: "All exact successor contract files were materialized."
+          }
+        ],
+        primary_metric_name: "contract_fields_complete",
+        best_epoch: null,
+        primary_eval_path: "eval/stage06_queue_contract_metrics.json",
+        config_path: "configs/stage06_queue_contract.json",
+        code_commit: "abc1234",
+        run_id: "stage06_g1_followup",
+        official_conclusion_doc: "doc_stage06_route_status"
+      }
+    ],
+    current_conclusion_evidence_search: {
+      query: "stage06 route status",
+      decision: "safe_to_answer",
+      warnings: [],
+      read_plan_paths: ["formal/stage06_route_status.md"]
+    },
+    current_conclusion_update: {
+      topic_id: "stage06_g1_route_status",
+      topic: "stage06 g1 route status",
+      conclusion_status: "confirmed",
+      claim: "The stage06 route now has a fully materialized successor contract package; controlled queue execution is the remaining external step.",
+      evidence_scope: "mixed",
+      supporting_docs: ["doc_stage06_route_status"],
+      supporting_experiments: ["exp_stage06_queue_contract"],
+      last_reviewed_at: "2026-06-08T12:00:45Z",
+      stale_after_days: 14,
+      stale_severity: "warning",
+      owner: "watchdog",
+      invalidated_by: null,
+      risk_flags: ["needs_queue_execution"]
+    },
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {
+      current_conclusion_topic_id: "stage06_g1_route_status",
+      current_conclusion_query: "stage06 route status"
+    },
+    task_box_update: {}
+  }), /golden_queries\.json.*safe_to_answer.*stage06 route status/);
+  writeGoldenQueries([...defaultGoldenQueries, stage06GoldenQuery]);
   runRender(projectRoot, {
     timestamp_utc: "2026-06-08T12:00:00Z",
     report_markdown: "# Report\n\nAccepted successor route and prepared the next exact contract.",
@@ -1892,6 +2021,8 @@ async function main() {
   assert.strictEqual(queueRunState.current_conclusion_contract_topic_id, "stage06_g1_route_status");
   assert.strictEqual(queueRunState.current_conclusion_contract_query, "stage06 route status");
   assert.strictEqual(queueRunState.current_conclusion_gate_required, false);
+  assert.strictEqual(queueRunState.current_conclusion_golden_query_status, "matched_safe_to_answer");
+  assert.strictEqual(queueRunState.current_conclusion_golden_query_expected_decision, "safe_to_answer");
   assert.strictEqual(queueRunState.current_conclusion_evidence_query, "stage06 route status");
   assert.strictEqual(queueRunState.current_conclusion_evidence_decision, "safe_to_answer");
   assert.ok(queueRunState.current_conclusion_evidence_read_plan_paths.includes("formal/stage06_route_status.md"));
@@ -1910,6 +2041,8 @@ async function main() {
   assert.match(nextActionText, /Experiment index updates: 1/);
   assert.match(nextActionText, /Current conclusion contract topic: stage06_g1_route_status/);
   assert.match(nextActionText, /Current conclusion contract query: stage06 route status/);
+  assert.match(nextActionText, /Current conclusion golden query: matched_safe_to_answer/);
+  assert.match(nextActionText, /Current conclusion golden expected decision: safe_to_answer/);
   assert.match(nextActionText, /Current conclusion evidence search: verified/);
   assert.match(nextActionText, /Current conclusion evidence decision: safe_to_answer/);
   assert.match(nextActionText, /Current conclusion update: applied/);
@@ -1925,6 +2058,8 @@ async function main() {
   assert.match(currentStateText, /Experiment index updates: 1/);
   assert.match(currentStateText, /Current conclusion contract topic: stage06_g1_route_status/);
   assert.match(currentStateText, /Current conclusion contract query: stage06 route status/);
+  assert.match(currentStateText, /Current conclusion golden query: matched_safe_to_answer/);
+  assert.match(currentStateText, /Current conclusion golden expected decision: safe_to_answer/);
   assert.match(currentStateText, /Current conclusion evidence search: verified/);
   assert.match(currentStateText, /Current conclusion evidence decision: safe_to_answer/);
   assert.match(currentStateText, /Current conclusion update: applied/);
@@ -1953,6 +2088,7 @@ async function main() {
   assert.ok(latestLedgerEntry.input_paths.includes("research/RESEARCH_PROGRAM.json"));
   assert.ok(latestLedgerEntry.input_paths.includes("agent/bin/watchdog_doc_search.py"));
   assert.ok(latestLedgerEntry.input_paths.includes("project_index/current_conclusions.json"));
+  assert.ok(latestLedgerEntry.input_paths.includes("project_index/golden_queries.json"));
   assert.ok(latestLedgerEntry.input_paths.includes("project_index/document_index.jsonl"));
   assert.ok(latestLedgerEntry.input_paths.includes("project_index/experiment_index.jsonl"));
   assert.ok(latestLedgerEntry.input_paths.includes("formal/stage06_route_status.md"));
@@ -1977,6 +2113,8 @@ async function main() {
   assert.strictEqual(latestLedgerEntry.current_conclusion_contract_topic_id, "stage06_g1_route_status");
   assert.strictEqual(latestLedgerEntry.current_conclusion_contract_query, "stage06 route status");
   assert.strictEqual(latestLedgerEntry.current_conclusion_gate_required, false);
+  assert.strictEqual(latestLedgerEntry.current_conclusion_golden_query_status, "matched_safe_to_answer");
+  assert.strictEqual(latestLedgerEntry.current_conclusion_golden_query_expected_decision, "safe_to_answer");
   assert.strictEqual(latestLedgerEntry.current_conclusion_evidence_status, "verified");
   assert.strictEqual(latestLedgerEntry.current_conclusion_evidence_query, "stage06 route status");
   assert.strictEqual(latestLedgerEntry.current_conclusion_evidence_decision, "safe_to_answer");
@@ -2132,6 +2270,8 @@ async function main() {
   const reviewRunState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "RUN_STATE.json"), "utf8"));
   assert.strictEqual(reviewRunState.current_conclusion_contract_topic_id, "review_required_route_conclusion");
   assert.strictEqual(reviewRunState.current_conclusion_contract_query, "stage06 route status");
+  assert.strictEqual(reviewRunState.current_conclusion_golden_query_status, "matched_safe_to_answer");
+  assert.strictEqual(reviewRunState.current_conclusion_golden_query_expected_decision, "safe_to_answer");
   assert.strictEqual(reviewRunState.current_conclusion_evidence_status, "verified");
   assert.strictEqual(reviewRunState.current_conclusion_evidence_decision, "safe_to_answer");
   assert.strictEqual(reviewRunState.current_conclusion_update_status, "review_required");
@@ -2140,6 +2280,8 @@ async function main() {
   const reviewLedgerEntry = JSON.parse(reviewLedgerLines[reviewLedgerLines.length - 1]);
   assert.strictEqual(reviewLedgerEntry.current_conclusion_contract_topic_id, "review_required_route_conclusion");
   assert.strictEqual(reviewLedgerEntry.current_conclusion_contract_query, "stage06 route status");
+  assert.strictEqual(reviewLedgerEntry.current_conclusion_golden_query_status, "matched_safe_to_answer");
+  assert.strictEqual(reviewLedgerEntry.current_conclusion_golden_query_expected_decision, "safe_to_answer");
   assert.strictEqual(reviewLedgerEntry.current_conclusion_evidence_status, "verified");
   assert.strictEqual(reviewLedgerEntry.current_conclusion_evidence_decision, "safe_to_answer");
   assert.strictEqual(reviewLedgerEntry.current_conclusion_update_status, "review_required");
