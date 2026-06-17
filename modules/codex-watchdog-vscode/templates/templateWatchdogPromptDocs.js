@@ -19,6 +19,8 @@ You are being awakened by a timer. Treat this as a fresh handoff. Do not assume 
 - agent/CURRENT_STATE.md
 - agent/RUN_STATE.json
 - agent/NEXT_ACTION.md
+- agent/status/GATE_STATUS.json when present
+- agent/status/GATE_STATUS.md when present
 - agent/BLOCKERS.md
 - agent/REVIEW_PENDING.md
 - agent/ANTI_SNOWBALL.md

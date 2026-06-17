@@ -22,6 +22,8 @@ agent/
   CURRENT_STATE.md         current canonical facts for the next actor
   RUN_STATE.json           machine-readable wakeup status
   NEXT_ACTION.md           one next safe action, not a history dump
+  status/GATE_STATUS.json  operator-facing gate summary for blocked reasons and unblock steps
+  status/GATE_STATUS.md    human-readable gate summary
   BLOCKERS.md              classified blockers and owner
   REVIEW_PENDING.md        reviewer bundle/send state
   ANTI_SNOWBALL.md         stopped routes and context compaction notes
@@ -59,6 +61,8 @@ agent/
    - \`agent/CURRENT_STATE.md\`
    - \`agent/RUN_STATE.json\`
    - \`agent/NEXT_ACTION.md\`
+   - \`agent/status/GATE_STATUS.json\`
+   - \`agent/status/GATE_STATUS.md\`
    - \`agent/BLOCKERS.md\`
    - \`agent/REVIEW_PENDING.md\`
 

@@ -579,6 +579,7 @@ current_conclusion_topic_id = str(current_conclusion_update.get("topic_id") or "
 contract_current_conclusion_topic_id = route_or_task_box_value("current_conclusion_topic_id")
 contract_current_conclusion_query = route_or_task_box_value("current_conclusion_query")
 contract_current_conclusion_gate_required = route_or_task_box_conclusion_gate_required()
+secondary_skill_failures = clean_object_list(route.get("secondary_skill_failures"))
 existing_document_records = load_jsonl_records("project_index/document_index.jsonl")
 existing_experiment_records = load_jsonl_records("project_index/experiment_index.jsonl")
 docs_by_id = records_by_id(existing_document_records, "doc_id")
@@ -1028,6 +1029,186 @@ write_lines("agent/REVIEW_PENDING.md", [
     "- If external reviewer sending is blocked by policy, write the exact bundle path and policy reason here instead of repeating it in every report.",
 ])
 
+current_conclusion_gate_status = "not_required"
+if not contract_current_conclusion_gate_required:
+    if current_conclusion_update_status == "review_required":
+        current_conclusion_gate_status = "review_required"
+    elif current_conclusion_update_status == "applied":
+        current_conclusion_gate_status = "satisfied"
+    elif current_conclusion_update and current_conclusion_evidence_status == "verified":
+        current_conclusion_gate_status = "verified_ready"
+elif contract_current_conclusion_gate_required:
+    if not contract_current_conclusion_topic_id or not contract_current_conclusion_query:
+        current_conclusion_gate_status = "contract_incomplete"
+    elif current_conclusion_golden_query_status != "matched_safe_to_answer":
+        current_conclusion_gate_status = "golden_query_unmet"
+    elif current_conclusion_update and current_conclusion_evidence_status != "verified":
+        current_conclusion_gate_status = "awaiting_verified_evidence"
+    elif current_conclusion_update_status == "review_required":
+        current_conclusion_gate_status = "review_required"
+    elif current_conclusion_update_status == "applied":
+        current_conclusion_gate_status = "satisfied"
+    elif current_conclusion_update:
+        current_conclusion_gate_status = "verified_ready"
+    else:
+        current_conclusion_gate_status = "contract_ready"
+
+gate_missing_requirements = []
+gate_blocking_reasons = []
+gate_unblock_recommendations = []
+for item in blocked_items:
+    gate_blocking_reasons.append(f"Blocked item: {item}")
+if secondary_skill_failures:
+    gate_missing_requirements.append("required_secondary_skill_resolution")
+    gate_blocking_reasons.append("Required secondary skill resolution is blocking the selected route.")
+    gate_unblock_recommendations.append("Repair agent/SECONDARY_SKILLS.json or restore the missing required skill files.")
+if experiment_gate_status == "blocked":
+    gate_missing_requirements.append("experiment_decision_gate_resolution")
+    gate_blocking_reasons.append("Experiment decision gate is explicitly blocked.")
+    gate_unblock_recommendations.append(
+        str(next_action.get("description") or "").strip()
+        or "Resolve the experiment decision gate fields before continuing."
+    )
+if requires_review:
+    gate_missing_requirements.append("human_review_resolution")
+    gate_blocking_reasons.append("Human review is required before this route can proceed.")
+    gate_unblock_recommendations.append(
+        str(next_action.get("description") or "").strip()
+        or "Send or resolve the pending review bundle before continuing."
+    )
+if contract_current_conclusion_gate_required:
+    if not contract_current_conclusion_topic_id:
+        gate_missing_requirements.append("current_conclusion_topic_id")
+        gate_blocking_reasons.append("Current conclusion gate requires current_conclusion_topic_id.")
+        gate_unblock_recommendations.append("Add current_conclusion_topic_id to TASK_BOX/ROUTE_CANONICAL for this decision-bearing route.")
+    if not contract_current_conclusion_query:
+        gate_missing_requirements.append("current_conclusion_query")
+        gate_blocking_reasons.append("Current conclusion gate requires current_conclusion_query.")
+        gate_unblock_recommendations.append("Add current_conclusion_query to TASK_BOX/ROUTE_CANONICAL for this decision-bearing route.")
+    if contract_current_conclusion_query and current_conclusion_golden_query_status != "matched_safe_to_answer":
+        gate_missing_requirements.append("golden_query_safe_to_answer_registration")
+        gate_blocking_reasons.append("Current conclusion query is not yet backed by a safe_to_answer golden query registration.")
+        gate_unblock_recommendations.append("Register the exact current_conclusion_query in project_index/golden_queries.json with expected_decision=safe_to_answer.")
+    if current_conclusion_update and current_conclusion_evidence_status != "verified":
+        gate_missing_requirements.append("verified_current_conclusion_evidence_search")
+        gate_blocking_reasons.append("Current conclusion update does not yet have a verified local evidence search receipt.")
+        gate_unblock_recommendations.append("Run watchdog_doc_search.py for the exact current_conclusion_query and carry the verified receipt into current_conclusion_evidence_search.")
+    if current_conclusion_update_status == "review_required":
+        gate_blocking_reasons.append("Current conclusion update is packaged for review instead of immediate publication.")
+
+gate_missing_requirements = ordered_unique_strings(gate_missing_requirements)
+gate_blocking_reasons = ordered_unique_strings(gate_blocking_reasons)
+gate_unblock_recommendations = ordered_unique_strings(gate_unblock_recommendations)
+if not gate_unblock_recommendations:
+    gate_unblock_recommendations = ["None. Current gate conditions do not require an extra unblock step."]
+
+gate_hard_blocked = bool(
+    blocked_items
+    or secondary_skill_failures
+    or experiment_gate_status == "blocked"
+    or requires_review
+    or current_conclusion_gate_status in {"contract_incomplete", "golden_query_unmet"}
+)
+
+atomic_write_json("agent/status/GATE_STATUS.json", {
+    "schema_version": 1,
+    "updated_utc": updated,
+    "status": data.get("overall_status", "uncertain"),
+    "report_type": data.get("report_type", "heartbeat"),
+    "hard_blocked": gate_hard_blocked,
+    "blocker_type": blocker,
+    "primary_skill": data.get("primary_skill"),
+    "route_id": route_canonical.get("route_id") or task_box.get("route_id"),
+    "route_epoch": route_canonical.get("route_epoch") or task_box.get("route_epoch"),
+    "task_box_id": task_box.get("task_box_id"),
+    "task_id": route.get("task_id"),
+    "blocked_items": blocked_items,
+    "blocking_reasons": gate_blocking_reasons,
+    "missing_requirements": gate_missing_requirements,
+    "required_secondary_skills": {
+        "blocking": bool(secondary_skill_failures),
+        "failures": secondary_skill_failures,
+    },
+    "experiment_decision_gate": {
+        "status": experiment_gate_status,
+        "required": experiment_gate_status in {"required_ready", "blocked"},
+        "blocking": experiment_gate_status == "blocked",
+    },
+    "current_conclusion_gate": {
+        "required": contract_current_conclusion_gate_required,
+        "status": current_conclusion_gate_status,
+        "contract_topic_id": contract_current_conclusion_topic_id or None,
+        "contract_query": contract_current_conclusion_query or None,
+        "golden_query_status": current_conclusion_golden_query_status,
+        "golden_query_expected_decision": current_conclusion_golden_query_expected_decision or None,
+        "evidence_status": current_conclusion_evidence_status,
+        "evidence_query": current_conclusion_evidence_query or None,
+        "evidence_decision": current_conclusion_evidence_decision or None,
+        "evidence_warnings": current_conclusion_evidence_warnings,
+        "evidence_read_plan_paths": current_conclusion_evidence_read_plan_paths,
+        "update_status": current_conclusion_update_status,
+        "topic_id": current_conclusion_topic_id or None,
+    },
+    "review": {
+        "required": requires_review,
+        "state": review_state,
+        "scope": review_scope,
+        "resolver": review_resolver,
+        "reason": human_reason or None,
+    },
+    "next_safe_action": next_action,
+    "unblock_recommendations": gate_unblock_recommendations,
+})
+
+write_lines("agent/status/GATE_STATUS.md", [
+    "# Gate Status",
+    "",
+    f"Updated: {updated}",
+    f"Status: {data.get('overall_status', 'uncertain')}",
+    f"Report type: {data.get('report_type', 'heartbeat')}",
+    f"Primary skill: {data.get('primary_skill', '') or 'none'}",
+    f"Hard blocked: {str(gate_hard_blocked).lower()}",
+    f"Blocker type: {blocker}",
+    f"Route ID: {route_canonical.get('route_id') or task_box.get('route_id') or 'unknown'}",
+    f"Route epoch: {route_canonical.get('route_epoch') or task_box.get('route_epoch') or 'unknown'}",
+    "",
+    "## Gate Summary",
+    "",
+    f"- Experiment gate status: {experiment_gate_status or 'not_required'}",
+    f"- Current conclusion gate required: {str(contract_current_conclusion_gate_required).lower()}",
+    f"- Current conclusion gate status: {current_conclusion_gate_status}",
+    f"- Current conclusion contract topic: {contract_current_conclusion_topic_id or 'none'}",
+    f"- Current conclusion contract query: {contract_current_conclusion_query or 'none'}",
+    f"- Current conclusion golden query: {current_conclusion_golden_query_status}",
+    f"- Current conclusion golden expected decision: {current_conclusion_golden_query_expected_decision or 'none'}",
+    f"- Current conclusion evidence search: {current_conclusion_evidence_status}",
+    f"- Current conclusion evidence decision: {current_conclusion_evidence_decision or 'none'}",
+    f"- Current conclusion update: {current_conclusion_update_status}",
+    f"- Required secondary skill failures: {len(secondary_skill_failures)}",
+    f"- Human review required: {str(requires_review).lower()}",
+    "",
+    "## Blocking Reasons",
+    "",
+    *(f"- {item}" for item in gate_blocking_reasons),
+    *(["- None."] if not gate_blocking_reasons else []),
+    "",
+    "## Missing Requirements",
+    "",
+    *(f"- {item}" for item in gate_missing_requirements),
+    *(["- None."] if not gate_missing_requirements else []),
+    "",
+    "## Unblock Recommendations",
+    "",
+    *(f"- {item}" for item in gate_unblock_recommendations),
+    "",
+    "## Next Safe Action",
+    "",
+    f"- Kind: {next_action.get('kind', 'none')}",
+    f"- Description: {next_action.get('description', '') or 'None.'}",
+    f"- Automatic: {next_action.get('can_execute_automatically', False)}",
+    f"- Reason: {next_action.get('reason', '') or 'No reason provided.'}",
+])
+
 ledger_update = data.get("ledger_update_markdown", "").strip()
 if ledger_update:
     Path("research").mkdir(parents=True, exist_ok=True)
@@ -1077,6 +1258,8 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
         "agent/RUN_STATE.json",
         "agent/PROGRESS_STATE.json",
         "agent/NEXT_ACTION.md",
+        "agent/status/GATE_STATUS.json",
+        "agent/status/GATE_STATUS.md",
         "agent/ROUTE_CANONICAL.json",
         *( [current_conclusion_evidence_output_path] if current_conclusion_evidence_output_path else [] ),
         *( [document_index_output_path] if document_index_output_path else [] ),

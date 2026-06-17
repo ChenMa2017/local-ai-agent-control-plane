@@ -27,6 +27,7 @@ Each wakeup should leave these files coherent:
 - \`agent/CURRENT_STATE.md\`: current facts only.
 - \`agent/RUN_STATE.json\`: machine-readable role/status/blocker/next-action summary.
 - \`agent/NEXT_ACTION.md\`: exactly one next safe action.
+- \`agent/status/GATE_STATUS.json\` and \`agent/status/GATE_STATUS.md\`: operator-facing gate summary for current block reasons, conclusion/evidence status, and unblock recommendations.
 - \`agent/BLOCKERS.md\`: blockers grouped as env, queue, permission, reviewer, model, data, stale_state, or none.
 - \`agent/REVIEW_PENDING.md\`: reviewer bundle state, sanitization state, send state, and response state.
 - \`agent/ANTI_SNOWBALL.md\`: stopped routes, stale facts to avoid repeating, and compaction notes.
