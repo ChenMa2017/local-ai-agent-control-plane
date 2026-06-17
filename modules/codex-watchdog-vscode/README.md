@@ -162,6 +162,14 @@ supervisor_modes
 task_capabilities
 ```
 
+Each entry may also declare:
+
+```text
+required
+```
+
+When `required: true`, a matched secondary skill becomes part of the route contract rather than a best-effort hint. If the path is missing, unreadable, or disabled, `route_skill.py` now fails closed and asks the operator to repair `agent/SECONDARY_SKILLS.json` or the missing skill file before continuing.
+
 This lets a single runner/supervisor wakeup do things like:
 
 - keep `watchdog-orchestrator` as the primary runner skill;
@@ -171,6 +179,7 @@ This lets a single runner/supervisor wakeup do things like:
 The runtime now validates that chain end to end:
 
 - `route_skill.py` writes the selected `secondary_skills`;
+- `route_skill.py` blocks the route if a matched `required: true` secondary skill cannot be resolved;
 - the wakeup prompt tells Codex to read them after the primary skill;
 - the decision output must report `secondary_skills_consulted`;
 - `render_report.py` rejects a mismatch between routed and reported secondary skills.

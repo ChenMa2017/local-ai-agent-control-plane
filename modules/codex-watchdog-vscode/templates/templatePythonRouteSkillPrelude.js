@@ -65,16 +65,30 @@ def load_secondary_skills_config(root=ROOT):
             continue
         skill_id = str(raw.get("skill_id") or "").strip()
         rel_path = str(raw.get("path") or "").strip()
-        if not skill_id or not rel_path or Path(rel_path).is_absolute():
-            continue
-        target_path = root / rel_path
-        if not target_path.exists() or not target_path.is_file():
-            continue
         selectors = raw.get("selectors") if isinstance(raw.get("selectors"), dict) else {}
+        resolution_error = ""
+        resolved = True
+        if not skill_id:
+            resolved = False
+            resolution_error = "missing skill_id"
+        elif not rel_path:
+            resolved = False
+            resolution_error = "missing path"
+        elif Path(rel_path).is_absolute():
+            resolved = False
+            resolution_error = "path must stay project-relative"
+        else:
+            target_path = root / rel_path
+            if not target_path.exists() or not target_path.is_file():
+                resolved = False
+                resolution_error = f"path does not exist: {rel_path}"
         normalized.append({
             "skill_id": skill_id,
             "path": rel_path,
             "enabled": raw.get("enabled") is not False,
+            "required": raw.get("required") is True,
+            "resolved": resolved,
+            "resolution_error": resolution_error,
             "selectors": {
                 "primary_skills": normalize_string_list(selectors.get("primary_skills")),
                 "roles": normalize_string_list(selectors.get("roles")),

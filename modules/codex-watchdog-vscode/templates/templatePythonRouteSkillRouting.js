@@ -952,7 +952,28 @@ supervisor_mode = os.environ.get("WATCHDOG_SUPERVISOR_MODE", "standby")
 
 result = route()
 route_capability = route_capability_from_result(result, role, supervisor_mode, state, task_box, next_task_draft, route_canonical, run_state, progress)
-result["secondary_skills"] = selected_secondary_skills(result, role, supervisor_mode, route_capability)
+secondary_skill_resolution = selected_secondary_skills(result, role, supervisor_mode, route_capability)
+secondary_skill_failures = secondary_skill_resolution.get("failures", []) if isinstance(secondary_skill_resolution, dict) else []
+if secondary_skill_failures:
+    failure_details = "; ".join(
+        f"{item.get('skill_id') or 'unknown'} ({item.get('path') or 'no-path'}): {item.get('reason') or 'unresolved'}"
+        for item in secondary_skill_failures
+        if isinstance(item, dict)
+    )
+    result = {
+        "primary_skill": "watchdog-orchestrator",
+        "reason": "Required routed secondary skills could not be resolved for the selected route: "
+            + failure_details
+            + ". Repair agent/SECONDARY_SKILLS.json or the missing skill files before continuing.",
+        "stop_condition": "Repair one required secondary-skill configuration or path issue, refresh routing state, and stop.",
+        "permission_guardian_required": False,
+        "permission_guardian_result": "not_required",
+        "route_locked": True,
+        "task_id": result.get("task_id"),
+        "secondary_skill_failures": secondary_skill_failures,
+    }
+    secondary_skill_resolution = {"selected": [], "failures": secondary_skill_failures}
+result["secondary_skills"] = secondary_skill_resolution.get("selected", []) if isinstance(secondary_skill_resolution, dict) else []
 result["route_capability"] = route_capability or None
 payload = {
     "route_version": 1,

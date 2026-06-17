@@ -493,6 +493,7 @@ const watchdogSchemaTemplates = {
           properties: {
             skill_id: { type: "string" },
             enabled: { type: "boolean" },
+            required: { type: "boolean" },
             path: { type: "string" },
             notes: { type: "string" },
             selectors: {

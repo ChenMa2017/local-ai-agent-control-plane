@@ -425,9 +425,10 @@ def selector_matches(selectors, key, actual, normalizer=None):
 def selected_secondary_skills(result, role, supervisor_mode, capability):
     config = load_secondary_skills_config(ROOT)
     selected = []
+    failures = []
     seen = set()
     for skill in config.get("skills", []):
-        if not isinstance(skill, dict) or skill.get("enabled") is not True:
+        if not isinstance(skill, dict):
             continue
         selectors = skill.get("selectors") if isinstance(skill.get("selectors"), dict) else {}
         if not selector_matches(selectors, "primary_skills", result.get("primary_skill")):
@@ -442,11 +443,31 @@ def selected_secondary_skills(result, role, supervisor_mode, capability):
         if not skill_id or skill_id in seen:
             continue
         seen.add(skill_id)
+        if skill.get("required") is True and skill.get("enabled") is not True:
+            failures.append({
+                "skill_id": skill_id,
+                "path": str(skill.get("path") or "").strip(),
+                "reason": "required secondary skill is disabled",
+            })
+            continue
+        if skill.get("enabled") is not True:
+            continue
+        if skill.get("resolved") is not True:
+            if skill.get("required") is True:
+                failures.append({
+                    "skill_id": skill_id,
+                    "path": str(skill.get("path") or "").strip(),
+                    "reason": str(skill.get("resolution_error") or "required secondary skill could not be resolved"),
+                })
+            continue
         selected.append({
             "skill_id": skill_id,
             "path": str(skill.get("path") or "").strip(),
         })
-    return selected
+    return {
+        "selected": selected,
+        "failures": failures,
+    }
 
 `;
 

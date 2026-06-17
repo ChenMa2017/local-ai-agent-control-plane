@@ -843,6 +843,7 @@ async function main() {
     skills: [
       {
         skill_id: "project-local-discipline",
+        required: false,
         path: "agent/skills/project-local-discipline/SKILL.md",
         selectors: {
           primary_skills: ["watchdog-orchestrator"],
@@ -878,6 +879,7 @@ async function main() {
     skills: [
       {
         skill_id: "broken-secondary-skill",
+        required: true,
         path: "agent/skills/missing-secondary-skill/SKILL.md",
         selectors: {
           primary_skills: ["watchdog-orchestrator"],
@@ -901,6 +903,15 @@ async function main() {
     String(secondaryValidationError.stderr || "") + String(secondaryValidationError.stdout || "") + String(secondaryValidationError.message || ""),
     /SECONDARY_SKILLS\.json/
   );
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "task_box_cpu_probe");
+  assert.match(route.reason, /required routed secondary skills could not be resolved/i);
+  assert.match(route.reason, /broken-secondary-skill/i);
+  assert.ok(Array.isArray(route.secondary_skill_failures));
+  assert.strictEqual(route.secondary_skill_failures[0].skill_id, "broken-secondary-skill");
+  assert.match(route.secondary_skill_failures[0].reason, /path does not exist/i);
   fs.unlinkSync(path.join(projectRoot, "agent", "SECONDARY_SKILLS.json"));
 
   writeJson(projectRoot, "agent/PROGRESS_STATE.json", {

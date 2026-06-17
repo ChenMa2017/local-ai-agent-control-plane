@@ -20,6 +20,7 @@ const supportStateJsonTemplates = {
       {
         skill_id: "project-research-support",
         enabled: true,
+        required: false,
         path: "agent/skills/project-secondary-example/SKILL.example.md",
         selectors: {
           primary_skills: ["watchdog-orchestrator", "watchdog-gate-evaluator"],

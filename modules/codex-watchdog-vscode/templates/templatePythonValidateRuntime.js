@@ -319,6 +319,10 @@ def validate_secondary_skills_config():
                 errors.append(f"{label}.path does not exist: {rel_path}")
         if "enabled" in item and not isinstance(item.get("enabled"), bool):
             errors.append(f"{label}.enabled must be boolean when present")
+        if "required" in item and not isinstance(item.get("required"), bool):
+            errors.append(f"{label}.required must be boolean when present")
+        if item.get("required") is True and item.get("enabled") is False:
+            errors.append(f"{label} required secondary skill cannot be disabled")
         selectors = item.get("selectors")
         if not isinstance(selectors, dict):
             errors.append(f"{label}.selectors must be an object")
@@ -365,6 +369,19 @@ def validate_skill_route():
                     errors.append(f"{label}.path does not exist: {rel_path}")
     if "route_capability" in route and route.get("route_capability") is not None and not isinstance(route.get("route_capability"), str):
         errors.append("agent/status/SKILL_ROUTE.json route_capability must be string or null")
+    failures = route.get("secondary_skill_failures")
+    if failures is not None:
+        if not isinstance(failures, list):
+            errors.append("agent/status/SKILL_ROUTE.json secondary_skill_failures must be an array")
+        else:
+            for idx, item in enumerate(failures):
+                label = f"agent/status/SKILL_ROUTE.json secondary_skill_failures[{idx}]"
+                if not isinstance(item, dict):
+                    errors.append(f"{label} must be an object")
+                    continue
+                for key in ("skill_id", "path", "reason"):
+                    if key in item and item.get(key) is not None and not isinstance(item.get(key), str):
+                        errors.append(f"{label}.{key} must be string or null")
 
 validate_state()
 validate_progress()
