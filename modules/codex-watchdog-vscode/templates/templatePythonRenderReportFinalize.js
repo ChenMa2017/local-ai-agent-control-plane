@@ -167,6 +167,24 @@ def write_jsonl_records(path, records):
     lines = [json.dumps(record, sort_keys=True) for record in records]
     atomic_write_text(path, ("\\n".join(lines) + "\\n") if lines else "")
 
+def route_or_task_box_value(key):
+    for source in (task_box, route_canonical):
+        if not isinstance(source, dict):
+            continue
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+def route_or_task_box_conclusion_gate_required():
+    for source in (task_box, route_canonical):
+        if not isinstance(source, dict):
+            continue
+        policy = source.get("gate_policy")
+        if isinstance(policy, dict) and policy.get("conclusion_retrieval_gate") is True:
+            return True
+    return False
+
 def run_watchdog_doc_search(query):
     script_path = Path("agent/bin/watchdog_doc_search.py")
     if not script_path.exists():
@@ -499,6 +517,9 @@ current_conclusion_update_status = "none"
 current_conclusion_output_path = ""
 current_conclusion_proposal_path = ""
 current_conclusion_topic_id = str(current_conclusion_update.get("topic_id") or "").strip() if current_conclusion_update else ""
+contract_current_conclusion_topic_id = route_or_task_box_value("current_conclusion_topic_id")
+contract_current_conclusion_query = route_or_task_box_value("current_conclusion_query")
+contract_current_conclusion_gate_required = route_or_task_box_conclusion_gate_required()
 existing_document_records = load_jsonl_records("project_index/document_index.jsonl")
 existing_experiment_records = load_jsonl_records("project_index/experiment_index.jsonl")
 docs_by_id = records_by_id(existing_document_records, "doc_id")
@@ -556,6 +577,16 @@ if staged_experiment_updates:
     experiment_index_update_ids = [record["experiment_id"] for record in staged_experiment_updates]
     experiment_index_update_count = len(experiment_index_update_ids)
 if current_conclusion_update:
+    if contract_current_conclusion_gate_required:
+        if not contract_current_conclusion_topic_id:
+            raise SystemExit("current_conclusion_update requires TASK_BOX/ROUTE_CANONICAL current_conclusion_topic_id because conclusion_retrieval_gate=true")
+        if not contract_current_conclusion_query:
+            raise SystemExit("current_conclusion_update requires TASK_BOX/ROUTE_CANONICAL current_conclusion_query because conclusion_retrieval_gate=true")
+    if contract_current_conclusion_topic_id and current_conclusion_topic_id != contract_current_conclusion_topic_id:
+        raise SystemExit(
+            "current_conclusion_update.topic_id does not match TASK_BOX/ROUTE_CANONICAL current_conclusion_topic_id: "
+            + f"{current_conclusion_topic_id!r} != {contract_current_conclusion_topic_id!r}"
+        )
     if not current_conclusion_evidence_search:
         raise SystemExit("current_conclusion_update requires current_conclusion_evidence_search from watchdog_doc_search.py")
     search_payload_errors = validate_current_conclusion_evidence_search(current_conclusion_evidence_search)
@@ -577,6 +608,11 @@ if current_conclusion_update:
         raise SystemExit(
             "current_conclusion_evidence_search.decision does not match verified watchdog_doc_search.py output: "
             + f"reported {reported_decision!r}, verified {current_conclusion_evidence_decision!r}"
+        )
+    if contract_current_conclusion_query and current_conclusion_evidence_query != contract_current_conclusion_query:
+        raise SystemExit(
+            "current_conclusion_evidence_search.query does not match TASK_BOX/ROUTE_CANONICAL current_conclusion_query: "
+            + f"{current_conclusion_evidence_query!r} != {contract_current_conclusion_query!r}"
         )
     reported_warnings = ordered_unique_strings(current_conclusion_evidence_search.get("warnings") or [])
     unexpected_reported_warnings = [
@@ -708,6 +744,8 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Research baseline required: {research_program_info.get('baseline_required')}",
     f"Document index updates: {document_index_update_count}",
     f"Experiment index updates: {experiment_index_update_count}",
+    f"Current conclusion contract topic: {contract_current_conclusion_topic_id or 'none'}",
+    f"Current conclusion contract query: {contract_current_conclusion_query or 'none'}",
     f"Current conclusion evidence search: {current_conclusion_evidence_status}",
     f"Current conclusion evidence decision: {current_conclusion_evidence_decision or 'none'}",
     f"Current conclusion update: {current_conclusion_update_status}",
@@ -789,6 +827,9 @@ atomic_write_json("agent/RUN_STATE.json", {
     "experiment_index_update_count": experiment_index_update_count,
     "experiment_index_update_ids": experiment_index_update_ids,
     "experiment_index_output_path": experiment_index_output_path or None,
+    "current_conclusion_contract_topic_id": contract_current_conclusion_topic_id or None,
+    "current_conclusion_contract_query": contract_current_conclusion_query or None,
+    "current_conclusion_gate_required": contract_current_conclusion_gate_required,
     "current_conclusion_evidence_status": current_conclusion_evidence_status,
     "current_conclusion_evidence_query": current_conclusion_evidence_query or None,
     "current_conclusion_evidence_decision": current_conclusion_evidence_decision or None,
@@ -846,6 +887,8 @@ write_lines("agent/NEXT_ACTION.md", [
     f"- Research domain: {research_program_info.get('domain_name') or 'none'}",
     f"- Document index updates: {document_index_update_count}",
     f"- Experiment index updates: {experiment_index_update_count}",
+    f"- Current conclusion contract topic: {contract_current_conclusion_topic_id or 'none'}",
+    f"- Current conclusion contract query: {contract_current_conclusion_query or 'none'}",
     f"- Current conclusion evidence search: {current_conclusion_evidence_status}",
     f"- Current conclusion evidence decision: {current_conclusion_evidence_decision or 'none'}",
     f"- Current conclusion update: {current_conclusion_update_status}",
@@ -992,6 +1035,9 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "document_index_update_ids": document_index_update_ids,
     "experiment_index_update_count": experiment_index_update_count,
     "experiment_index_update_ids": experiment_index_update_ids,
+    "current_conclusion_contract_topic_id": contract_current_conclusion_topic_id or None,
+    "current_conclusion_contract_query": contract_current_conclusion_query or None,
+    "current_conclusion_gate_required": contract_current_conclusion_gate_required,
     "current_conclusion_evidence_status": current_conclusion_evidence_status,
     "current_conclusion_evidence_query": current_conclusion_evidence_query or None,
     "current_conclusion_evidence_decision": current_conclusion_evidence_decision or None,

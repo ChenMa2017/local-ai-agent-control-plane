@@ -252,6 +252,7 @@ async function main() {
   assert.strictEqual(initialTaskBox.gate_policy.claim_scope_gate, true);
   assert.strictEqual(initialTaskBox.gate_policy.fair_comparability_gate, true);
   assert.strictEqual(initialTaskBox.gate_policy.value_of_information_gate, true);
+  assert.strictEqual(initialTaskBox.gate_policy.conclusion_retrieval_gate, true);
   assert.strictEqual(initialTaskBox.gate_policy.successor_contract_gate, true);
   const initialRouteCanonical = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "ROUTE_CANONICAL.json"), "utf8"));
   assert.strictEqual(initialRouteCanonical.successor_contract_required, false);
@@ -1034,6 +1035,194 @@ async function main() {
   assert.strictEqual(route.task_id, "bounded_cpu_missing_research_contract");
   assert.match(route.reason, /autonomous mode allows one bounded bounded_cpu_eval step/i);
 
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "conclusion-gate-box",
+    route_id: "route-conclusion-gate",
+    route_epoch: "route-conclusion-gate-001",
+    project_question: "Does this bounded step justify a durable current route conclusion?",
+    decision_relevance: "A safe durable conclusion would change whether the route remains active.",
+    project_area: "model_selection",
+    claim_scope: "current_route_conclusion",
+    forbidden_conclusions: ["Do not publish a route conclusion without a verified local evidence query."],
+    diagnosis_target: "route readiness",
+    fair_comparability: {
+      same_family_or_not: "not_applicable",
+      same_budget_or_not: "not_applicable",
+      same_training_contract_or_not: "not_applicable",
+      same_eval_contract_or_not: "not_applicable"
+    },
+    value_of_information: {
+      expected_information_gain: "medium",
+      decision_change_if_positive: "Publish the bounded route conclusion and continue.",
+      decision_change_if_negative: "Keep the route tentative and ask for more evidence.",
+      cheaper_alternative_exists: false
+    },
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      conclusion_retrieval_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: [
+      {
+        task_id: "bounded_cpu_conclusion_gate_missing_query",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Run one bounded CPU probe that may support a route conclusion."
+      }
+    ]
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-conclusion-gate",
+    route_epoch: "route-conclusion-gate-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-conclusion-gate-001"
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "bounded_cpu_conclusion_gate_missing_query");
+  assert.match(route.reason, /current_conclusion_query/i);
+  assert.match(route.reason, /current_conclusion_topic_id/i);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "conclusion-gate-box",
+    route_id: "route-conclusion-gate",
+    route_epoch: "route-conclusion-gate-001",
+    project_question: "Does this bounded step justify a durable current route conclusion?",
+    decision_relevance: "A safe durable conclusion would change whether the route remains active.",
+    project_area: "model_selection",
+    claim_scope: "current_route_conclusion",
+    current_conclusion_topic_id: "route_conclusion_ready",
+    current_conclusion_query: "current route conclusion",
+    forbidden_conclusions: ["Do not publish a route conclusion without a verified local evidence query."],
+    diagnosis_target: "route readiness",
+    fair_comparability: {
+      same_family_or_not: "not_applicable",
+      same_budget_or_not: "not_applicable",
+      same_training_contract_or_not: "not_applicable",
+      same_eval_contract_or_not: "not_applicable"
+    },
+    value_of_information: {
+      expected_information_gain: "medium",
+      decision_change_if_positive: "Publish the bounded route conclusion and continue.",
+      decision_change_if_negative: "Keep the route tentative and ask for more evidence.",
+      cheaper_alternative_exists: false
+    },
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      conclusion_retrieval_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: [
+      {
+        task_id: "bounded_cpu_conclusion_gate_missing_query",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Run one bounded CPU probe that may support a route conclusion."
+      }
+    ]
+  });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "bounded_cpu_conclusion_gate_missing_query");
+  assert.match(route.reason, /autonomous mode allows one bounded bounded_cpu_eval step/i);
+
+  writeJson(projectRoot, "agent/TASK_BOX.json", {
+    schema_version: 1,
+    task_box_id: "research-gate-box",
+    route_id: "route-research-gate",
+    route_epoch: "route-research-gate-001",
+    project_question: "Does the current CPU probe reduce uncertainty about the next route decision?",
+    decision_relevance: "A positive result decides whether the route can proceed to the next bounded follow-up.",
+    claim_scope: "bounded_cpu_diagnostic",
+    forbidden_conclusions: ["Do not treat this CPU probe as a project-level superiority claim."],
+    diagnosis_target: "carrier behavior",
+    fair_comparability: {
+      same_family_or_not: "same_family",
+      same_budget_or_not: "same_budget",
+      same_training_contract_or_not: "same_training_contract",
+      same_eval_contract_or_not: "same_eval_contract"
+    },
+    value_of_information: {
+      expected_information_gain: "medium",
+      decision_change_if_positive: "Proceed to the next bounded follow-up.",
+      decision_change_if_negative: "Pause this branch and re-evaluate the route.",
+      cheaper_alternative_exists: false
+    },
+    gate_policy: {
+      topic_alignment_check: true,
+      claim_scope_gate: true,
+      fair_comparability_gate: true,
+      value_of_information_gate: true,
+      successor_contract_gate: true,
+      enforcement: "repair_locally"
+    },
+    requires_review: false,
+    allowed_actions: ["bounded_cpu_eval"],
+    blocked_actions: [],
+    allowed_write_paths: ["agent/status/", "agent/reports/", "agent/task_profiles/"],
+    queue_policy: {
+      gpu: "queue_only",
+      max_new_jobs_per_wakeup: 1,
+      allow_conditional_enqueue: false
+    },
+    tasks: [
+      {
+        task_id: "bounded_cpu_missing_research_contract",
+        status: "pending",
+        allowed_runner: "cpu",
+        title: "Run one bounded CPU probe for the new route."
+      }
+    ]
+  });
+  writeJson(projectRoot, "agent/ROUTE_CANONICAL.json", {
+    schema_version: 1,
+    route_id: "route-research-gate",
+    route_epoch: "route-research-gate-001",
+    owner_mode: "fully_autonomous",
+    requires_review: false
+  });
+  writeJson(projectRoot, "agent/PROGRESS_STATE.json", {
+    no_progress_cycles: 0,
+    recommend_pause: false,
+    route_epoch: "route-research-gate-001"
+  });
+
   writeJson(projectRoot, "research/RESEARCH_PROGRAM.json", {
     ...initialResearchProgram,
     domain: {
@@ -1637,8 +1826,11 @@ async function main() {
       route_epoch: "route-002",
       owner_mode: "fully_autonomous",
       requires_review: false,
-      active_carrier: "g1"
-    }
+      active_carrier: "g1",
+      current_conclusion_topic_id: "stage06_g1_route_status",
+      current_conclusion_query: "stage06 route status"
+    },
+    task_box_update: {}
   });
   const nextTaskDraft = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "NEXT_TASK_DRAFT.json"), "utf8"));
   assert.strictEqual(nextTaskDraft.task_id, "stage06_g1_followup");
@@ -1656,6 +1848,8 @@ async function main() {
   assert.strictEqual(routeCanonical.required_successor_exactness, "queue_exact");
   assert.strictEqual(routeCanonical.successor_materialization_status, "queue_exact");
   assert.strictEqual(routeCanonical.experiment_gate_status, "not_required");
+  assert.strictEqual(routeCanonical.current_conclusion_topic_id, "stage06_g1_route_status");
+  assert.strictEqual(routeCanonical.current_conclusion_query, "stage06 route status");
   const mirroredState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "STATE.json"), "utf8"));
   assert.strictEqual(mirroredState.route_id, "route-new");
   assert.strictEqual(mirroredState.route_epoch, "route-002");
@@ -1674,6 +1868,8 @@ async function main() {
   assert.strictEqual(taskBox.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
   assert.strictEqual(taskBox.required_successor_exactness, "queue_exact");
   assert.strictEqual(taskBox.successor_materialization_status, "queue_exact");
+  assert.strictEqual(taskBox.current_conclusion_topic_id, "stage06_g1_route_status");
+  assert.strictEqual(taskBox.current_conclusion_query, "stage06 route status");
   assert.ok(taskBox.tasks.some((task) => task.task_id === "stage06_g1_followup"));
   const queueProgressState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "PROGRESS_STATE.json"), "utf8"));
   assert.strictEqual(queueProgressState.exact_queue_draft_path, "agent/queue/drafts/stage06_g1_followup.json");
@@ -1693,6 +1889,9 @@ async function main() {
   assert.deepStrictEqual(queueRunState.experiment_index_update_ids, ["exp_stage06_queue_contract"]);
   assert.strictEqual(queueRunState.experiment_index_output_path, "project_index/experiment_index.jsonl");
   assert.strictEqual(queueRunState.current_conclusion_evidence_status, "verified");
+  assert.strictEqual(queueRunState.current_conclusion_contract_topic_id, "stage06_g1_route_status");
+  assert.strictEqual(queueRunState.current_conclusion_contract_query, "stage06 route status");
+  assert.strictEqual(queueRunState.current_conclusion_gate_required, false);
   assert.strictEqual(queueRunState.current_conclusion_evidence_query, "stage06 route status");
   assert.strictEqual(queueRunState.current_conclusion_evidence_decision, "safe_to_answer");
   assert.ok(queueRunState.current_conclusion_evidence_read_plan_paths.includes("formal/stage06_route_status.md"));
@@ -1709,6 +1908,8 @@ async function main() {
   assert.match(nextActionText, /Research program: replace_with_project_program_id/);
   assert.match(nextActionText, /Document index updates: 1/);
   assert.match(nextActionText, /Experiment index updates: 1/);
+  assert.match(nextActionText, /Current conclusion contract topic: stage06_g1_route_status/);
+  assert.match(nextActionText, /Current conclusion contract query: stage06 route status/);
   assert.match(nextActionText, /Current conclusion evidence search: verified/);
   assert.match(nextActionText, /Current conclusion evidence decision: safe_to_answer/);
   assert.match(nextActionText, /Current conclusion update: applied/);
@@ -1722,6 +1923,8 @@ async function main() {
   assert.match(currentStateText, /Research autonomy mode: domain_bounded/);
   assert.match(currentStateText, /Document index updates: 1/);
   assert.match(currentStateText, /Experiment index updates: 1/);
+  assert.match(currentStateText, /Current conclusion contract topic: stage06_g1_route_status/);
+  assert.match(currentStateText, /Current conclusion contract query: stage06 route status/);
   assert.match(currentStateText, /Current conclusion evidence search: verified/);
   assert.match(currentStateText, /Current conclusion evidence decision: safe_to_answer/);
   assert.match(currentStateText, /Current conclusion update: applied/);
@@ -1771,6 +1974,9 @@ async function main() {
   assert.deepStrictEqual(latestLedgerEntry.document_index_update_ids, ["doc_stage06_route_status"]);
   assert.strictEqual(latestLedgerEntry.experiment_index_update_count, 1);
   assert.deepStrictEqual(latestLedgerEntry.experiment_index_update_ids, ["exp_stage06_queue_contract"]);
+  assert.strictEqual(latestLedgerEntry.current_conclusion_contract_topic_id, "stage06_g1_route_status");
+  assert.strictEqual(latestLedgerEntry.current_conclusion_contract_query, "stage06 route status");
+  assert.strictEqual(latestLedgerEntry.current_conclusion_gate_required, false);
   assert.strictEqual(latestLedgerEntry.current_conclusion_evidence_status, "verified");
   assert.strictEqual(latestLedgerEntry.current_conclusion_evidence_query, "stage06 route status");
   assert.strictEqual(latestLedgerEntry.current_conclusion_evidence_decision, "safe_to_answer");
@@ -1843,7 +2049,10 @@ async function main() {
     successor_task_draft: null,
     task_profile_draft: null,
     queue_request_draft: null,
-    route_canonical_update: {},
+    route_canonical_update: {
+      current_conclusion_topic_id: "review_required_route_conclusion",
+      current_conclusion_query: "stage06 route status"
+    },
     task_box_update: {}
   }), /publish_only_after_review=true/);
 
@@ -1906,7 +2115,10 @@ async function main() {
     successor_task_draft: null,
     task_profile_draft: null,
     queue_request_draft: null,
-    route_canonical_update: {},
+    route_canonical_update: {
+      current_conclusion_topic_id: "review_required_route_conclusion",
+      current_conclusion_query: "stage06 route status"
+    },
     task_box_update: {}
   });
   const reviewOnlyConclusions = JSON.parse(fs.readFileSync(path.join(projectRoot, "project_index", "current_conclusions.json"), "utf8"));
@@ -1918,12 +2130,16 @@ async function main() {
   assert.strictEqual(reviewProposal.current_conclusion_evidence_search.decision, "safe_to_answer");
   assert.strictEqual(reviewProposal.current_conclusion_evidence_search.query, "stage06 route status");
   const reviewRunState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "RUN_STATE.json"), "utf8"));
+  assert.strictEqual(reviewRunState.current_conclusion_contract_topic_id, "review_required_route_conclusion");
+  assert.strictEqual(reviewRunState.current_conclusion_contract_query, "stage06 route status");
   assert.strictEqual(reviewRunState.current_conclusion_evidence_status, "verified");
   assert.strictEqual(reviewRunState.current_conclusion_evidence_decision, "safe_to_answer");
   assert.strictEqual(reviewRunState.current_conclusion_update_status, "review_required");
   assert.strictEqual(reviewRunState.current_conclusion_topic_id, "review_required_route_conclusion");
   const reviewLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
   const reviewLedgerEntry = JSON.parse(reviewLedgerLines[reviewLedgerLines.length - 1]);
+  assert.strictEqual(reviewLedgerEntry.current_conclusion_contract_topic_id, "review_required_route_conclusion");
+  assert.strictEqual(reviewLedgerEntry.current_conclusion_contract_query, "stage06 route status");
   assert.strictEqual(reviewLedgerEntry.current_conclusion_evidence_status, "verified");
   assert.strictEqual(reviewLedgerEntry.current_conclusion_evidence_decision, "safe_to_answer");
   assert.strictEqual(reviewLedgerEntry.current_conclusion_update_status, "review_required");

@@ -113,10 +113,11 @@ Your job:
 33. If this wakeup identifies an exact successor route, exact successor task, or exact next queue/profile object, emit it structurally instead of leaving the next step broad.
 34. Use successor_task_draft for the next runnable task, task_profile_draft for exact local profile/package content, queue_request_draft for exact queue draft content, and route_canonical_update when the canonical route itself changed.
 35. Separate queue draft from queue enqueue. A local queue draft may be prepared autonomously; queue enqueue should only be emitted as automatically executable when the queue contract is exact and TASK_BOX queue_policy sets allow_conditional_enqueue=true.
-36. If the current TASK_BOX contract is missing topic alignment, claim scope, fair comparability, or value-of-information details, repair it structurally through task_box_update instead of only mentioning the gap in prose.
-37. For bounded research or queue tasks, prefer adding or refining project_question, decision_relevance, claim_scope, forbidden_conclusions, diagnosis_target, fair_comparability, and value_of_information before asking humans for help.
-38. If a decision-bearing result changes the route but no explicit successor task was written yet, set route_canonical_update.successor_contract_required=true and either emit successor_task_draft yourself or emit task_box_update that makes the next exact object unambiguous.
-39. Always report which routed secondary skills you actually consulted through secondary_skills_consulted. If none were routed, return an empty array.
+36. If the current TASK_BOX contract is missing topic alignment, claim scope, fair comparability, value-of-information details, or a decision-bearing current_conclusion_topic_id/current_conclusion_query pair, repair it structurally through task_box_update instead of only mentioning the gap in prose.
+37. For bounded research or queue tasks, prefer adding or refining project_question, decision_relevance, claim_scope, forbidden_conclusions, diagnosis_target, fair_comparability, value_of_information, current_conclusion_topic_id, and current_conclusion_query before asking humans for help.
+38. When a route or task is expected to support a durable current_conclusion_update, keep TASK_BOX/ROUTE_CANONICAL aligned with the same current_conclusion_topic_id and current_conclusion_query that you later use in current_conclusion_evidence_search.
+39. If a decision-bearing result changes the route but no explicit successor task was written yet, set route_canonical_update.successor_contract_required=true and either emit successor_task_draft yourself or emit task_box_update that makes the next exact object unambiguous.
+40. Always report which routed secondary skills you actually consulted through secondary_skills_consulted. If none were routed, return an empty array.
 
 Hard restrictions:
 

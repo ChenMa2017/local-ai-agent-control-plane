@@ -86,6 +86,8 @@ const canonicalStateJsonTemplates = {
     uncertainty_reduced_if_success: "A successful bounded cycle should make the next route decision narrower and more concrete.",
     uncertainty_reduced_if_failure: "A failed bounded cycle should still clarify whether the current route should continue, pause, or switch.",
     claim_scope: "bootstrap_setup",
+    current_conclusion_topic_id: null,
+    current_conclusion_query: null,
     forbidden_conclusions: [
       "Do not treat setup-only work as a project-level research conclusion.",
       "Do not promote local draft preparation into a shared-source or final quality claim."
@@ -108,6 +110,7 @@ const canonicalStateJsonTemplates = {
       claim_scope_gate: true,
       fair_comparability_gate: true,
       value_of_information_gate: true,
+      conclusion_retrieval_gate: true,
       successor_contract_gate: true,
       causal_path_verification: "advisory",
       enforcement: "repair_locally"
@@ -193,7 +196,9 @@ const canonicalStateJsonTemplates = {
     successor_materialization_status: "missing",
     experiment_gate_status: "not_required",
     experiment_decision_gate_required: false,
-    experiment_decision_gate_blocking: false
+    experiment_decision_gate_blocking: false,
+    current_conclusion_topic_id: null,
+    current_conclusion_query: null
   }, null, 2) + "\n",
 
   runStateJson: () => JSON.stringify({

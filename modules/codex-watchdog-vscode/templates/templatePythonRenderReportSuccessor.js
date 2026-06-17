@@ -522,6 +522,8 @@ def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, n
         "decision_relevance": (task_box or {}).get("decision_relevance") or state.get("decision_relevance"),
         "claim_scope": (task_box or {}).get("claim_scope") or state.get("claim_scope"),
         "diagnosis_target": (task_box or {}).get("diagnosis_target") or state.get("diagnosis_target"),
+        "current_conclusion_topic_id": (task_box or {}).get("current_conclusion_topic_id") or (route_canonical or {}).get("current_conclusion_topic_id") or state.get("current_conclusion_topic_id"),
+        "current_conclusion_query": (task_box or {}).get("current_conclusion_query") or (route_canonical or {}).get("current_conclusion_query") or state.get("current_conclusion_query"),
         "derived_from_route_canonical": True,
     })
     return state

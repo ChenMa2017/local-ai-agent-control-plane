@@ -125,7 +125,16 @@ def validate_task_box():
     queue_policy = task_box.get("queue_policy")
     if queue_policy is not None and not isinstance(queue_policy, dict):
         errors.append("agent/TASK_BOX.json queue_policy must be an object")
-    for key in ("project_question", "decision_relevance", "uncertainty_reduced_if_success", "uncertainty_reduced_if_failure", "claim_scope", "diagnosis_target"):
+    for key in (
+        "project_question",
+        "decision_relevance",
+        "uncertainty_reduced_if_success",
+        "uncertainty_reduced_if_failure",
+        "claim_scope",
+        "diagnosis_target",
+        "current_conclusion_topic_id",
+        "current_conclusion_query",
+    ):
         if key in task_box and task_box.get(key) is not None and not isinstance(task_box.get(key), str):
             errors.append(f"agent/TASK_BOX.json {key} must be string or null")
     forbidden = task_box.get("forbidden_conclusions")
@@ -160,7 +169,17 @@ def validate_route_canonical():
         errors.append("agent/ROUTE_CANONICAL.json owner_mode must be string or null")
     if "successor_contract_required" in route and not isinstance(route.get("successor_contract_required"), bool):
         errors.append("agent/ROUTE_CANONICAL.json successor_contract_required must be boolean")
-    for key in ("exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
+    for key in (
+        "exact_next_task_id",
+        "exact_profile_path",
+        "exact_queue_draft_path",
+        "exact_next_object_path",
+        "required_successor_exactness",
+        "successor_materialization_status",
+        "experiment_gate_status",
+        "current_conclusion_topic_id",
+        "current_conclusion_query",
+    ):
         if key in route and route.get(key) is not None and not isinstance(route.get(key), str):
             errors.append(f"agent/ROUTE_CANONICAL.json {key} must be string or null")
     for key in ("experiment_decision_gate_required", "experiment_decision_gate_blocking"):

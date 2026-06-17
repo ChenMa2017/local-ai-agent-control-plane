@@ -9,6 +9,7 @@ const routeSkillRouting = `def research_gate_policy(task_box):
         "claim_scope_gate": policy.get("claim_scope_gate") is True,
         "fair_comparability_gate": policy.get("fair_comparability_gate") is True,
         "value_of_information_gate": policy.get("value_of_information_gate") is True,
+        "conclusion_retrieval_gate": policy.get("conclusion_retrieval_gate") is True,
         "successor_contract_gate": policy.get("successor_contract_gate") is True,
         "causal_path_verification": str(policy.get("causal_path_verification") or "disabled"),
         "enforcement": str(policy.get("enforcement") or "disabled"),
@@ -55,6 +56,32 @@ def research_gate_applicable(capability):
         "local_workspace_copy",
         "bounded_training_canary",
     }
+
+def conclusion_retrieval_gate_applies(task, task_box):
+    text = " ".join([
+        task_contract_value(task, task_box, "claim_scope"),
+        task_contract_value(task, task_box, "decision_relevance"),
+        task_contract_value(task, task_box, "project_question"),
+        task_contract_value(task, task_box, "current_conclusion_topic_id"),
+        task_contract_value(task, task_box, "current_conclusion_query"),
+    ]).lower()
+    if task_contract_value(task, task_box, "current_conclusion_topic_id") or task_contract_value(task, task_box, "current_conclusion_query"):
+        return True
+    return any(
+        marker in text
+        for marker in (
+            "conclusion",
+            "current_best",
+            "current best",
+            "replacement",
+            "comparison",
+            "compare",
+            "formal_result",
+            "formal result",
+            "route_status",
+            "route status",
+        )
+    )
 
 def research_program_task_type(capability):
     return {
@@ -123,7 +150,8 @@ def task_research_program_assessment(task, task_box, route_canonical=None, resea
 def task_research_gate_gaps(task, task_box, route_canonical=None):
     capability = classify_task_capability(task)
     policy = research_gate_policy(task_box)
-    if policy.get("enforcement") == "disabled" or not research_gate_applicable(capability):
+    conclusion_gate_required = policy.get("conclusion_retrieval_gate") and conclusion_retrieval_gate_applies(task, task_box)
+    if policy.get("enforcement") == "disabled" or (not research_gate_applicable(capability) and not conclusion_gate_required):
         return []
 
     gaps = []
@@ -163,6 +191,12 @@ def task_research_gate_gaps(task, task_box, route_canonical=None):
                 gaps.append(key)
         if "cheaper_alternative_exists" not in voi or not isinstance(voi.get("cheaper_alternative_exists"), bool):
             gaps.append("cheaper_alternative_exists")
+
+    if conclusion_gate_required:
+        if not task_contract_value(task, task_box, "current_conclusion_topic_id"):
+            gaps.append("current_conclusion_topic_id")
+        if not task_contract_value(task, task_box, "current_conclusion_query"):
+            gaps.append("current_conclusion_query")
 
     return sorted(set(gaps))
 

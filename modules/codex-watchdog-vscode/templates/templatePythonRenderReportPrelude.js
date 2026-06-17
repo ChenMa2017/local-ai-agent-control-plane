@@ -181,7 +181,21 @@ def ensure_task_box(existing, route_canonical):
             box["route_epoch"] = route_canonical.get("route_epoch")
         if isinstance(route_canonical.get("requires_review"), bool):
             box["requires_review"] = route_canonical.get("requires_review")
-        for key in ("owner_mode", "current_allowed_step", "active_task_id", "route_task_id", "exact_next_task_id", "exact_profile_path", "exact_queue_draft_path", "exact_next_object_path", "required_successor_exactness", "successor_materialization_status", "experiment_gate_status"):
+        for key in (
+            "owner_mode",
+            "current_allowed_step",
+            "active_task_id",
+            "route_task_id",
+            "exact_next_task_id",
+            "exact_profile_path",
+            "exact_queue_draft_path",
+            "exact_next_object_path",
+            "required_successor_exactness",
+            "successor_materialization_status",
+            "experiment_gate_status",
+            "current_conclusion_topic_id",
+            "current_conclusion_query",
+        ):
             if key in route_canonical:
                 box[key] = route_canonical.get(key)
         for key in ("successor_contract_required", "experiment_decision_gate_required", "experiment_decision_gate_blocking"):

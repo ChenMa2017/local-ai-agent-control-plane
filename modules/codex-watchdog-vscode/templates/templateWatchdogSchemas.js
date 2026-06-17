@@ -418,6 +418,8 @@ const watchdogSchemaTemplates = {
       uncertainty_reduced_if_success: { type: "string" },
       uncertainty_reduced_if_failure: { type: "string" },
       claim_scope: { type: "string" },
+      current_conclusion_topic_id: { type: ["string", "null"] },
+      current_conclusion_query: { type: ["string", "null"] },
       forbidden_conclusions: { type: "array", items: { type: "string" } },
       diagnosis_target: { type: "string" },
       fair_comparability: { type: "object" },
@@ -471,7 +473,9 @@ const watchdogSchemaTemplates = {
       successor_materialization_status: { type: "string" },
       experiment_gate_status: { type: "string" },
       experiment_decision_gate_required: { type: "boolean" },
-      experiment_decision_gate_blocking: { type: "boolean" }
+      experiment_decision_gate_blocking: { type: "boolean" },
+      current_conclusion_topic_id: { type: ["string", "null"] },
+      current_conclusion_query: { type: ["string", "null"] }
     },
     additionalProperties: true
   }, null, 2) + "\n",
