@@ -12,7 +12,7 @@ echo "== codex-bridge =="
 
 echo
 echo "== agent-host =="
-(cd "$ROOT/modules/agent-host" && python3 -m py_compile bridge.py post_run_artifacts.py prepare_intent.py prepared_context.py evidence_retrieval.py execution_evaluation.py result_streaming.py web_ui.py http_routes.py startup_runtime.py config_loader.py request_contracts.py auth_policy.py watchdog_commands.py codex_tasking.py tests/test_bridge.py tests/test_prepare_intent.py tests/test_prepared_context.py tests/test_evidence_retrieval.py tests/test_execution_evaluation.py tests/test_result_streaming.py tests/test_web_ui.py tests/test_http_routes.py tests/test_startup_runtime.py tests/test_config_loader.py tests/test_request_contracts.py tests/test_auth_policy.py tests/test_watchdog_commands.py tests/test_codex_tasking.py && python3 -m unittest discover -s tests)
+(cd "$ROOT/modules/agent-host" && python3 -m py_compile bridge.py post_run_artifacts.py prepare_intent.py prepared_context.py evidence_retrieval.py execution_evaluation.py result_streaming.py web_ui.py http_routes.py startup_runtime.py config_loader.py request_contracts.py auth_policy.py watchdog_commands.py codex_tasking.py health_summary.py tests/test_bridge.py tests/test_prepare_intent.py tests/test_prepared_context.py tests/test_evidence_retrieval.py tests/test_execution_evaluation.py tests/test_result_streaming.py tests/test_web_ui.py tests/test_http_routes.py tests/test_startup_runtime.py tests/test_config_loader.py tests/test_request_contracts.py tests/test_auth_policy.py tests/test_watchdog_commands.py tests/test_codex_tasking.py tests/test_health_summary.py && python3 -m unittest discover -s tests)
 
 echo
 echo "== discord-adapter =="
