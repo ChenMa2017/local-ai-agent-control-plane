@@ -66,6 +66,25 @@ from result_streaming import (
     stream_task_events,
     task_snapshot as build_task_snapshot,
 )
+from codex_tasking import (
+    CodexTaskListDependencies,
+    CodexTaskQueryDependencies,
+    authorize_codex_task as authorize_codex_task_record,
+    codex_task_summary as build_codex_task_summary,
+    codex_tasks_root as resolve_codex_tasks_root,
+    handle_codex_query as query_codex_task,
+    handle_codex_tasks as list_codex_tasks,
+    load_codex_task as load_codex_task_record,
+    parse_iso_datetime as parse_codex_iso_datetime,
+    prompt_preview as build_prompt_preview,
+    read_visible_task_summaries,
+    task_adapter_metadata as parse_task_adapter_metadata,
+    task_duration_sec as compute_task_duration_sec,
+    task_intake_id as resolve_task_intake_id,
+    task_list_limit as parse_task_list_limit,
+    task_sort_value as codex_task_sort_value,
+    validate_task_id as validate_codex_task_id,
+)
 from web_ui import render_index_html
 from watchdog_commands import (
     brief_text as build_watchdog_brief_text,
@@ -450,49 +469,32 @@ def parse_queued_task_id(output: str) -> str:
 
 
 def validate_task_id(task_id: str) -> str:
-    if not CODEX_TASK_ID_RE.match(task_id or ""):
-        raise BridgeError("invalid task_id")
-    return task_id
+    return validate_codex_task_id(
+        task_id,
+        task_id_re=CODEX_TASK_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def codex_tasks_root(config: BridgeConfig) -> Path:
-    return config.codex_bridge_root / ".codex-bridge" / "tasks"
+    return resolve_codex_tasks_root(config)
 
 
 def load_codex_task(config: BridgeConfig, task_id: str) -> tuple[Path, dict[str, Any]]:
-    task_id = validate_task_id(task_id)
-    task_dir = codex_tasks_root(config) / task_id
-    task_file = task_dir / "task.json"
-    if not task_file.exists():
-        raise BridgeError(f"task not found: {task_id}", 404, "task_not_found")
-    try:
-        data = json.loads(task_file.read_text())
-    except json.JSONDecodeError as exc:
-        raise BridgeError(f"task metadata is invalid: {task_id}: {exc}", 500) from exc
-    if not isinstance(data, dict):
-        raise BridgeError(f"task metadata is invalid: {task_id}", 500)
-    return task_dir, data
+    return load_codex_task_record(
+        config,
+        task_id,
+        task_id_re=CODEX_TASK_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def task_adapter_metadata(task: dict[str, Any]) -> dict[str, Any]:
-    raw = task.get("adapter_metadata")
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str) and raw.strip():
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-        if isinstance(data, dict):
-            return data
-    return {}
+    return parse_task_adapter_metadata(task)
 
 
 def task_intake_id(task: dict[str, Any]) -> str:
-    value = str(task_adapter_metadata(task).get("intake_id") or "").strip()
-    if value and INTAKE_ID_RE.match(value):
-        return value
-    return ""
+    return resolve_task_intake_id(task, intake_id_re=INTAKE_ID_RE)
 
 
 def is_admin(principal: AuthPrincipal) -> bool:
@@ -512,86 +514,48 @@ def authorize_codex_task(
     principal: AuthPrincipal,
     task_id: str,
 ) -> tuple[Path, dict[str, Any]]:
-    task_dir, task = load_codex_task(config, task_id)
-    project = str(task.get("project", ""))
-    if project and project not in config.projects:
-        raise BridgeError(f"task project is not allowlisted: {project}", 403, "permission_denied")
-    if not can_access_task(task, principal):
-        raise BridgeError(f"unauthorized: task is not owned by {principal.user}", 403, "permission_denied")
-    return task_dir, task
+    return authorize_codex_task_record(
+        config,
+        principal,
+        task_id,
+        can_access_task=can_access_task,
+        task_id_re=CODEX_TASK_ID_RE,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def parse_iso_datetime(value: Any) -> dt.datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    text = value
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = dt.datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed.astimezone(dt.timezone.utc)
+    return parse_codex_iso_datetime(value)
 
 
 def task_duration_sec(task: dict[str, Any]) -> int | None:
-    start = parse_iso_datetime(task.get("started_at")) or parse_iso_datetime(task.get("created_at"))
-    end = parse_iso_datetime(task.get("ended_at")) or parse_iso_datetime(task.get("updated_at"))
-    if not start:
-        return None
-    if not end and str(task.get("status", "")) in {"queued", "running"}:
-        end = utc_now()
-    if not end:
-        return None
-    return max(0, int(round((end - start).total_seconds())))
+    return compute_task_duration_sec(task, utc_now=utc_now)
 
 
 def prompt_preview(prompt: Any) -> str:
-    text = re.sub(r"\s+", " ", str(prompt or "")).strip()
-    if len(text) <= PROMPT_PREVIEW_CHARS:
-        return text
-    return text[: PROMPT_PREVIEW_CHARS - 1].rstrip() + "…"
+    return build_prompt_preview(prompt, max_chars=PROMPT_PREVIEW_CHARS)
 
 
 def task_sort_value(task: dict[str, Any]) -> str:
-    value = task.get("updated_at") or task.get("created_at") or ""
-    return str(value)
+    return codex_task_sort_value(task)
 
 
 def codex_task_summary(task_dir: Path, task: dict[str, Any]) -> dict[str, Any]:
-    task_id = str(task.get("task_id") or task_dir.name)
-    return {
-        "task_id": task_id,
-        "owner": str(task.get("user", "")),
-        "project": str(task.get("project", "")),
-        "source": str(task.get("source", "unknown") or "unknown"),
-        "status": str(task.get("status", "")),
-        "created_at": str(task.get("created_at", "")),
-        "updated_at": str(task.get("updated_at", "")),
-        "duration_sec": task_duration_sec(task),
-        "exit_code": task.get("exit_code") if isinstance(task.get("exit_code"), int) else None,
-        "prompt_preview": prompt_preview(task.get("prompt", "")),
-        "has_result": (task_dir / "result.md").exists(),
-        "has_logs": any((task_dir / name).exists() for name in ("bridge.log", "stdout.jsonl", "stderr.log")),
-        "mode": str(task.get("mode", "")),
-        "write_audit": bool(task.get("write_audit_path")),
-        "changed_files_count": task.get("changed_files_count") if isinstance(task.get("changed_files_count"), int) else None,
-        "protected_path_violation": bool(task.get("protected_path_violation")),
-    }
+    return build_codex_task_summary(
+        task_dir,
+        task,
+        utc_now=utc_now,
+        prompt_preview_chars=PROMPT_PREVIEW_CHARS,
+    )
 
 
 def task_list_limit(value: str | None) -> int:
-    if not value:
-        return TASK_LIST_DEFAULT_LIMIT
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise BridgeError("limit must be a number") from exc
-    if parsed < 1:
-        raise BridgeError("limit must be at least 1")
-    return min(parsed, TASK_LIST_MAX_LIMIT)
+    return parse_task_list_limit(
+        value,
+        default_limit=TASK_LIST_DEFAULT_LIMIT,
+        max_limit=TASK_LIST_MAX_LIMIT,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def handle_codex_tasks(
@@ -599,46 +563,23 @@ def handle_codex_tasks(
     config: BridgeConfig,
     principal: AuthPrincipal,
 ) -> dict[str, Any]:
-    reject_frontend_identity(payload)
-    limit = task_list_limit(payload.get("limit"))
-    status_filter = payload.get("status", "").strip()
-    project_filter = payload.get("project", "").strip()
-
-    if status_filter and not re.match(r"^[A-Za-z0-9_.-]{1,32}$", status_filter):
-        raise BridgeError("status filter must be a safe status name")
-    if project_filter:
-        validate_codex_project(config, project_filter)
-
-    reconcile_codex_tasks(config)
-
-    root = codex_tasks_root(config)
-    if not root.exists():
-        return {"ok": True, "tasks": []}
-
-    items: list[tuple[str, dict[str, Any]]] = []
-    for task_file in root.glob("*/task.json"):
-        task_dir = task_file.parent
-        if not CODEX_TASK_ID_RE.match(task_dir.name):
-            continue
-        try:
-            task = json.loads(task_file.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(task, dict):
-            continue
-        task_project = str(task.get("project", ""))
-        if task_project and task_project not in config.projects:
-            continue
-        if not can_access_task(task, principal):
-            continue
-        if status_filter and str(task.get("status", "")) != status_filter:
-            continue
-        if project_filter and task_project != project_filter:
-            continue
-        items.append((task_sort_value(task), codex_task_summary(task_dir, task)))
-
-    items.sort(key=lambda item: item[0], reverse=True)
-    return {"ok": True, "tasks": [summary for _, summary in items[:limit]]}
+    return list_codex_tasks(
+        payload,
+        config,
+        principal,
+        deps=CodexTaskListDependencies(
+            reject_frontend_identity=reject_frontend_identity,
+            validate_project=validate_codex_project,
+            reconcile_tasks=reconcile_codex_tasks,
+            can_access_task=can_access_task,
+            utc_now=utc_now,
+            error_factory=lambda message, status, code: BridgeError(message, status, code),
+        ),
+        task_id_re=CODEX_TASK_ID_RE,
+        default_limit=TASK_LIST_DEFAULT_LIMIT,
+        max_limit=TASK_LIST_MAX_LIMIT,
+        prompt_preview_chars=PROMPT_PREVIEW_CHARS,
+    )
 
 
 def workspace_summary(project: Project) -> dict[str, Any]:
@@ -685,29 +626,15 @@ def handle_codex_capabilities(config: BridgeConfig, _principal: AuthPrincipal) -
 
 
 def read_recent_task_summaries(config: BridgeConfig, principal: AuthPrincipal, limit: int = 50) -> list[dict[str, Any]]:
-    root = codex_tasks_root(config)
-    if not root.exists():
-        return []
-
-    items: list[tuple[str, dict[str, Any]]] = []
-    for task_file in root.glob("*/task.json"):
-        task_dir = task_file.parent
-        if not CODEX_TASK_ID_RE.match(task_dir.name):
-            continue
-        try:
-            task = json.loads(task_file.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(task, dict):
-            continue
-        task_project = str(task.get("project", ""))
-        if task_project and task_project not in config.projects:
-            continue
-        if not can_access_task(task, principal):
-            continue
-        items.append((task_sort_value(task), codex_task_summary(task_dir, task)))
-    items.sort(key=lambda item: item[0], reverse=True)
-    return [summary for _sort, summary in items[: max(1, limit)]]
+    return read_visible_task_summaries(
+        config,
+        principal,
+        can_access_task=can_access_task,
+        task_id_re=CODEX_TASK_ID_RE,
+        utc_now=utc_now,
+        prompt_preview_chars=PROMPT_PREVIEW_CHARS,
+        limit=max(1, limit),
+    )
 
 
 def safe_control_text(config: BridgeConfig, text: str) -> str:
@@ -1752,62 +1679,32 @@ def handle_codex_query(
     command: str,
     principal: AuthPrincipal,
 ) -> dict[str, Any]:
-    reject_frontend_identity(payload)
-    task_id = validate_task_id(payload.get("task_id", ""))
-    task_dir, task = authorize_codex_task(config, principal, task_id)
-    raw_requested = bool_from_payload(payload.get("raw", ""))
-    if raw_requested and not is_admin(principal):
-        raise BridgeError("raw output requires admin role", 403)
-    if command == "cancel" and str(task.get("status", "")) in CODEX_FINAL_STATUSES:
-        raise BridgeError(
-            f"task already finished with status={task.get('status')}",
-            409,
-            "task_already_finished",
-        )
-    args = [command, task_id]
-    if command in {"result", "logs"}:
-        args.append("--json-output")
-        if raw_requested:
-            args.append("--raw")
-    if command == "logs":
-        args.extend(["--tail", payload.get("tail", "80")])
-        if payload.get("max_chars"):
-            args.extend(["--max-chars", payload["max_chars"]])
-    elif command == "result" and payload.get("max_chars"):
-        args.extend(["--max-chars", payload["max_chars"]])
-    output = require_success(run_codex_bridge(config, args))
-    if command in {"result", "logs"}:
-        try:
-            rendered = json.loads(output)
-        except json.JSONDecodeError as exc:
-            raise BridgeError(f"codex-bridge returned invalid JSON: {exc}", 500) from exc
-        intake_id = task_intake_id(task)
-        if command == "result" and not raw_requested:
-            rendered.update(
-                maybe_attach_execution_evaluation(
-                    config,
-                    task_dir,
-                    task,
-                    rendered,
-                    execution_evaluation_dependencies(),
-                )
-            )
-        if intake_id:
-            rendered["intake_id"] = intake_id
-        rendered.update({
-            "ok": True,
-            "task_id": task_id,
-            "command": command,
-            "user": principal.user,
-        })
-        return rendered
-    return {
-        "ok": True,
-        "task_id": task_id,
-        "command": command,
-        "user": principal.user,
-        "text": safe_codex_status_text(config, task, output) if command == "status" else output,
-    }
+    return query_codex_task(
+        payload,
+        config,
+        command,
+        principal,
+        deps=CodexTaskQueryDependencies(
+            reject_frontend_identity=reject_frontend_identity,
+            authorize_task=authorize_codex_task,
+            bool_from_payload=bool_from_payload,
+            is_admin=is_admin,
+            run_codex_bridge=run_codex_bridge,
+            require_success=require_success,
+            task_intake_id=task_intake_id,
+            attach_execution_evaluation=lambda current_config, task_dir, task, rendered: maybe_attach_execution_evaluation(
+                current_config,
+                task_dir,
+                task,
+                rendered,
+                execution_evaluation_dependencies(),
+            ),
+            safe_status_text=safe_codex_status_text,
+            error_factory=lambda message, status, code: BridgeError(message, status, code),
+        ),
+        task_id_re=CODEX_TASK_ID_RE,
+        final_statuses=CODEX_FINAL_STATUSES,
+    )
 
 
 def parse_positive_int(value: str | None, default: int, max_value: int, field: str) -> int:
