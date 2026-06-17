@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 from config_loader import (
     load_auth_tokens as parse_auth_tokens_from_config,
@@ -35,6 +35,18 @@ from execution_evaluation import (
     maybe_attach_execution_evaluation,
 )
 from http_routes import HttpRouteDependencies, dispatch_get, dispatch_post
+from request_contracts import (
+    api_error_payload as build_api_error_payload,
+    compact_adapter_metadata as compact_adapter_metadata_text,
+    compact_adapter_metadata_object as compact_adapter_metadata_mapping,
+    error_code_for as resolve_api_error_code,
+    mattermost_response as build_mattermost_response,
+    parse_adapter_metadata as parse_adapter_metadata_text,
+    parse_body as parse_request_body,
+    parse_run_receipt as parse_bridge_run_receipt,
+    safe_adapter_source as validate_adapter_source,
+    safe_idempotency_key as validate_idempotency_key,
+)
 from result_streaming import (
     StreamLoopDependencies,
     cleanup_stream_tokens as cleanup_stream_token_records,
@@ -174,64 +186,27 @@ def load_auth_tokens(data: dict[str, Any]) -> dict[str, AuthPrincipal]:
 
 
 def parse_body(content_type: str, raw: bytes) -> dict[str, str]:
-    if "application/json" in content_type:
-        data = json.loads(raw.decode("utf-8") or "{}")
-        if not isinstance(data, dict):
-            raise BridgeError("JSON body must be an object")
-        parsed: dict[str, str] = {}
-        for key, value in data.items():
-            if value is None:
-                continue
-            if isinstance(value, (dict, list)):
-                parsed[str(key)] = json.dumps(value, ensure_ascii=False)
-            else:
-                parsed[str(key)] = str(value)
-        return parsed
-
-    parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
-    return {key: values[-1] if values else "" for key, values in parsed.items()}
+    return parse_request_body(
+        content_type,
+        raw,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def mattermost_response(text: str, response_type: str = "ephemeral") -> dict[str, str]:
-    if len(text) > MAX_RESPONSE_CHARS:
-        text = text[: MAX_RESPONSE_CHARS - 80].rstrip() + "\n\n...(truncated)"
-    return {"response_type": response_type, "text": text}
+    return build_mattermost_response(
+        text,
+        max_response_chars=MAX_RESPONSE_CHARS,
+        response_type=response_type,
+    )
 
 
 def error_code_for(exc: BridgeError) -> str:
-    if exc.code:
-        return exc.code
-    if exc.status == 401:
-        return "unauthorized"
-    if exc.status == 403:
-        return "permission_denied"
-    if exc.status == 404:
-        return "task_not_found" if "task" in str(exc).lower() else "workspace_not_found"
-    if exc.status == 409:
-        return "task_already_finished"
-    if exc.status == 400:
-        return "invalid_request"
-    return "internal_error"
+    return resolve_api_error_code(exc)
 
 
 def api_error_payload(exc: BridgeError | Exception) -> dict[str, Any]:
-    if isinstance(exc, BridgeError):
-        code = error_code_for(exc)
-        message = str(exc)
-        details = exc.details
-    else:
-        code = "internal_error"
-        message = f"bridge error: {exc}"
-        details = {}
-    return {
-        "ok": False,
-        "error": {
-            "code": code,
-            "message": message,
-            "details": details,
-        },
-        "text": message,
-    }
+    return build_api_error_payload(exc)
 
 
 def validate_auth(payload: dict[str, str], config: BridgeConfig) -> None:
@@ -1704,51 +1679,42 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
 
 
 def safe_adapter_source(value: str) -> str:
-    source = (value or "web").strip() or "web"
-    if not re.match(r"^[A-Za-z0-9_.-]{1,32}$", source):
-        raise BridgeError("source must be 1-32 safe characters", 400, "invalid_request")
-    return source
+    return validate_adapter_source(
+        value,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def safe_idempotency_key(value: str) -> str:
-    key = (value or "").strip()
-    if not key:
-        return ""
-    if not re.match(r"^[A-Za-z0-9_.:@/-]{1,160}$", key):
-        raise BridgeError("idempotency_key contains unsafe characters", 400, "invalid_request")
-    return key
+    return validate_idempotency_key(
+        value,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def parse_adapter_metadata(value: str) -> dict[str, Any]:
-    if not value:
-        return {}
-    try:
-        data = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise BridgeError(f"metadata must be a JSON object: {exc}", 400, "invalid_request") from exc
-    if not isinstance(data, dict):
-        raise BridgeError("metadata must be a JSON object", 400, "invalid_request")
-    return data
+    return parse_adapter_metadata_text(
+        value,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def compact_adapter_metadata(value: str) -> str:
-    data = parse_adapter_metadata(value)
-    return compact_adapter_metadata_object(data)
+    return compact_adapter_metadata_text(
+        value,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def compact_adapter_metadata_object(data: dict[str, Any]) -> str:
-    if not data:
-        return ""
-    text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    if len(text) > 2000:
-        raise BridgeError("metadata is too large", 400, "invalid_request")
-    return text
+    return compact_adapter_metadata_mapping(
+        data,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def parse_run_receipt(output: str) -> dict[str, Any]:
-    return {
-        "idempotent_replay": bool(re.search(r"^idempotent=true$", output, re.MULTILINE)),
-    }
+    return parse_bridge_run_receipt(output)
 
 
 def handle_codex_run(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
