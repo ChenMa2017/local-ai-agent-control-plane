@@ -67,6 +67,17 @@ from result_streaming import (
     task_snapshot as build_task_snapshot,
 )
 from web_ui import render_index_html
+from watchdog_commands import (
+    brief_text as build_watchdog_brief_text,
+    get_project as resolve_watchdog_project,
+    help_text as build_watchdog_help_text,
+    inbox_text as build_watchdog_inbox_text,
+    latest_report_path as resolve_watchdog_latest_report_path,
+    parse_project_token as parse_watchdog_project_token,
+    safe_snippet as read_watchdog_snippet,
+    status_text as build_watchdog_status_text,
+    write_task as persist_watchdog_task,
+)
 from prepared_context import (
     count_jsonl_records,
     filter_source_task_artifact,
@@ -243,78 +254,35 @@ def reject_frontend_identity(payload: dict[str, str]) -> None:
 
 
 def get_project(config: BridgeConfig, name: str | None) -> Project:
-    if not name:
-        if len(config.projects) == 1:
-            return next(iter(config.projects.values()))
-        raise BridgeError("project is required")
-    if name not in config.projects:
-        available = ", ".join(sorted(config.projects))
-        raise BridgeError(f"unknown project {name!r}; available: {available}")
-    project = config.projects[name]
-    if not project.root.exists() or not project.root.is_dir():
-        raise BridgeError(f"project root does not exist: {project.root}", 500)
-    return project
+    return resolve_watchdog_project(
+        name,
+        projects=config.projects,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def parse_project_token(parts: list[str], start: int = 1) -> tuple[str | None, list[str]]:
-    if len(parts) <= start:
-        return None, []
-    token = parts[start]
-    if token.startswith("project="):
-        return token.split("=", 1)[1], parts[start + 1 :]
-    return token, parts[start + 1 :]
+    return parse_watchdog_project_token(parts, start=start)
 
 
 def safe_snippet(path: Path, max_chars: int = 1800) -> str:
-    if not path.exists():
-        return f"(missing: {path})"
-    text = path.read_text(errors="replace")
-    if len(text) > max_chars:
-        return text[:max_chars].rstrip() + "\n...(truncated)"
-    return text
+    return read_watchdog_snippet(path, max_chars=max_chars)
 
 
 def latest_report_path(project: Project) -> Path:
-    return project.root / "agent" / "reports" / "latest.md"
+    return resolve_watchdog_latest_report_path(project)
 
 
 def status_text(project: Project) -> str:
-    root = project.root
-    latest = latest_report_path(project)
-    runtime = root / "agent" / "RUNTIME_STATE.md"
-    morning = root / "agent" / "MORNING_BRIEF.md"
-    inbox = root / "agent" / "inbox"
-
-    lines = [
-        f"Project `{project.name}`",
-        f"Root: `{root}`",
-        f"Latest report: `{latest.resolve() if latest.exists() else 'missing'}`",
-        f"Runtime state: {'present' if runtime.exists() else 'missing'}",
-        f"Morning brief: {'present' if morning.exists() else 'missing'}",
-        f"Inbox items: {len(list(inbox.glob('*.json'))) if inbox.exists() else 0}",
-    ]
-    return "\n".join(lines)
+    return build_watchdog_status_text(project)
 
 
 def brief_text(project: Project) -> str:
-    morning = project.root / "agent" / "MORNING_BRIEF.md"
-    latest = latest_report_path(project)
-    if morning.exists():
-        return f"Morning brief for `{project.name}`:\n\n{safe_snippet(morning)}"
-    return f"Latest report for `{project.name}`:\n\n{safe_snippet(latest)}"
+    return build_watchdog_brief_text(project)
 
 
 def inbox_text(project: Project) -> str:
-    inbox = project.root / "agent" / "inbox"
-    if not inbox.exists():
-        return f"Inbox for `{project.name}` is empty."
-    items = sorted(inbox.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not items:
-        return f"Inbox for `{project.name}` is empty."
-    lines = [f"Latest inbox items for `{project.name}`:"]
-    for item in items[:10]:
-        lines.append(f"- `{item.name}` ({item.stat().st_size} bytes)")
-    return "\n".join(lines)
+    return build_watchdog_inbox_text(project)
 
 
 def write_task(
@@ -324,65 +292,20 @@ def write_task(
     mode: str,
     now: dt.datetime | None = None,
 ) -> tuple[str, Path]:
-    request = request.strip()
-    if not request:
-        raise BridgeError("task request is empty")
-    if len(request) > MAX_TASK_CHARS:
-        raise BridgeError(f"task request is too long; max {MAX_TASK_CHARS} chars")
-
-    now = now or utc_now()
-    task_id = f"{now.strftime('%Y%m%dT%H%M%SZ')}_{secrets.token_hex(4)}"
-    inbox = project.root / "agent" / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
-    out = inbox / f"{task_id}_mattermost_task.json"
-    tmp = inbox / f".{task_id}.tmp"
-
-    task = {
-        "id": task_id,
-        "source": "mattermost",
-        "project": project.name,
-        "request": request,
-        "mode": mode,
-        "created_at": now.isoformat().replace("+00:00", "Z"),
-        "status": "new",
-        "mattermost": {
-            "team_id": payload.get("team_id", ""),
-            "team_domain": payload.get("team_domain", ""),
-            "channel_id": payload.get("channel_id", ""),
-            "channel_name": payload.get("channel_name", ""),
-            "user_id": payload.get("user_id", ""),
-            "user_name": payload.get("user_name", ""),
-            "command": payload.get("command", ""),
-            "text": payload.get("text", ""),
-        },
-        "safety": {
-            "bridge_executed_shell": False,
-            "bridge_started_watchdog": False,
-            "bridge_modified_project_files": [str(out.relative_to(project.root))],
-            "requires_watchdog_decision": True,
-        },
-    }
-
-    tmp.write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n")
-    os.replace(tmp, out)
-    return task_id, out
+    return persist_watchdog_task(
+        project,
+        payload,
+        request,
+        mode,
+        now=now,
+        now_factory=utc_now,
+        max_task_chars=MAX_TASK_CHARS,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def help_text(config: BridgeConfig) -> str:
-    projects = ", ".join(sorted(config.projects))
-    return "\n".join(
-        [
-            "Watchdog bridge commands:",
-            "`/watchdog task <project> <request>` - submit a task to project inbox",
-            "`/watchdog status <project>` - show project status",
-            "`/watchdog brief <project>` - show morning brief/latest report",
-            "`/watchdog inbox <project>` - list queued inbox tasks",
-            "`/watchdog run-once <project> <reason>` - submit a run-once request for watchdog to judge later",
-            f"Projects: {projects}",
-            "",
-            "This bridge never executes shell commands directly.",
-        ]
-    )
+    return build_watchdog_help_text(config.projects)
 
 
 def handle_watchdog(payload: dict[str, str], config: BridgeConfig) -> dict[str, str]:
