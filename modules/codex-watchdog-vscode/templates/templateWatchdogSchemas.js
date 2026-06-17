@@ -36,6 +36,7 @@ const watchdogSchemaTemplates = {
       "report_markdown",
       "document_index_updates",
       "experiment_index_updates",
+      "current_conclusion_evidence_search",
       "current_conclusion_update",
       "successor_task_draft",
       "task_profile_draft",
@@ -260,6 +261,28 @@ const watchdogSchemaTemplates = {
           },
           additionalProperties: false
         }
+      },
+      current_conclusion_evidence_search: {
+        type: ["object", "null"],
+        required: ["query", "decision", "warnings", "read_plan_paths"],
+        properties: {
+          query: { type: "string" },
+          decision: {
+            type: "string",
+            enum: [
+              "safe_to_answer",
+              "insufficient_primary_evidence",
+              "only_auxiliary_found",
+              "stale_conclusion",
+              "conflicting_evidence",
+              "no_index_hit",
+              "index_error"
+            ]
+          },
+          warnings: { type: "array", items: { type: "string" } },
+          read_plan_paths: { type: "array", items: { type: "string" } }
+        },
+        additionalProperties: false
       },
       current_conclusion_update: {
         type: ["object", "null"],

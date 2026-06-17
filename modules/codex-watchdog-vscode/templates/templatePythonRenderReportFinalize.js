@@ -84,6 +84,15 @@ VALID_DOC_TYPES = {
 VALID_RECORD_STATUSES = {"active", "draft", "superseded", "deprecated", "archived", "invalidated"}
 VALID_EVIDENCE_SCOPES = {"primary_only", "mixed", "auxiliary_only", "none"}
 VALID_CONCLUSION_STATUSES = {"confirmed", "tentative", "auxiliary_only", "invalidated"}
+VALID_SEARCH_DECISIONS = {
+    "safe_to_answer",
+    "insufficient_primary_evidence",
+    "only_auxiliary_found",
+    "stale_conclusion",
+    "conflicting_evidence",
+    "no_index_hit",
+    "index_error",
+}
 
 def safe_optional_string(value):
     if value in (None, ""):
@@ -157,6 +166,29 @@ def sha256_file(path):
 def write_jsonl_records(path, records):
     lines = [json.dumps(record, sort_keys=True) for record in records]
     atomic_write_text(path, ("\\n".join(lines) + "\\n") if lines else "")
+
+def run_watchdog_doc_search(query):
+    script_path = Path("agent/bin/watchdog_doc_search.py")
+    if not script_path.exists():
+        raise SystemExit("current_conclusion_update requires agent/bin/watchdog_doc_search.py, but the script is missing")
+    result = subprocess.run(
+        ["python3", str(script_path), "--project-root", ".", "--query", query, "--json"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise SystemExit(
+            "current_conclusion_update could not verify local evidence retrieval because watchdog_doc_search.py failed"
+            + (f": {stderr}" if stderr else "")
+        )
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except Exception as exc:
+        raise SystemExit(f"current_conclusion_update could not parse watchdog_doc_search.py JSON output: {exc}")
+    if not isinstance(payload, dict):
+        raise SystemExit("current_conclusion_update verification expected watchdog_doc_search.py to return a JSON object")
+    return payload
 
 def upsert_records_by_key(existing_records, updates, key):
     remaining = {}
@@ -346,6 +378,20 @@ def validate_experiment_index_update(update, docs_by_id, root, policy):
         )
     return normalized, errors
 
+def validate_current_conclusion_evidence_search(search_payload):
+    errors = []
+    if not search_payload:
+        return errors
+    require_nonempty_string(search_payload.get("query"), "current_conclusion_evidence_search.query", errors)
+    decision = str(search_payload.get("decision") or "").strip()
+    if not decision:
+        errors.append("current_conclusion_evidence_search.decision must be a nonempty string")
+    elif decision not in VALID_SEARCH_DECISIONS:
+        errors.append(f"current_conclusion_evidence_search.decision is invalid: {decision!r}")
+    require_string_array(search_payload.get("warnings"), "current_conclusion_evidence_search.warnings", errors)
+    require_string_array(search_payload.get("read_plan_paths"), "current_conclusion_evidence_search.read_plan_paths", errors)
+    return errors
+
 def validate_current_conclusion_update(update, docs_by_id, experiments_by_id, policy):
     errors = []
     if not update:
@@ -435,6 +481,7 @@ def clean_object_list(value):
 
 document_index_updates = clean_object_list(data.get("document_index_updates"))
 experiment_index_updates = clean_object_list(data.get("experiment_index_updates"))
+current_conclusion_evidence_search = clean_object(data.get("current_conclusion_evidence_search"))
 current_conclusion_update = clean_object(data.get("current_conclusion_update"))
 document_index_update_ids = []
 experiment_index_update_ids = []
@@ -442,6 +489,12 @@ document_index_update_count = 0
 experiment_index_update_count = 0
 document_index_output_path = ""
 experiment_index_output_path = ""
+current_conclusion_evidence_query = ""
+current_conclusion_evidence_status = "none"
+current_conclusion_evidence_decision = ""
+current_conclusion_evidence_output_path = ""
+current_conclusion_evidence_warnings = []
+current_conclusion_evidence_read_plan_paths = []
 current_conclusion_update_status = "none"
 current_conclusion_output_path = ""
 current_conclusion_proposal_path = ""
@@ -490,15 +543,6 @@ for update in experiment_index_updates:
 staged_experiments_by_id = dict(experiments_by_id)
 for record in staged_experiment_updates:
     staged_experiments_by_id[record["experiment_id"]] = record
-if current_conclusion_update:
-    conclusion_errors = validate_current_conclusion_update(
-        current_conclusion_update,
-        staged_docs_by_id,
-        staged_experiments_by_id,
-        program_policy,
-    )
-    if conclusion_errors:
-        raise SystemExit("current_conclusion_update violates RESEARCH_PROGRAM/current_conclusions policy: " + "; ".join(conclusion_errors))
 if staged_document_updates:
     updated_document_records = upsert_records_by_key(existing_document_records, staged_document_updates, "doc_id")
     document_index_output_path = "project_index/document_index.jsonl"
@@ -512,6 +556,71 @@ if staged_experiment_updates:
     experiment_index_update_ids = [record["experiment_id"] for record in staged_experiment_updates]
     experiment_index_update_count = len(experiment_index_update_ids)
 if current_conclusion_update:
+    if not current_conclusion_evidence_search:
+        raise SystemExit("current_conclusion_update requires current_conclusion_evidence_search from watchdog_doc_search.py")
+    search_payload_errors = validate_current_conclusion_evidence_search(current_conclusion_evidence_search)
+    if search_payload_errors:
+        raise SystemExit(
+            "current_conclusion_evidence_search is invalid: " + "; ".join(search_payload_errors)
+        )
+    current_conclusion_evidence_query = str(current_conclusion_evidence_search.get("query") or "").strip()
+    verified_conclusion_search = run_watchdog_doc_search(current_conclusion_evidence_query)
+    current_conclusion_evidence_decision = str(verified_conclusion_search.get("decision") or "").strip()
+    current_conclusion_evidence_warnings = ordered_unique_strings(verified_conclusion_search.get("warnings") or [])
+    current_conclusion_evidence_read_plan_paths = ordered_unique_strings(
+        item.get("path")
+        for item in verified_conclusion_search.get("read_plan", [])
+        if isinstance(item, dict)
+    )
+    reported_decision = str(current_conclusion_evidence_search.get("decision") or "").strip()
+    if reported_decision != current_conclusion_evidence_decision:
+        raise SystemExit(
+            "current_conclusion_evidence_search.decision does not match verified watchdog_doc_search.py output: "
+            + f"reported {reported_decision!r}, verified {current_conclusion_evidence_decision!r}"
+        )
+    reported_warnings = ordered_unique_strings(current_conclusion_evidence_search.get("warnings") or [])
+    unexpected_reported_warnings = [
+        warning for warning in reported_warnings if warning not in current_conclusion_evidence_warnings
+    ]
+    if unexpected_reported_warnings:
+        raise SystemExit(
+            "current_conclusion_evidence_search.warnings include values not returned by watchdog_doc_search.py: "
+            + ", ".join(unexpected_reported_warnings)
+        )
+    reported_read_plan_paths = ordered_unique_strings(current_conclusion_evidence_search.get("read_plan_paths") or [])
+    unexpected_reported_paths = [
+        path for path in reported_read_plan_paths if path not in current_conclusion_evidence_read_plan_paths
+    ]
+    if unexpected_reported_paths:
+        raise SystemExit(
+            "current_conclusion_evidence_search.read_plan_paths include values not returned by watchdog_doc_search.py: "
+            + ", ".join(unexpected_reported_paths)
+        )
+    current_conclusion_evidence_output_path = "agent/status/CURRENT_CONCLUSION_EVIDENCE_SEARCH.json"
+    atomic_write_json(current_conclusion_evidence_output_path, {
+        "schema_version": 1,
+        "generated_at": updated,
+        "query": current_conclusion_evidence_query,
+        "reported_receipt": current_conclusion_evidence_search,
+        "verified_receipt": verified_conclusion_search,
+        "supporting_docs": current_conclusion_update.get("supporting_docs", []),
+        "supporting_experiments": current_conclusion_update.get("supporting_experiments", []),
+    })
+    current_conclusion_evidence_status = "verified"
+    if current_conclusion_evidence_decision != "safe_to_answer":
+        warning_text = "; ".join(current_conclusion_evidence_warnings) or "watchdog_doc_search.py did not approve a formal answer"
+        raise SystemExit(
+            "current_conclusion_update requires a safe_to_answer retrieval decision from watchdog_doc_search.py; "
+            + f"got {current_conclusion_evidence_decision}: {warning_text}"
+        )
+    conclusion_errors = validate_current_conclusion_update(
+        current_conclusion_update,
+        staged_docs_by_id,
+        staged_experiments_by_id,
+        program_policy,
+    )
+    if conclusion_errors:
+        raise SystemExit("current_conclusion_update violates RESEARCH_PROGRAM/current_conclusions policy: " + "; ".join(conclusion_errors))
     if program_policy.get("publish_only_after_review") and not bool(data.get("requires_human_review")):
         raise SystemExit("current_conclusion_update requires requires_human_review=true because RESEARCH_PROGRAM conclusion_policy.publish_only_after_review=true")
     if bool(data.get("requires_human_review")):
@@ -525,6 +634,13 @@ if current_conclusion_update:
             "research_program_id": research_program_info.get("program_id"),
             "publish_only_after_review": program_policy.get("publish_only_after_review"),
             "current_conclusion_update": current_conclusion_update,
+            "current_conclusion_evidence_search": {
+                "query": current_conclusion_evidence_query,
+                "decision": current_conclusion_evidence_decision,
+                "warnings": current_conclusion_evidence_warnings,
+                "read_plan_paths": current_conclusion_evidence_read_plan_paths,
+                "receipt_path": current_conclusion_evidence_output_path or None,
+            },
             "document_index_update_ids": document_index_update_ids,
             "experiment_index_update_ids": experiment_index_update_ids,
         })
@@ -539,6 +655,8 @@ if current_conclusion_update:
         current_conclusion_output_path = "project_index/current_conclusions.json"
         atomic_write_json(current_conclusion_output_path, updated_current_conclusions)
         current_conclusion_update_status = "applied"
+elif current_conclusion_evidence_search:
+    raise SystemExit("current_conclusion_evidence_search must be null unless current_conclusion_update is present")
 
 blocked_items = data.get("blocked_items") or []
 completed_items = data.get("completed_items") or []
@@ -590,6 +708,8 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Research baseline required: {research_program_info.get('baseline_required')}",
     f"Document index updates: {document_index_update_count}",
     f"Experiment index updates: {experiment_index_update_count}",
+    f"Current conclusion evidence search: {current_conclusion_evidence_status}",
+    f"Current conclusion evidence decision: {current_conclusion_evidence_decision or 'none'}",
     f"Current conclusion update: {current_conclusion_update_status}",
     f"Current conclusion topic: {current_conclusion_topic_id or 'none'}",
     "",
@@ -669,6 +789,12 @@ atomic_write_json("agent/RUN_STATE.json", {
     "experiment_index_update_count": experiment_index_update_count,
     "experiment_index_update_ids": experiment_index_update_ids,
     "experiment_index_output_path": experiment_index_output_path or None,
+    "current_conclusion_evidence_status": current_conclusion_evidence_status,
+    "current_conclusion_evidence_query": current_conclusion_evidence_query or None,
+    "current_conclusion_evidence_decision": current_conclusion_evidence_decision or None,
+    "current_conclusion_evidence_warnings": current_conclusion_evidence_warnings,
+    "current_conclusion_evidence_read_plan_paths": current_conclusion_evidence_read_plan_paths,
+    "current_conclusion_evidence_output_path": current_conclusion_evidence_output_path or None,
     "current_conclusion_update_status": current_conclusion_update_status,
     "current_conclusion_topic_id": current_conclusion_topic_id or None,
     "current_conclusion_output_path": current_conclusion_output_path or None,
@@ -720,6 +846,8 @@ write_lines("agent/NEXT_ACTION.md", [
     f"- Research domain: {research_program_info.get('domain_name') or 'none'}",
     f"- Document index updates: {document_index_update_count}",
     f"- Experiment index updates: {experiment_index_update_count}",
+    f"- Current conclusion evidence search: {current_conclusion_evidence_status}",
+    f"- Current conclusion evidence decision: {current_conclusion_evidence_decision or 'none'}",
     f"- Current conclusion update: {current_conclusion_update_status}",
     f"- Current conclusion topic: {current_conclusion_topic_id or 'none'}",
     "",
@@ -822,6 +950,7 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "task_box_id": task_box.get("task_box_id"),
     "input_paths": ordered_unique_strings([
         "research/RESEARCH_PROGRAM.json",
+        *([ "agent/bin/watchdog_doc_search.py" ] if current_conclusion_update else []),
         *([ "project_index/current_conclusions.json" ] if current_conclusion_update else []),
         *([ "project_index/document_index.jsonl" ] if document_index_updates or current_conclusion_update else []),
         *([ "project_index/experiment_index.jsonl" ] if experiment_index_updates or current_conclusion_update else []),
@@ -837,6 +966,7 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
         "agent/PROGRESS_STATE.json",
         "agent/NEXT_ACTION.md",
         "agent/ROUTE_CANONICAL.json",
+        *( [current_conclusion_evidence_output_path] if current_conclusion_evidence_output_path else [] ),
         *( [document_index_output_path] if document_index_output_path else [] ),
         *( [experiment_index_output_path] if experiment_index_output_path else [] ),
         *( [current_conclusion_output_path] if current_conclusion_output_path else [] ),
@@ -862,6 +992,11 @@ append_jsonl("agent/EVIDENCE_LEDGER.jsonl", {
     "document_index_update_ids": document_index_update_ids,
     "experiment_index_update_count": experiment_index_update_count,
     "experiment_index_update_ids": experiment_index_update_ids,
+    "current_conclusion_evidence_status": current_conclusion_evidence_status,
+    "current_conclusion_evidence_query": current_conclusion_evidence_query or None,
+    "current_conclusion_evidence_decision": current_conclusion_evidence_decision or None,
+    "current_conclusion_evidence_warnings": current_conclusion_evidence_warnings,
+    "current_conclusion_evidence_read_plan_paths": current_conclusion_evidence_read_plan_paths,
     "current_conclusion_update_status": current_conclusion_update_status,
     "current_conclusion_topic_id": current_conclusion_topic_id or None,
     "fair_comparability": task_box.get("fair_comparability"),

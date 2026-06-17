@@ -194,6 +194,7 @@ async function main() {
   assert.ok(watchSchema.required.includes("secondary_skills_consulted"));
   assert.ok(watchSchema.required.includes("document_index_updates"));
   assert.ok(watchSchema.required.includes("experiment_index_updates"));
+  assert.ok(watchSchema.required.includes("current_conclusion_evidence_search"));
   assert.ok(watchSchema.required.includes("current_conclusion_update"));
   assert.ok(watchSchema.required.includes("successor_task_draft"));
   assert.ok(watchSchema.required.includes("task_profile_draft"));
@@ -1414,6 +1415,7 @@ async function main() {
     ledger_update_markdown: "",
     document_index_updates: [],
     experiment_index_updates: [],
+    current_conclusion_evidence_search: null,
     current_conclusion_update: null,
     successor_task_draft: {
       task_id: "stage06_g1_followup",
@@ -1442,6 +1444,68 @@ async function main() {
       active_carrier: "g1"
     }
   }), /secondary_skills_consulted mismatch/);
+  assert.throws(() => runRender(projectRoot, {
+    timestamp_utc: "2026-06-08T12:00:30Z",
+    report_markdown: "# Report\n\nTried to publish a conclusion without a safe local retrieval decision.",
+    overall_status: "blocked",
+    report_type: "blocked",
+    primary_skill: "watchdog-orchestrator",
+    secondary_skills_consulted: ["research-comparability"],
+    supervisor_mode: "runner",
+    review_scope: "none",
+    review_resolver: "none",
+    review_pending_state: "none",
+    work_cycle_summary: "The conclusion cites durable evidence, but retrieval still only surfaces auxiliary debug notes for the chosen query.",
+    blocked_items: ["unsafe_current_conclusion_retrieval"],
+    completed_items: [],
+    running_items: [],
+    evidence: ["analysis/aux_debug.md"],
+    progress_changed: false,
+    no_progress_cycles: 1,
+    recommend_pause: false,
+    requires_human_review: false,
+    human_review_reason: "",
+    next_safe_action: {
+      kind: "report_only",
+      description: "Refine the conclusion query until the local retriever surfaces primary evidence.",
+      can_execute_automatically: true,
+      reason: "watchdog_doc_search.py did not approve the conclusion-bearing query."
+    },
+    skill_stop_condition: "Do not publish a durable conclusion unless retrieval is safe_to_answer.",
+    state_update_markdown: "",
+    runtime_state_markdown: "",
+    morning_brief_markdown: "",
+    proposal_markdown: "",
+    ledger_update_markdown: "",
+    document_index_updates: [],
+    experiment_index_updates: [],
+    current_conclusion_evidence_search: {
+      query: "loss spike debug",
+      decision: "only_auxiliary_found",
+      warnings: ["only auxiliary evidence matched the query"],
+      read_plan_paths: ["analysis/aux_debug.md"]
+    },
+    current_conclusion_update: {
+      topic_id: "unsafe_retrieval_route_conclusion",
+      topic: "unsafe retrieval route conclusion",
+      conclusion_status: "confirmed",
+      claim: "The route is ready for a durable conclusion, but this should be blocked by retrieval policy.",
+      evidence_scope: "primary_only",
+      supporting_docs: ["doc_current_best"],
+      supporting_experiments: ["exp_model_a"],
+      last_reviewed_at: "2026-06-08T12:00:30Z",
+      stale_after_days: 7,
+      stale_severity: "warning",
+      owner: "watchdog",
+      invalidated_by: null,
+      risk_flags: []
+    },
+    successor_task_draft: null,
+    task_profile_draft: null,
+    queue_request_draft: null,
+    route_canonical_update: {},
+    task_box_update: {}
+  }), /safe_to_answer retrieval decision/);
   runRender(projectRoot, {
     timestamp_utc: "2026-06-08T12:00:00Z",
     report_markdown: "# Report\n\nAccepted successor route and prepared the next exact contract.",
@@ -1528,6 +1592,12 @@ async function main() {
         official_conclusion_doc: "doc_stage06_route_status"
       }
     ],
+    current_conclusion_evidence_search: {
+      query: "stage06 route status",
+      decision: "safe_to_answer",
+      warnings: [],
+      read_plan_paths: ["formal/stage06_route_status.md"]
+    },
     current_conclusion_update: {
       topic_id: "stage06_g1_route_status",
       topic: "stage06 g1 route status",
@@ -1622,6 +1692,11 @@ async function main() {
   assert.strictEqual(queueRunState.experiment_index_update_count, 1);
   assert.deepStrictEqual(queueRunState.experiment_index_update_ids, ["exp_stage06_queue_contract"]);
   assert.strictEqual(queueRunState.experiment_index_output_path, "project_index/experiment_index.jsonl");
+  assert.strictEqual(queueRunState.current_conclusion_evidence_status, "verified");
+  assert.strictEqual(queueRunState.current_conclusion_evidence_query, "stage06 route status");
+  assert.strictEqual(queueRunState.current_conclusion_evidence_decision, "safe_to_answer");
+  assert.ok(queueRunState.current_conclusion_evidence_read_plan_paths.includes("formal/stage06_route_status.md"));
+  assert.strictEqual(queueRunState.current_conclusion_evidence_output_path, "agent/status/CURRENT_CONCLUSION_EVIDENCE_SEARCH.json");
   assert.strictEqual(queueRunState.current_conclusion_update_status, "applied");
   assert.strictEqual(queueRunState.current_conclusion_topic_id, "stage06_g1_route_status");
   const nextActionText = fs.readFileSync(path.join(projectRoot, "agent", "NEXT_ACTION.md"), "utf8");
@@ -1634,6 +1709,8 @@ async function main() {
   assert.match(nextActionText, /Research program: replace_with_project_program_id/);
   assert.match(nextActionText, /Document index updates: 1/);
   assert.match(nextActionText, /Experiment index updates: 1/);
+  assert.match(nextActionText, /Current conclusion evidence search: verified/);
+  assert.match(nextActionText, /Current conclusion evidence decision: safe_to_answer/);
   assert.match(nextActionText, /Current conclusion update: applied/);
   const currentStateText = fs.readFileSync(path.join(projectRoot, "agent", "CURRENT_STATE.md"), "utf8");
   assert.match(currentStateText, /Route ID: route-new/);
@@ -1645,7 +1722,13 @@ async function main() {
   assert.match(currentStateText, /Research autonomy mode: domain_bounded/);
   assert.match(currentStateText, /Document index updates: 1/);
   assert.match(currentStateText, /Experiment index updates: 1/);
+  assert.match(currentStateText, /Current conclusion evidence search: verified/);
+  assert.match(currentStateText, /Current conclusion evidence decision: safe_to_answer/);
   assert.match(currentStateText, /Current conclusion update: applied/);
+  const currentConclusionSearchReceipt = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "status", "CURRENT_CONCLUSION_EVIDENCE_SEARCH.json"), "utf8"));
+  assert.strictEqual(currentConclusionSearchReceipt.query, "stage06 route status");
+  assert.strictEqual(currentConclusionSearchReceipt.verified_receipt.decision, "safe_to_answer");
+  assert.ok(currentConclusionSearchReceipt.verified_receipt.read_plan.some((item) => item.path === "formal/stage06_route_status.md"));
   const updatedDocumentIndex = fs.readFileSync(path.join(projectRoot, "project_index", "document_index.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
   const stage06DocRecord = updatedDocumentIndex.find((record) => record.doc_id === "doc_stage06_route_status");
   assert.ok(stage06DocRecord);
@@ -1665,6 +1748,7 @@ async function main() {
   const evidenceLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
   const latestLedgerEntry = JSON.parse(evidenceLedgerLines[evidenceLedgerLines.length - 1]);
   assert.ok(latestLedgerEntry.input_paths.includes("research/RESEARCH_PROGRAM.json"));
+  assert.ok(latestLedgerEntry.input_paths.includes("agent/bin/watchdog_doc_search.py"));
   assert.ok(latestLedgerEntry.input_paths.includes("project_index/current_conclusions.json"));
   assert.ok(latestLedgerEntry.input_paths.includes("project_index/document_index.jsonl"));
   assert.ok(latestLedgerEntry.input_paths.includes("project_index/experiment_index.jsonl"));
@@ -1672,6 +1756,7 @@ async function main() {
   assert.ok(latestLedgerEntry.input_paths.includes("eval/stage06_queue_contract_metrics.json"));
   assert.ok(latestLedgerEntry.input_paths.includes("configs/stage06_queue_contract.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/status/NEXT_TASK_DRAFT.json"));
+  assert.ok(latestLedgerEntry.output_paths.includes("agent/status/CURRENT_CONCLUSION_EVIDENCE_SEARCH.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/task_profiles/stage06_g1_followup.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("agent/queue/drafts/stage06_g1_followup.json"));
   assert.ok(latestLedgerEntry.output_paths.includes("project_index/document_index.jsonl"));
@@ -1686,6 +1771,9 @@ async function main() {
   assert.deepStrictEqual(latestLedgerEntry.document_index_update_ids, ["doc_stage06_route_status"]);
   assert.strictEqual(latestLedgerEntry.experiment_index_update_count, 1);
   assert.deepStrictEqual(latestLedgerEntry.experiment_index_update_ids, ["exp_stage06_queue_contract"]);
+  assert.strictEqual(latestLedgerEntry.current_conclusion_evidence_status, "verified");
+  assert.strictEqual(latestLedgerEntry.current_conclusion_evidence_query, "stage06 route status");
+  assert.strictEqual(latestLedgerEntry.current_conclusion_evidence_decision, "safe_to_answer");
   assert.strictEqual(latestLedgerEntry.current_conclusion_update_status, "applied");
   assert.strictEqual(latestLedgerEntry.current_conclusion_topic_id, "stage06_g1_route_status");
 
@@ -1731,14 +1819,20 @@ async function main() {
     ledger_update_markdown: "",
     document_index_updates: [],
     experiment_index_updates: [],
+    current_conclusion_evidence_search: {
+      query: "stage06 route status",
+      decision: "safe_to_answer",
+      warnings: [],
+      read_plan_paths: ["formal/stage06_route_status.md"]
+    },
     current_conclusion_update: {
       topic_id: "review_required_route_conclusion",
       topic: "review required route conclusion",
       conclusion_status: "confirmed",
       claim: "The controlled route is ready for the next bounded queue execution after review.",
       evidence_scope: "primary_only",
-      supporting_docs: ["doc_current_best"],
-      supporting_experiments: ["exp_model_a"],
+      supporting_docs: ["doc_stage06_route_status"],
+      supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:30:00Z",
       stale_after_days: 7,
       stale_severity: "warning",
@@ -1788,14 +1882,20 @@ async function main() {
     ledger_update_markdown: "",
     document_index_updates: [],
     experiment_index_updates: [],
+    current_conclusion_evidence_search: {
+      query: "stage06 route status",
+      decision: "safe_to_answer",
+      warnings: [],
+      read_plan_paths: ["formal/stage06_route_status.md"]
+    },
     current_conclusion_update: {
       topic_id: "review_required_route_conclusion",
       topic: "review required route conclusion",
       conclusion_status: "confirmed",
       claim: "The controlled route is ready for the next bounded queue execution after review.",
       evidence_scope: "primary_only",
-      supporting_docs: ["doc_current_best"],
-      supporting_experiments: ["exp_model_a"],
+      supporting_docs: ["doc_stage06_route_status"],
+      supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:31:00Z",
       stale_after_days: 7,
       stale_severity: "warning",
@@ -1815,11 +1915,17 @@ async function main() {
   const reviewProposalName = fs.readdirSync(reviewProposalDir).sort().at(-1);
   const reviewProposal = JSON.parse(fs.readFileSync(path.join(reviewProposalDir, reviewProposalName), "utf8"));
   assert.strictEqual(reviewProposal.current_conclusion_update.topic_id, "review_required_route_conclusion");
+  assert.strictEqual(reviewProposal.current_conclusion_evidence_search.decision, "safe_to_answer");
+  assert.strictEqual(reviewProposal.current_conclusion_evidence_search.query, "stage06 route status");
   const reviewRunState = JSON.parse(fs.readFileSync(path.join(projectRoot, "agent", "RUN_STATE.json"), "utf8"));
+  assert.strictEqual(reviewRunState.current_conclusion_evidence_status, "verified");
+  assert.strictEqual(reviewRunState.current_conclusion_evidence_decision, "safe_to_answer");
   assert.strictEqual(reviewRunState.current_conclusion_update_status, "review_required");
   assert.strictEqual(reviewRunState.current_conclusion_topic_id, "review_required_route_conclusion");
   const reviewLedgerLines = fs.readFileSync(path.join(projectRoot, "agent", "EVIDENCE_LEDGER.jsonl"), "utf8").trim().split("\n");
   const reviewLedgerEntry = JSON.parse(reviewLedgerLines[reviewLedgerLines.length - 1]);
+  assert.strictEqual(reviewLedgerEntry.current_conclusion_evidence_status, "verified");
+  assert.strictEqual(reviewLedgerEntry.current_conclusion_evidence_decision, "safe_to_answer");
   assert.strictEqual(reviewLedgerEntry.current_conclusion_update_status, "review_required");
   assert.ok(reviewLedgerEntry.output_paths.some((item) => /research\/proposals\/current_conclusions\//.test(item)));
   writeJson(projectRoot, "research/RESEARCH_PROGRAM.json", initialResearchProgram);

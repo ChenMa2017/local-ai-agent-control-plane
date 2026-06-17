@@ -31,6 +31,7 @@ Each wakeup should leave these files coherent:
 - \`agent/ANTI_SNOWBALL.md\`: stopped routes, stale facts to avoid repeating, and compaction notes.
 - \`agent/EXPERIMENT_LEDGER.md\`: durable experimental hypotheses, model/loss/data protocol, provenance, results, and conclusions.
 - \`agent/EVIDENCE_LEDGER.jsonl\`: durable machine-readable evidence objects for later agents.
+- \`agent/status/CURRENT_CONCLUSION_EVIDENCE_SEARCH.json\`: last verified local retrieval receipt used to approve a durable conclusion update.
 - \`project_index/document_index.jsonl\`: document identity, lifecycle, and evidence-scope metadata.
 - \`project_index/experiment_index.jsonl\`: experiment identity, evaluation-path, and protocol metadata.
 - \`project_index/current_conclusions.json\`: current conclusions that are safe to cite when still supported.
