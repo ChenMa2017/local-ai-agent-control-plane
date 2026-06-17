@@ -274,6 +274,70 @@ def resolve_route_task_id(route, exact_next_task_id):
         return route_task_id
     return exact_next_task_id or route_task_id
 
+def build_successor_provenance(artifact_role, source, repair_origin, route_canonical, task_box, report_timestamp_utc, report_type, updated):
+    route_id = ""
+    route_epoch = ""
+    task_box_id = ""
+    if isinstance(route_canonical, dict):
+        route_id = str(route_canonical.get("route_id") or "").strip()
+        route_epoch = str(route_canonical.get("route_epoch") or "").strip()
+    if isinstance(task_box, dict):
+        if not route_id:
+            route_id = str(task_box.get("route_id") or "").strip()
+        if not route_epoch:
+            route_epoch = str(task_box.get("route_epoch") or "").strip()
+        task_box_id = str(task_box.get("task_box_id") or "").strip()
+    return {
+        "artifact_role": str(artifact_role or "").strip() or "successor_artifact",
+        "source": str(source or "").strip() or "unknown",
+        "repair_origin": str(repair_origin or "").strip() or "unspecified",
+        "generated_by": "watchdog_render_report_successor",
+        "derived_from_report": {
+            "path": "agent/reports/latest.md",
+            "timestamp_utc": str(report_timestamp_utc or updated),
+            "report_type": str(report_type or "heartbeat"),
+        },
+        "parent_route_id": route_id or None,
+        "parent_route_epoch": route_epoch or None,
+        "parent_task_box_id": task_box_id or None,
+        "generated_at_utc": updated,
+        "model_authored": str(source or "").strip() == "model_authored",
+        "route_repair_authored": str(source or "").strip() == "route_repair",
+        "fallback_synthesized": str(source or "").strip() == "fallback_synthesized",
+    }
+
+def attach_successor_provenance(draft, artifact_role, source, repair_origin, route_canonical, task_box, report_timestamp_utc, report_type, updated):
+    if not isinstance(draft, dict) or not draft:
+        return draft
+    payload = dict(draft)
+    provenance = dict(payload.get("provenance")) if isinstance(payload.get("provenance"), dict) else {}
+    provenance.update(build_successor_provenance(
+        artifact_role,
+        source,
+        repair_origin,
+        route_canonical,
+        task_box,
+        report_timestamp_utc,
+        report_type,
+        updated,
+    ))
+    payload["provenance"] = provenance
+    return payload
+
+def collect_successor_provenance_summary(successor_task_draft, task_profile_draft, queue_request_draft):
+    summary = {}
+    for artifact_role, artifact in (
+        ("successor_task_draft", successor_task_draft),
+        ("task_profile_draft", task_profile_draft),
+        ("queue_request_draft", queue_request_draft),
+    ):
+        if not isinstance(artifact, dict):
+            continue
+        provenance = artifact.get("provenance")
+        if isinstance(provenance, dict) and provenance:
+            summary[artifact_role] = dict(provenance)
+    return summary or None
+
 def synthesize_successor_task(route_canonical, task_box, next_action, queue_request_draft, task_profile_draft):
     if not isinstance(route_canonical, dict):
         return {}
@@ -491,6 +555,9 @@ def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, n
     required_successor_exactness = str((route_canonical or {}).get("required_successor_exactness") or (task_box or {}).get("required_successor_exactness") or "")
     successor_materialization_status = str((route_canonical or {}).get("successor_materialization_status") or (task_box or {}).get("successor_materialization_status") or "")
     experiment_gate_status = str((route_canonical or {}).get("experiment_gate_status") or (task_box or {}).get("experiment_gate_status") or "not_required")
+    successor_provenance = (route_canonical or {}).get("successor_provenance")
+    if not isinstance(successor_provenance, dict):
+        successor_provenance = (task_box or {}).get("successor_provenance")
 
     state.update({
         "schema_version": 1,
@@ -515,6 +582,7 @@ def derive_runtime_state_json(route_canonical, task_box, successor_task_draft, n
         "experiment_gate_status": experiment_gate_status,
         "experiment_decision_gate_required": bool((route_canonical or {}).get("experiment_decision_gate_required") or (task_box or {}).get("experiment_decision_gate_required")),
         "experiment_decision_gate_blocking": bool((route_canonical or {}).get("experiment_decision_gate_blocking") or (task_box or {}).get("experiment_decision_gate_blocking")),
+        "successor_provenance": successor_provenance if isinstance(successor_provenance, dict) and successor_provenance else None,
         "task_box_id": (task_box or {}).get("task_box_id") or state.get("task_box_id"),
         "owner_mode": (route_canonical or {}).get("owner_mode") or state.get("owner_mode"),
         "current_allowed_step": (route_canonical or {}).get("current_allowed_step") or state.get("current_allowed_step"),
@@ -560,6 +628,12 @@ updated = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
 successor_task_draft = normalize_successor_task(data.get("successor_task_draft"))
 task_profile_draft = clean_object(data.get("task_profile_draft"))
 queue_request_draft = clean_object(data.get("queue_request_draft"))
+successor_task_provenance_source = "model_authored" if successor_task_draft else ""
+successor_task_repair_origin = "model_payload.successor_task_draft" if successor_task_draft else ""
+task_profile_provenance_source = "model_authored" if task_profile_draft else ""
+task_profile_repair_origin = "model_payload.task_profile_draft" if task_profile_draft else ""
+queue_request_provenance_source = "model_authored" if queue_request_draft else ""
+queue_request_repair_origin = "model_payload.queue_request_draft" if queue_request_draft else ""
 route_canonical_update = clean_object(data.get("route_canonical_update"))
 task_box_update = clean_object(data.get("task_box_update"))
 previous_exact_task_id = str(
@@ -589,6 +663,9 @@ initial_experiment_gate_status = infer_experiment_gate_status(route_canonical, t
 
 if not successor_task_draft and route_canonical.get("successor_contract_required") is True and initial_experiment_gate_status != "blocked":
     successor_task_draft = synthesize_successor_task(route_canonical, task_box, next_action, queue_request_draft, task_profile_draft)
+    if successor_task_draft:
+        successor_task_provenance_source = "fallback_synthesized"
+        successor_task_repair_origin = "successor_contract_required_missing_task"
 
 if not successor_task_draft and initial_experiment_gate_status != "blocked":
     successor_task_draft = rehydrate_successor_task_from_exact_contract(
@@ -598,12 +675,60 @@ if not successor_task_draft and initial_experiment_gate_status != "blocked":
         task_profile_draft,
         queue_request_draft,
     )
+    if successor_task_draft:
+        successor_task_provenance_source = "route_repair"
+        successor_task_repair_origin = "exact_contract_rehydration"
 
 if not task_profile_draft and should_synthesize_successor_profile(successor_task_draft) and initial_experiment_gate_status != "blocked":
     task_profile_draft = synthesize_successor_profile_draft(route_canonical, successor_task_draft)
+    if task_profile_draft:
+        task_profile_provenance_source = "fallback_synthesized" if successor_task_provenance_source == "fallback_synthesized" else "route_repair"
+        task_profile_repair_origin = "successor_profile_synthesis"
 
 if not queue_request_draft and should_synthesize_successor_queue_request(successor_task_draft) and initial_experiment_gate_status != "blocked":
     queue_request_draft = synthesize_successor_queue_request(route_canonical, task_box, successor_task_draft)
+    if queue_request_draft:
+        queue_request_provenance_source = "fallback_synthesized" if successor_task_provenance_source == "fallback_synthesized" else "route_repair"
+        queue_request_repair_origin = "successor_queue_request_synthesis"
+
+successor_task_draft = attach_successor_provenance(
+    successor_task_draft,
+    "successor_task_draft",
+    successor_task_provenance_source,
+    successor_task_repair_origin,
+    route_canonical,
+    task_box,
+    data.get("timestamp_utc"),
+    data.get("report_type"),
+    updated,
+)
+task_profile_draft = attach_successor_provenance(
+    task_profile_draft,
+    "task_profile_draft",
+    task_profile_provenance_source,
+    task_profile_repair_origin,
+    route_canonical,
+    task_box,
+    data.get("timestamp_utc"),
+    data.get("report_type"),
+    updated,
+)
+queue_request_draft = attach_successor_provenance(
+    queue_request_draft,
+    "queue_request_draft",
+    queue_request_provenance_source,
+    queue_request_repair_origin,
+    route_canonical,
+    task_box,
+    data.get("timestamp_utc"),
+    data.get("report_type"),
+    updated,
+)
+successor_provenance_summary = collect_successor_provenance_summary(
+    successor_task_draft,
+    task_profile_draft,
+    queue_request_draft,
+)
 
 next_task_draft_path = ""
 if successor_task_draft:
@@ -674,6 +799,7 @@ route_canonical = merge_route_canonical(route_canonical, {
     "experiment_decision_gate_required": resolved_exact_contract.get("experiment_decision_gate_required"),
     "experiment_decision_gate_blocking": resolved_exact_contract.get("experiment_decision_gate_blocking"),
     "successor_contract_required": resolved_exact_contract.get("successor_contract_required"),
+    "successor_provenance": successor_provenance_summary,
 }, updated)
 route_canonical_changed = True
 task_box = ensure_task_box(task_box, route_canonical)
@@ -691,6 +817,7 @@ task_box["successor_materialization_status"] = resolved_exact_contract.get("succ
 task_box["experiment_gate_status"] = resolved_exact_contract.get("experiment_gate_status")
 task_box["experiment_decision_gate_required"] = resolved_exact_contract.get("experiment_decision_gate_required")
 task_box["experiment_decision_gate_blocking"] = resolved_exact_contract.get("experiment_decision_gate_blocking")
+task_box["successor_provenance"] = successor_provenance_summary
 task_box["updated_utc"] = updated
 task_box_changed = True
 
@@ -763,6 +890,7 @@ progress_state = {
     "experiment_gate_status": experiment_gate_status,
     "experiment_decision_gate_required": experiment_gate_status in {"required_ready", "blocked"},
     "experiment_decision_gate_blocking": experiment_gate_status == "blocked",
+    "successor_provenance": successor_provenance_summary if isinstance(successor_provenance_summary, dict) and successor_provenance_summary else None,
     "project_question": task_box.get("project_question"),
     "decision_relevance": task_box.get("decision_relevance"),
     "claim_scope": task_box.get("claim_scope"),

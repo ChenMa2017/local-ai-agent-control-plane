@@ -136,6 +136,7 @@ def merge_route_canonical(existing, update, updated_utc):
         "required_successor_exactness",
         "successor_materialization_status",
         "experiment_gate_status",
+        "successor_provenance",
     }
     if isinstance(update, dict):
         for key, value in update.items():

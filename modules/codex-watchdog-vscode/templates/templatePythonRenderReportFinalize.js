@@ -767,6 +767,15 @@ blocker = blocker_type(blocked_items, requires_review, human_reason)
 successor_contract_required_text = str(bool(resolved_exact_contract.get("successor_contract_required"))).lower()
 experiment_gate_required_text = str(experiment_gate_status in {"required_ready", "blocked"}).lower()
 experiment_gate_blocking_text = str(experiment_gate_status == "blocked").lower()
+successor_provenance = route_canonical.get("successor_provenance") if isinstance(route_canonical, dict) else None
+if not isinstance(successor_provenance, dict):
+    successor_provenance = task_box.get("successor_provenance") if isinstance(task_box, dict) else None
+successor_task_provenance = successor_provenance.get("successor_task_draft") if isinstance(successor_provenance, dict) else {}
+if not isinstance(successor_task_provenance, dict):
+    successor_task_provenance = {}
+successor_task_source_text = str(successor_task_provenance.get("source") or "none")
+successor_task_origin_text = str(successor_task_provenance.get("repair_origin") or "none")
+successor_task_parent_epoch_text = str(successor_task_provenance.get("parent_route_epoch") or "none")
 
 Path("agent").mkdir(parents=True, exist_ok=True)
 write_lines("agent/CURRENT_STATE.md", [
@@ -793,6 +802,9 @@ write_lines("agent/CURRENT_STATE.md", [
     f"Successor contract required: {successor_contract_required_text}",
     f"Required successor exactness: {required_successor_exactness or 'task_only'}",
     f"Successor materialization: {successor_materialization_status or 'missing'}",
+    f"Successor task source: {successor_task_source_text}",
+    f"Successor task origin: {successor_task_origin_text}",
+    f"Successor task parent route epoch: {successor_task_parent_epoch_text}",
     f"Experiment gate status: {experiment_gate_status or 'not_required'}",
     f"Experiment gate required: {experiment_gate_required_text}",
     f"Experiment gate blocking: {experiment_gate_blocking_text}",
@@ -877,6 +889,7 @@ atomic_write_json("agent/RUN_STATE.json", {
     "experiment_gate_status": experiment_gate_status,
     "experiment_decision_gate_required": experiment_gate_status in {"required_ready", "blocked"},
     "experiment_decision_gate_blocking": experiment_gate_status == "blocked",
+    "successor_provenance": successor_provenance if isinstance(successor_provenance, dict) and successor_provenance else None,
     "project_question": task_box.get("project_question"),
     "decision_relevance": task_box.get("decision_relevance"),
     "claim_scope": task_box.get("claim_scope"),
@@ -945,6 +958,9 @@ write_lines("agent/NEXT_ACTION.md", [
     f"- Successor contract required: {successor_contract_required_text}",
     f"- Required successor exactness: {required_successor_exactness or 'task_only'}",
     f"- Successor materialization status: {successor_materialization_status or 'missing'}",
+    f"- Successor task source: {successor_task_source_text}",
+    f"- Successor task origin: {successor_task_origin_text}",
+    f"- Successor task parent route epoch: {successor_task_parent_epoch_text}",
     f"- Experiment gate status: {experiment_gate_status or 'not_required'}",
     f"- Experiment gate required: {experiment_gate_required_text}",
     f"- Experiment gate blocking: {experiment_gate_blocking_text}",
