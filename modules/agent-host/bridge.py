@@ -29,6 +29,14 @@ from config_loader import (
     load_auth_tokens as parse_auth_tokens_from_config,
     load_config as parse_bridge_config_from_file,
 )
+from auth_policy import (
+    authenticate_bearer as authenticate_bearer_principal,
+    can_access_intake as can_access_intake_payload,
+    can_access_task as can_access_task_payload,
+    is_admin as principal_is_admin,
+    reject_frontend_identity as reject_frontend_payload_identity,
+    validate_auth as validate_mattermost_auth,
+)
 from evidence_retrieval import maybe_run_evidence_retrieval
 from execution_evaluation import (
     ExecutionEvaluationDependencies,
@@ -210,45 +218,28 @@ def api_error_payload(exc: BridgeError | Exception) -> dict[str, Any]:
 
 
 def validate_auth(payload: dict[str, str], config: BridgeConfig) -> None:
-    token = payload.get("token", "")
-    if config.mattermost_tokens and token not in config.mattermost_tokens:
-        raise BridgeError("unauthorized: invalid Mattermost token", 403)
-
-    if config.allowed_users:
-        user_name = payload.get("user_name", "")
-        user_id = payload.get("user_id", "")
-        if user_name not in config.allowed_users and user_id not in config.allowed_users:
-            raise BridgeError("unauthorized: Mattermost user is not allowlisted", 403)
+    validate_mattermost_auth(
+        payload,
+        mattermost_tokens=config.mattermost_tokens,
+        allowed_users=config.allowed_users,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def authenticate_bearer(authorization: str, config: BridgeConfig) -> AuthPrincipal:
-    prefix = "Bearer "
-    if not authorization.startswith(prefix):
-        raise BridgeError("unauthorized: bearer token required", 401, "unauthorized")
-
-    supplied = authorization[len(prefix) :].strip()
-    if not supplied:
-        raise BridgeError("unauthorized: bearer token required", 401, "unauthorized")
-
-    for token, principal in config.auth_tokens.items():
-        if secrets.compare_digest(supplied, token):
-            if config.allowed_users and principal.user not in config.allowed_users:
-                raise BridgeError("unauthorized: authenticated user is not allowlisted", 403, "permission_denied")
-            return principal
-
-    raise BridgeError("unauthorized: invalid bearer token", 401, "unauthorized")
+    return authenticate_bearer_principal(
+        authorization,
+        auth_tokens=config.auth_tokens,
+        allowed_users=config.allowed_users,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def reject_frontend_identity(payload: dict[str, str]) -> None:
-    forbidden = {"user", "user_name", "user_id", "internal_user"}
-    present = sorted(forbidden.intersection(payload))
-    if present:
-        names = ", ".join(present)
-        raise BridgeError(
-            f"user identity must come from bearer token, not request body ({names})",
-            400,
-            "invalid_request",
-        )
+    reject_frontend_payload_identity(
+        payload,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def get_project(config: BridgeConfig, name: str | None) -> Project:
@@ -582,19 +573,15 @@ def task_intake_id(task: dict[str, Any]) -> str:
 
 
 def is_admin(principal: AuthPrincipal) -> bool:
-    return principal.role.lower() == "admin"
+    return principal_is_admin(principal)
 
 
 def can_access_task(task: dict[str, Any], principal: AuthPrincipal) -> bool:
-    if is_admin(principal):
-        return True
-    return str(task.get("user", "")) == principal.user
+    return can_access_task_payload(task, principal)
 
 
 def can_access_intake(intent: dict[str, Any], principal: AuthPrincipal) -> bool:
-    if is_admin(principal):
-        return True
-    return str(intent.get("user", "")) == principal.user
+    return can_access_intake_payload(intent, principal)
 
 
 def authorize_codex_task(
