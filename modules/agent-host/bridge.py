@@ -42,6 +42,13 @@ from post_run_artifacts import (
     review_proposal_draft_fingerprint,
     review_proposal_draft_markdown,
 )
+from prepared_context import (
+    count_jsonl_records,
+    filter_source_task_artifact,
+    load_intake_questions_from_sources,
+    prepared_run_prompt,
+    prepared_run_summary,
+)
 from prepare_intent import (
     build_experiment_decision_gate,
     build_gray_areas,
@@ -1156,21 +1163,9 @@ def load_optional_intake_json_artifact(config: BridgeConfig, intake_id: str, fil
 
 def load_intake_questions(config: BridgeConfig, intake_id: str) -> list[str]:
     questions_data = load_optional_intake_json_artifact(config, intake_id, "QUESTIONS.json")
-    if isinstance(questions_data, dict):
-        items = questions_data.get("items")
-        if isinstance(items, list):
-            return [str(item) for item in items if str(item or "").strip()]
     path = intake_dir(config, intake_id) / "QUESTIONS.md"
-    if not path.exists():
-        return []
-    questions: list[str] = []
-    for raw_line in path.read_text().splitlines():
-        match = re.match(r"^\s*\d+\.\s+(.*)$", raw_line)
-        if match:
-            text = match.group(1).strip()
-            if text:
-                questions.append(text)
-    return questions
+    questions_markdown = path.read_text() if path.exists() else ""
+    return load_intake_questions_from_sources(questions_data, questions_markdown)
 
 
 def load_prepared_run_context(config: BridgeConfig, intake_id: str, principal: AuthPrincipal) -> dict[str, Any]:
@@ -1203,12 +1198,8 @@ def handle_codex_intake(payload: dict[str, str], config: BridgeConfig, principal
     followup_task_draft = load_optional_intake_json_artifact(config, intake_id, "FOLLOWUP_TASK_DRAFT.json")
     ledger_note_draft = load_optional_intake_json_artifact(config, intake_id, "LEDGER_NOTE_DRAFT.json")
     review_proposal_draft = load_optional_intake_json_artifact(config, intake_id, "REVIEW_PROPOSAL_DRAFT.json")
-    event_count = 0
     events_path = root / "TASK_INTAKE.events.jsonl"
-    if events_path.exists():
-        for raw_line in events_path.read_text().splitlines():
-            if raw_line.strip():
-                event_count += 1
+    event_count = count_jsonl_records(events_path.read_text() if events_path.exists() else "")
     return {
         "ok": True,
         "intake_id": intake_id,
@@ -1246,15 +1237,21 @@ def load_followup_prepare_seed(config: BridgeConfig, followup_task_id: str, prin
             "followup_draft_invalid",
         )
     root = intake_dir(config, intake_id)
-    execution_evaluation = read_json_object_if_exists(root / "EXECUTION_EVALUATION.json")
-    if execution_evaluation and str(execution_evaluation.get("task_id") or "") not in {"", followup_task_id}:
-        execution_evaluation = {}
-    ledger_note_draft = read_json_object_if_exists(root / "LEDGER_NOTE_DRAFT.json")
-    if ledger_note_draft and str(ledger_note_draft.get("source_task_id") or "") not in {"", followup_task_id}:
-        ledger_note_draft = {}
-    review_proposal_draft = read_json_object_if_exists(root / "REVIEW_PROPOSAL_DRAFT.json")
-    if review_proposal_draft and str(review_proposal_draft.get("source_task_id") or "") not in {"", followup_task_id}:
-        review_proposal_draft = {}
+    execution_evaluation = filter_source_task_artifact(
+        read_json_object_if_exists(root / "EXECUTION_EVALUATION.json"),
+        followup_task_id,
+        "task_id",
+    )
+    ledger_note_draft = filter_source_task_artifact(
+        read_json_object_if_exists(root / "LEDGER_NOTE_DRAFT.json"),
+        followup_task_id,
+        "source_task_id",
+    )
+    review_proposal_draft = filter_source_task_artifact(
+        read_json_object_if_exists(root / "REVIEW_PROPOSAL_DRAFT.json"),
+        followup_task_id,
+        "source_task_id",
+    )
     return {
         "task_id": followup_task_id,
         "source_intake_id": intake_id,
@@ -1408,83 +1405,6 @@ def maybe_run_evidence_retrieval(project: Project, prompt: str, answers: str, ob
     else:
         result["reason"] = "retrieval completed"
     return result
-def prepared_run_summary(bundle: dict[str, Any]) -> dict[str, Any]:
-    contract = bundle.get("contract") if isinstance(bundle.get("contract"), dict) else {}
-    taskbox = bundle.get("taskbox") if isinstance(bundle.get("taskbox"), dict) else {}
-    evidence = bundle.get("evidence_retrieval") if isinstance(bundle.get("evidence_retrieval"), dict) else {}
-    return {
-        "used": True,
-        "intake_id": bundle.get("intake_id"),
-        "objective": str(contract.get("objective") or ""),
-        "workspace_mode": str(taskbox.get("workspace_mode") or ""),
-        "allowed_runner": str(taskbox.get("allowed_runner") or ""),
-        "evidence_retrieval_decision": evidence.get("decision"),
-        "read_plan": list(evidence.get("read_plan") or []),
-    }
-
-
-def prepared_run_prompt(bundle: dict[str, Any], run_note: str) -> str:
-    contract = bundle.get("contract") if isinstance(bundle.get("contract"), dict) else {}
-    taskbox = bundle.get("taskbox") if isinstance(bundle.get("taskbox"), dict) else {}
-    evidence = bundle.get("evidence_retrieval") if isinstance(bundle.get("evidence_retrieval"), dict) else {}
-    prompt = str(contract.get("prompt") or "").strip()
-    answers = str(contract.get("answers_summary") or "").strip()
-    intake_id = str(bundle.get("intake_id") or "")
-    lines = [
-        "You are executing a prepared Codex task from Agent Host.",
-        "",
-        f"Prepared intake id: {intake_id or 'unknown'}",
-        f"Prepared objective: {contract.get('objective') or 'unknown'}",
-        f"Workspace mode: {taskbox.get('workspace_mode') or 'unknown'}",
-        f"Allowed runner: {taskbox.get('allowed_runner') or 'unknown'}",
-        f"Evidence decision: {evidence.get('decision') or 'none'}",
-        "",
-        "Prepared request:",
-        prompt or "(empty)",
-        "",
-    ]
-    if answers:
-        lines.extend([
-            "Prepare answers / constraints:",
-            answers,
-            "",
-        ])
-    read_plan = evidence.get("read_plan") if isinstance(evidence.get("read_plan"), list) else []
-    if read_plan:
-        lines.append("Read these sources before making conclusion-style claims:")
-        for item in read_plan[:5]:
-            if not isinstance(item, dict):
-                continue
-            path = str(item.get("path") or "unknown")
-            reason = str(item.get("reason") or "")
-            lines.append(f"- {path}" + (f": {reason}" if reason else ""))
-        lines.append("")
-    warnings = evidence.get("warnings") if isinstance(evidence.get("warnings"), list) else []
-    if warnings:
-        lines.append("Evidence warnings:")
-        for warning in warnings[:3]:
-            lines.append(f"- {warning}")
-        lines.append("")
-    if evidence.get("required") and evidence.get("decision") not in {None, "", "safe_to_answer"}:
-        lines.extend([
-            "Claim boundary:",
-            "- Do not present the answer as a finalized formal conclusion until the referenced evidence is reviewed.",
-            "- Prefer bounded analysis, verification, or reviewer-ready summaries over confident result claims.",
-            "",
-        ])
-    if run_note:
-        lines.extend([
-            "Additional run note from the user:",
-            run_note,
-            "",
-        ])
-    lines.extend([
-        "Current task:",
-        "Execute the prepared request while respecting the prepared evidence/read-plan context above.",
-    ])
-    return safe_intake_text("\n".join(lines).strip(), MAX_TASK_CHARS)
-
-
 def load_task_prepare_bundle(config: BridgeConfig, task: dict[str, Any]) -> dict[str, Any]:
     intake_id = task_intake_id(task)
     if not intake_id:
@@ -2240,7 +2160,7 @@ def handle_codex_run(payload: dict[str, str], config: BridgeConfig, principal: A
             if reason_text:
                 message += f"; reasons: {reason_text}"
             raise BridgeError(message, 409, "prepare_not_runnable")
-        prompt = prepared_run_prompt(prepared_bundle, prompt)
+        prompt = prepared_run_prompt(prepared_bundle, prompt, safe_intake_text, MAX_TASK_CHARS)
         metadata_obj.update({
             "intake_id": intake_id,
             "prepared_objective": prepared_summary.get("objective") or "",
