@@ -42,6 +42,7 @@ from post_run_artifacts import (
     review_proposal_draft_fingerprint,
     review_proposal_draft_markdown,
 )
+from evidence_retrieval import maybe_run_evidence_retrieval
 from prepared_context import (
     count_jsonl_records,
     filter_source_task_artifact,
@@ -1304,107 +1305,6 @@ def safe_intake_text(value: str, max_chars: int = 6000) -> str:
 
 def intake_answers_text(payload: dict[str, str]) -> str:
     return safe_intake_text(payload.get("answers") or payload.get("answer") or "", 4000)
-
-
-def evidence_index_root(project: Project) -> Path:
-    return project.root / "project_index"
-
-
-def evidence_search_script(project: Project) -> Path:
-    return project.root / "agent" / "bin" / "watchdog_doc_search.py"
-
-
-def maybe_run_evidence_retrieval(project: Project, prompt: str, answers: str, objective: str, signals: dict[str, bool]) -> dict[str, Any]:
-    query = safe_intake_text(prompt or answers or "", 2000)
-    required = should_consult_evidence_index(prompt, answers, objective, signals)
-    result: dict[str, Any] = {
-        "schema_version": 1,
-        "required": required,
-        "available": False,
-        "consulted": False,
-        "query": query,
-        "decision": None,
-        "warnings": [],
-        "read_plan": [],
-        "hits": [],
-        "reason": "",
-        "tool": "",
-    }
-    if not required:
-        result["reason"] = "query does not currently require metadata-first evidence retrieval"
-        return result
-
-    index_root = evidence_index_root(project)
-    if not index_root.exists():
-        result["reason"] = f"project_index is not available under {index_root}"
-        return result
-
-    script = evidence_search_script(project)
-    if not script.exists():
-        result["available"] = True
-        result["reason"] = f"evidence search tool is missing: {script}"
-        return result
-
-    result["available"] = True
-    result["tool"] = str(script)
-    try:
-        completed = subprocess.run(
-            [
-                sys.executable or "python3",
-                str(script),
-                "--project-root",
-                str(project.root),
-                "--query",
-                query,
-                "--json",
-            ],
-            cwd=str(project.root),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except Exception as exc:
-        result["consulted"] = True
-        result["decision"] = "index_error"
-        result["warnings"] = [f"evidence retrieval failed to start: {exc}"]
-        result["reason"] = "subprocess invocation failed"
-        return result
-
-    result["consulted"] = True
-    stderr = (completed.stderr or "").strip()
-    stdout = (completed.stdout or "").strip()
-    if completed.returncode != 0:
-        result["decision"] = "index_error"
-        result["warnings"] = [stderr or f"evidence retrieval exited with code {completed.returncode}"]
-        result["reason"] = "watchdog_doc_search.py returned a nonzero exit code"
-        return result
-    try:
-        payload = json.loads(stdout or "{}")
-    except json.JSONDecodeError as exc:
-        result["decision"] = "index_error"
-        result["warnings"] = [f"invalid JSON from evidence retrieval: {exc}"]
-        if stderr:
-            result["warnings"].append(stderr)
-        result["reason"] = "watchdog_doc_search.py returned invalid JSON"
-        return result
-    if not isinstance(payload, dict):
-        result["decision"] = "index_error"
-        result["warnings"] = ["evidence retrieval returned a non-object payload"]
-        result["reason"] = "watchdog_doc_search.py returned an unexpected payload shape"
-        return result
-
-    result["decision"] = payload.get("decision")
-    result["warnings"] = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
-    result["read_plan"] = payload.get("read_plan") if isinstance(payload.get("read_plan"), list) else []
-    result["hits"] = payload.get("hits") if isinstance(payload.get("hits"), list) else []
-    if not result["decision"]:
-        result["decision"] = "index_error"
-        result["warnings"].append("evidence retrieval did not return a decision")
-        result["reason"] = "missing decision in watchdog_doc_search.py payload"
-    else:
-        result["reason"] = "retrieval completed"
-    return result
 def load_task_prepare_bundle(config: BridgeConfig, task: dict[str, Any]) -> dict[str, Any]:
     intake_id = task_intake_id(task)
     if not intake_id:
@@ -1962,7 +1862,15 @@ def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principa
     questions = clarification_questions(gray_areas, signals)
     risk_class = intake_risk_class(objective, signals)
     status = "blocked" if risk_class == "high" else ("clarifying" if questions else "compiled")
-    evidence_retrieval = maybe_run_evidence_retrieval(project, prompt, answers, objective, signals)
+    evidence_retrieval = maybe_run_evidence_retrieval(
+        project.root,
+        prompt,
+        answers,
+        objective,
+        signals,
+        safe_intake_text,
+        should_consult_evidence_index,
+    )
     contract = make_task_contract(
         intake_id=intake_id,
         project=project,
