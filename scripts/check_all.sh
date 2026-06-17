@@ -12,7 +12,7 @@ echo "== codex-bridge =="
 
 echo
 echo "== agent-host =="
-(cd "$ROOT/modules/agent-host" && python3 -m py_compile bridge.py post_run_artifacts.py tests/test_bridge.py && python3 -m unittest tests/test_bridge.py)
+(cd "$ROOT/modules/agent-host" && python3 -m py_compile bridge.py post_run_artifacts.py prepare_intent.py tests/test_bridge.py tests/test_prepare_intent.py && python3 -m unittest discover -s tests)
 
 echo
 echo "== discord-adapter =="
