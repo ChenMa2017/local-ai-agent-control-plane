@@ -384,6 +384,11 @@ async function main() {
     expected_decision: "safe_to_answer",
     notes: "Should keep the stage06 successor-contract conclusion answerable from the local regression query."
   };
+  const currentRouteConclusionGoldenQuery = {
+    query: "current route conclusion",
+    expected_decision: "safe_to_answer",
+    notes: "Should keep the bounded route conclusion query answerable from the local regression query."
+  };
   const writeGoldenQueries = (queries) => writeJson(projectRoot, "project_index/golden_queries.json", {
     schema_version: "golden_queries.v0.1",
     queries
@@ -983,7 +988,7 @@ async function main() {
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.permission_guardian_required, false);
   assert.strictEqual(route.task_id, "bounded_cpu_missing_research_contract");
-  assert.match(route.reason, /missing research-contract fields/i);
+  assert.match(route.reason, /missing research-contract coverage/i);
   assert.match(route.stop_condition, /structured task contract/i);
 
   writeJson(projectRoot, "agent/TASK_BOX.json", {
@@ -1164,6 +1169,13 @@ async function main() {
       }
     ]
   });
+  route = runRoute(projectRoot);
+  assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
+  assert.strictEqual(route.permission_guardian_required, false);
+  assert.strictEqual(route.task_id, "bounded_cpu_conclusion_gate_missing_query");
+  assert.match(route.reason, /golden_queries/i);
+  assert.match(route.reason, /safe_to_answer/i);
+  writeGoldenQueries([...defaultGoldenQueries, currentRouteConclusionGoldenQuery]);
   route = runRoute(projectRoot);
   assert.strictEqual(route.primary_skill, "watchdog-orchestrator");
   assert.strictEqual(route.permission_guardian_required, false);

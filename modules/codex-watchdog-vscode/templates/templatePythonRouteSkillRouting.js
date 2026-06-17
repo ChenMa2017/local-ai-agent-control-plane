@@ -83,6 +83,36 @@ def conclusion_retrieval_gate_applies(task, task_box):
         )
     )
 
+def current_conclusion_golden_query_gap(task, task_box):
+    query = task_contract_value(task, task_box, "current_conclusion_query")
+    if not query:
+        return ""
+    golden_queries = load_json(ROOT / "project_index" / "golden_queries.json", {})
+    if not isinstance(golden_queries, dict):
+        return "project_index/golden_queries.json"
+    if golden_queries.get("schema_version") != "golden_queries.v0.1":
+        return "project_index/golden_queries.json"
+    queries = golden_queries.get("queries")
+    if not isinstance(queries, list):
+        return "project_index/golden_queries.json"
+    matched = None
+    for item in queries:
+        if not isinstance(item, dict):
+            continue
+        item_query = str(item.get("query") or "").strip()
+        if item_query == query:
+            matched = item
+            break
+    if not matched:
+        return f"project_index/golden_queries.json safe_to_answer registration for current_conclusion_query={query!r}"
+    expected_decision = str(matched.get("expected_decision") or "").strip()
+    if expected_decision != "safe_to_answer":
+        return (
+            "project_index/golden_queries.json expected_decision=safe_to_answer for "
+            + f"current_conclusion_query={query!r}"
+        )
+    return ""
+
 def research_program_task_type(capability):
     return {
         "local_workspace_copy": "bounded_execution",
@@ -197,6 +227,9 @@ def task_research_gate_gaps(task, task_box, route_canonical=None):
             gaps.append("current_conclusion_topic_id")
         if not task_contract_value(task, task_box, "current_conclusion_query"):
             gaps.append("current_conclusion_query")
+        golden_query_gap = current_conclusion_golden_query_gap(task, task_box)
+        if golden_query_gap:
+            gaps.append(golden_query_gap)
 
     return sorted(set(gaps))
 
@@ -704,8 +737,8 @@ def route():
             task, gaps = research_gap_pending[0]
             return {
                 "primary_skill": "watchdog-orchestrator",
-                "reason": f"{len(pending)} pending task(s) exist in {pending_source}; selected task is missing research-contract fields: {', '.join(gaps)}. Repair TASK_BOX/task metadata locally before executing the bounded step.",
-                "stop_condition": "Add the missing topic/claim/fairness/value-of-information fields to the structured task contract, refresh compact state, and stop.",
+                "reason": f"{len(pending)} pending task(s) exist in {pending_source}; selected task is missing research-contract coverage: {', '.join(gaps)}. Repair TASK_BOX/task metadata or the local retrieval regression registry before executing the bounded step.",
+                "stop_condition": "Repair the structured task contract and any missing local retrieval-regression registrations, refresh compact state, and stop.",
                 "permission_guardian_required": False,
                 "permission_guardian_result": "not_required",
                 "route_locked": True,
