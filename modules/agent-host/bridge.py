@@ -27,22 +27,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from post_run_artifacts import (
-    build_followup_task_draft,
-    build_ledger_note_draft,
-    build_review_proposal_draft,
-    execution_evaluation_decision,
-    execution_evaluation_fingerprint,
-    execution_evaluation_markdown,
-    execution_result_excerpt,
-    followup_task_draft_fingerprint,
-    followup_task_draft_markdown,
-    ledger_note_draft_fingerprint,
-    ledger_note_draft_markdown,
-    review_proposal_draft_fingerprint,
-    review_proposal_draft_markdown,
-)
 from evidence_retrieval import maybe_run_evidence_retrieval
+from execution_evaluation import (
+    ExecutionEvaluationDependencies,
+    maybe_attach_execution_evaluation,
+)
 from prepared_context import (
     count_jsonl_records,
     filter_source_task_artifact,
@@ -1296,6 +1285,18 @@ def append_jsonl(path: Path, event: dict[str, Any]) -> None:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
+def execution_evaluation_dependencies() -> ExecutionEvaluationDependencies:
+    return ExecutionEvaluationDependencies(
+        utc_now=utc_now,
+        intake_dir=intake_dir,
+        read_json_object_if_exists=read_json_object_if_exists,
+        write_json_atomic=write_json_atomic,
+        write_text_atomic=write_text_atomic,
+        append_jsonl=append_jsonl,
+        task_intake_id=task_intake_id,
+    )
+
+
 def safe_intake_text(value: str, max_chars: int = 6000) -> str:
     text = str(value or "").strip()
     if len(text) > max_chars:
@@ -1305,214 +1306,7 @@ def safe_intake_text(value: str, max_chars: int = 6000) -> str:
 
 def intake_answers_text(payload: dict[str, str]) -> str:
     return safe_intake_text(payload.get("answers") or payload.get("answer") or "", 4000)
-def load_task_prepare_bundle(config: BridgeConfig, task: dict[str, Any]) -> dict[str, Any]:
-    intake_id = task_intake_id(task)
-    if not intake_id:
-        return {}
-    root = intake_dir(config, intake_id)
-    if not root.exists():
-        return {"intake_id": intake_id, "available": False}
-    return {
-        "intake_id": intake_id,
-        "available": True,
-        "intent": read_json_object_if_exists(root / "INTENT_DRAFT.json"),
-        "contract": read_json_object_if_exists(root / "TASK_CONTRACT.json"),
-        "taskbox": read_json_object_if_exists(root / "TASKBOX_DRAFT.json"),
-        "preflight": read_json_object_if_exists(root / "POLICY_PREFLIGHT.json"),
-        "evidence_retrieval": read_json_object_if_exists(root / "EVIDENCE_RETRIEVAL.json"),
-    }
 
-
-def build_execution_evaluation(
-    config: BridgeConfig,
-    task_dir: Path,
-    task: dict[str, Any],
-    result_data: dict[str, Any],
-) -> dict[str, Any]:
-    prepare_bundle = load_task_prepare_bundle(config, task)
-    contract = prepare_bundle.get("contract") if isinstance(prepare_bundle.get("contract"), dict) else {}
-    evidence = prepare_bundle.get("evidence_retrieval") if isinstance(prepare_bundle.get("evidence_retrieval"), dict) else {}
-    intake_id = str(prepare_bundle.get("intake_id") or "")
-    execution_decision, next_action, summary = execution_evaluation_decision(task)
-    excerpt = execution_result_excerpt(result_data)
-    warnings: list[str] = []
-    evidence_decision = evidence.get("decision")
-    if evidence_decision and evidence_decision != "safe_to_answer":
-        warnings.append(
-            f"Prepared evidence decision remains {evidence_decision}; keep formal conclusion claims bounded until reviewer confirmation."
-        )
-    if str(task.get("status", "")) == "policy_violation":
-        warnings.append("Task hit a protected-path or policy boundary; inspect write audit evidence before any retry.")
-    if str(task.get("status", "")) == "done" and not excerpt:
-        warnings.append("Task finished without a non-empty safe result excerpt.")
-    if intake_id and not prepare_bundle.get("available"):
-        warnings.append("Prepared intake artifacts are missing; evaluation is based only on task metadata and safe result.")
-    return {
-        "schema_version": 1,
-        "intake_id": intake_id,
-        "task_id": str(task.get("task_id") or task_dir.name),
-        "workspace": str(task.get("project") or ""),
-        "objective": str(contract.get("objective") or ""),
-        "task_status": str(task.get("status") or ""),
-        "task_mode": str(task.get("mode") or ""),
-        "reference_task_id": str(task.get("reference_task_id") or ""),
-        "execution_decision": execution_decision,
-        "recommended_next_action": next_action,
-        "summary": summary,
-        "evidence_retrieval_decision": evidence_decision,
-        "result_available": bool(excerpt),
-        "safe_result_excerpt": excerpt,
-        "warnings": warnings,
-        "write_audit": {
-            "present": bool(task.get("write_audit_path")),
-            "changed_files_count": task.get("changed_files_count") if isinstance(task.get("changed_files_count"), int) else None,
-            "protected_path_violation": bool(task.get("protected_path_violation")),
-        },
-        "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
-    }
-
-
-def persist_execution_evaluation(config: BridgeConfig, evaluation: dict[str, Any]) -> dict[str, Any]:
-    intake_id = str(evaluation.get("intake_id") or "")
-    if not intake_id:
-        return evaluation
-    root = intake_dir(config, intake_id)
-    existing = read_json_object_if_exists(root / "EXECUTION_EVALUATION.json")
-    if existing and execution_evaluation_fingerprint(existing) == execution_evaluation_fingerprint(evaluation):
-        return existing
-    write_json_atomic(root / "EXECUTION_EVALUATION.json", evaluation)
-    write_text_atomic(root / "EXECUTION_EVALUATION.md", execution_evaluation_markdown(evaluation))
-    append_jsonl(
-        root / "TASK_INTAKE.events.jsonl",
-        {
-            "event": "execution_evaluated",
-            "intake_id": intake_id,
-            "task_id": evaluation.get("task_id"),
-            "task_status": evaluation.get("task_status"),
-            "execution_decision": evaluation.get("execution_decision"),
-            "recommended_next_action": evaluation.get("recommended_next_action"),
-            "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
-        },
-    )
-    return evaluation
-
-
-def persist_followup_task_draft(
-    config: BridgeConfig,
-    evaluation: dict[str, Any],
-    contract: dict[str, Any],
-    evidence: dict[str, Any],
-) -> dict[str, Any] | None:
-    intake_id = str(evaluation.get("intake_id") or "")
-    if not intake_id:
-        return None
-    draft = build_followup_task_draft(evaluation, contract, evidence)
-    root = intake_dir(config, intake_id)
-    existing = read_json_object_if_exists(root / "FOLLOWUP_TASK_DRAFT.json")
-    if existing and followup_task_draft_fingerprint(existing) == followup_task_draft_fingerprint(draft):
-        return existing
-    write_json_atomic(root / "FOLLOWUP_TASK_DRAFT.json", draft)
-    write_text_atomic(root / "FOLLOWUP_TASK_DRAFT.md", followup_task_draft_markdown(draft))
-    append_jsonl(
-        root / "TASK_INTAKE.events.jsonl",
-        {
-            "event": "followup_task_drafted",
-            "intake_id": intake_id,
-            "source_task_id": evaluation.get("task_id"),
-            "recommended_next_action": draft.get("recommended_next_action"),
-            "requires_prepare": bool(draft.get("requires_prepare")),
-            "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
-        },
-    )
-    return draft
-
-
-def persist_ledger_note_draft(
-    config: BridgeConfig,
-    evaluation: dict[str, Any],
-    contract: dict[str, Any],
-    evidence: dict[str, Any],
-) -> dict[str, Any] | None:
-    intake_id = str(evaluation.get("intake_id") or "")
-    if not intake_id:
-        return None
-    draft = build_ledger_note_draft(evaluation, contract, evidence)
-    root = intake_dir(config, intake_id)
-    existing = read_json_object_if_exists(root / "LEDGER_NOTE_DRAFT.json")
-    if existing and ledger_note_draft_fingerprint(existing) == ledger_note_draft_fingerprint(draft):
-        return existing
-    write_json_atomic(root / "LEDGER_NOTE_DRAFT.json", draft)
-    write_text_atomic(root / "LEDGER_NOTE_DRAFT.md", ledger_note_draft_markdown(draft))
-    append_jsonl(
-        root / "TASK_INTAKE.events.jsonl",
-        {
-            "event": "ledger_note_drafted",
-            "intake_id": intake_id,
-            "source_task_id": evaluation.get("task_id"),
-            "recommended_next_action": draft.get("recommended_next_action"),
-            "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
-        },
-    )
-    return draft
-
-
-def persist_review_proposal_draft(
-    config: BridgeConfig,
-    evaluation: dict[str, Any],
-    contract: dict[str, Any],
-    evidence: dict[str, Any],
-) -> dict[str, Any] | None:
-    intake_id = str(evaluation.get("intake_id") or "")
-    if not intake_id:
-        return None
-    draft = build_review_proposal_draft(evaluation, contract, evidence)
-    if draft is None:
-        return None
-    root = intake_dir(config, intake_id)
-    existing = read_json_object_if_exists(root / "REVIEW_PROPOSAL_DRAFT.json")
-    if existing and review_proposal_draft_fingerprint(existing) == review_proposal_draft_fingerprint(draft):
-        return existing
-    write_json_atomic(root / "REVIEW_PROPOSAL_DRAFT.json", draft)
-    write_text_atomic(root / "REVIEW_PROPOSAL_DRAFT.md", review_proposal_draft_markdown(draft))
-    append_jsonl(
-        root / "TASK_INTAKE.events.jsonl",
-        {
-            "event": "review_proposal_drafted",
-            "intake_id": intake_id,
-            "source_task_id": evaluation.get("task_id"),
-            "review_scope": draft.get("review_scope"),
-            "requires_human_review": bool(draft.get("requires_human_review")),
-            "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
-        },
-    )
-    return draft
-
-
-def maybe_attach_execution_evaluation(
-    config: BridgeConfig,
-    task_dir: Path,
-    task: dict[str, Any],
-    result_data: dict[str, Any],
-) -> dict[str, dict[str, Any]]:
-    intake_id = task_intake_id(task)
-    if not intake_id:
-        return {}
-    evaluation = build_execution_evaluation(config, task_dir, task, result_data)
-    evaluation = persist_execution_evaluation(config, evaluation)
-    prepare_bundle = load_task_prepare_bundle(config, task)
-    contract = prepare_bundle.get("contract") if isinstance(prepare_bundle.get("contract"), dict) else {}
-    evidence = prepare_bundle.get("evidence_retrieval") if isinstance(prepare_bundle.get("evidence_retrieval"), dict) else {}
-    followup_task_draft = persist_followup_task_draft(config, evaluation, contract, evidence)
-    ledger_note_draft = persist_ledger_note_draft(config, evaluation, contract, evidence)
-    review_proposal_draft = persist_review_proposal_draft(config, evaluation, contract, evidence)
-    attachments: dict[str, dict[str, Any]] = {"execution_evaluation": evaluation}
-    if followup_task_draft:
-        attachments["followup_task_draft"] = followup_task_draft
-    if ledger_note_draft:
-        attachments["ledger_note_draft"] = ledger_note_draft
-    if review_proposal_draft:
-        attachments["review_proposal_draft"] = review_proposal_draft
-    return attachments
 
 
 def make_task_contract(
@@ -2165,7 +1959,15 @@ def handle_codex_query(
             raise BridgeError(f"codex-bridge returned invalid JSON: {exc}", 500) from exc
         intake_id = task_intake_id(task)
         if command == "result" and not raw_requested:
-            rendered.update(maybe_attach_execution_evaluation(config, task_dir, task, rendered))
+            rendered.update(
+                maybe_attach_execution_evaluation(
+                    config,
+                    task_dir,
+                    task,
+                    rendered,
+                    execution_evaluation_dependencies(),
+                )
+            )
         if intake_id:
             rendered["intake_id"] = intake_id
         rendered.update({
