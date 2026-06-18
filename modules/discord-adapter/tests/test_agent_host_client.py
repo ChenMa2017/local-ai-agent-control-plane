@@ -349,6 +349,22 @@ class BotHelperTests(unittest.TestCase):
             {
                 "text": "safe result summary",
                 "raw": False,
+                "operator_summary": {
+                    "overall_status": "review_required",
+                    "blocked": True,
+                    "operator_message": "The result exists, but review or bounded claim resolution is still required before broader reuse.",
+                    "evidence_decision": "stale_conclusion",
+                    "blockers": [
+                        {"kind": "review_proposal_required", "reason": "Review is required before promoting the bounded claim."}
+                    ],
+                    "unmet_requirements": ["bounded_only"],
+                    "promotion_states": {"current_conclusion": "bounded_only"},
+                    "next_safe_action": {
+                        "kind": "resolve_review_proposal",
+                        "description": "Resolve the review proposal.",
+                        "target_path": "research/reviews/current.md",
+                    },
+                },
                 "execution_evaluation": {
                     "execution_decision": "result_ready_for_review",
                     "recommended_next_action": "review_result",
@@ -373,6 +389,10 @@ class BotHelperTests(unittest.TestCase):
             200,
         )
 
+        self.assertIn("Operator summary:", response)
+        self.assertIn("resolve_review_proposal", response)
+        self.assertIn("research/reviews/current.md", response)
+        self.assertIn("bounded_only", response)
         self.assertIn("Evaluation:", response)
         self.assertIn("Follow-up draft:", response)
         self.assertIn("Ledger note draft:", response)
@@ -445,6 +465,18 @@ class BotHelperTests(unittest.TestCase):
                 "contract": {"objective": "local_workspace_copy", "risk_class": "medium"},
                 "preflight": {"ok": False, "reasons": ["Task intent still has unresolved gray areas."]},
                 "ready_to_run": False,
+                "operator_summary": {
+                    "overall_status": "blocked",
+                    "blocked": True,
+                    "operator_message": "Prepare is blocked on clarification; answer the open questions before rerunning prepare.",
+                    "blockers": [{"kind": "clarification_required", "reason": "请说明允许改动的文件范围。"}],
+                    "unmet_requirements": ["请说明允许改动的文件范围。"],
+                    "promotion_states": {},
+                    "next_safe_action": {
+                        "kind": "reply_to_questions",
+                        "description": "Answer the outstanding clarification questions.",
+                    },
+                },
                 "execution_evaluation": {
                     "execution_decision": "result_ready_for_review",
                     "recommended_next_action": "review_result",
@@ -470,6 +502,8 @@ class BotHelperTests(unittest.TestCase):
 
         self.assertIn("Intake 状态", response)
         self.assertIn("intake_20260616_000001_ab12cd", response)
+        self.assertIn("Operator summary:", response)
+        self.assertIn("reply_to_questions", response)
         self.assertIn("请说明允许改动的文件范围", response)
         self.assertIn("Evaluation:", response)
         self.assertIn("Follow-up draft:", response)
@@ -496,12 +530,39 @@ class BotHelperTests(unittest.TestCase):
                         "review_scope": "report_only",
                         "requires_human_review": False,
                     },
+                    "operator_summary": {
+                        "overall_status": "review_required",
+                        "blocked": True,
+                        "operator_message": "The result exists, but review or bounded claim resolution is still required before broader reuse.",
+                        "evidence_decision": "stale_conclusion",
+                        "blockers": [{"kind": "review_proposal_required", "reason": "Review is required."}],
+                        "unmet_requirements": ["bounded_only"],
+                        "promotion_states": {"current_conclusion": "bounded_only"},
+                        "next_safe_action": {
+                            "kind": "resolve_review_proposal",
+                            "description": "Resolve the review proposal.",
+                            "target_path": "research/reviews/current.md",
+                        },
+                    },
                 },
                 "status": "prepared",
                 "questions": [],
                 "contract": {"objective": "report_only", "risk_class": "low"},
                 "preflight": {"ok": True, "required_action": "run", "reasons": ["Evidence retrieval returned decision=stale_conclusion; keep formal conclusion claims bounded until the referenced evidence is reviewed."]},
                 "ready_to_run": True,
+                "operator_summary": {
+                    "overall_status": "ready_to_run",
+                    "blocked": False,
+                    "operator_message": "Prepare is complete and the bounded task is ready to run.",
+                    "evidence_decision": "stale_conclusion",
+                    "blockers": [],
+                    "unmet_requirements": [],
+                    "promotion_states": {},
+                    "next_safe_action": {
+                        "kind": "queue_run",
+                        "description": "Queue the prepared bounded task.",
+                    },
+                },
                 "evidence_retrieval": {
                     "required": True,
                     "decision": "stale_conclusion",
@@ -520,6 +581,10 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("previous_result: result_ready_for_review -> review_result", response)
         self.assertIn("previous_review: report_only / recommended", response)
         self.assertIn("previous_ledger_note: ready", response)
+        self.assertIn("Operator summary:", response)
+        self.assertIn("Previous operator summary:", response)
+        self.assertIn("queue_run", response)
+        self.assertIn("resolve_review_proposal", response)
         self.assertIn("证据提醒", response)
         self.assertIn("formal/current_best.md", response)
         self.assertIn("不应被当作正式已确认结论", response)
@@ -601,6 +666,20 @@ class BotHelperTests(unittest.TestCase):
                 "total_pages": 3,
                 "has_next": True,
                 "text": "/home/example/Documents/My_App_Dev/x Authorization: Bearer demo",
+                "operator_summary": {
+                    "overall_status": "review_required",
+                    "blocked": True,
+                    "operator_message": "The result exists, but review or bounded claim resolution is still required before broader reuse.",
+                    "evidence_decision": "stale_conclusion",
+                    "blockers": [{"kind": "review_proposal_required", "reason": "Authorization: Bearer demo"}],
+                    "unmet_requirements": ["/home/example/private"],
+                    "promotion_states": {"current_conclusion": "bounded_only"},
+                    "next_safe_action": {
+                        "kind": "resolve_review_proposal",
+                        "description": "Inspect /home/example/reviews/current.md",
+                        "target_path": "/home/example/reviews/current.md",
+                    },
+                },
                 "execution_evaluation": {
                     "execution_decision": "result_ready_for_review",
                     "recommended_next_action": "review_result",
@@ -626,6 +705,8 @@ class BotHelperTests(unittest.TestCase):
 
         self.assertIn("intake_id: intake_20260616_000001_ab12cd", response)
         self.assertIn("Page: 1/3", response)
+        self.assertIn("Operator summary:", response)
+        self.assertIn("resolve_review_proposal", response)
         self.assertIn("Evaluation:", response)
         self.assertIn("Follow-up draft:", response)
         self.assertIn("Ledger note draft:", response)
@@ -809,6 +890,19 @@ class BotHelperTests(unittest.TestCase):
             {"text": "task_id: task_123\nstatus: done\n"},
             {
                 "text": "safe result summary",
+                "operator_summary": {
+                    "overall_status": "review_required",
+                    "blocked": True,
+                    "operator_message": "The result exists, but review or bounded claim resolution is still required before broader reuse.",
+                    "evidence_decision": "stale_conclusion",
+                    "blockers": [{"kind": "review_proposal_required", "reason": "Review is required."}],
+                    "unmet_requirements": ["bounded_only"],
+                    "promotion_states": {"current_conclusion": "bounded_only"},
+                    "next_safe_action": {
+                        "kind": "resolve_review_proposal",
+                        "description": "Resolve the review proposal.",
+                    },
+                },
                 "execution_evaluation": {
                     "execution_decision": "result_ready_for_review",
                     "recommended_next_action": "review_result",
@@ -832,9 +926,34 @@ class BotHelperTests(unittest.TestCase):
             500,
         )
 
+        self.assertIn("Operator summary:", response)
+        self.assertIn("resolve_review_proposal", response)
         self.assertIn("Ledger note draft:", response)
         self.assertIn("Review proposal draft:", response)
         self.assertIn("recommended", response)
+
+    def test_format_operator_summary_sanitizes_sensitive_fields(self):
+        response = bot.format_operator_summary(
+            {
+                "overall_status": "review_required",
+                "blocked": True,
+                "operator_message": "Inspect /home/example/private with Authorization: Bearer demo",
+                "evidence_decision": "stale_conclusion",
+                "blockers": [{"kind": "review_proposal_required", "reason": "Authorization: Bearer demo"}],
+                "unmet_requirements": ["/home/example/private"],
+                "promotion_states": {"current_conclusion": "bounded_only"},
+                "next_safe_action": {
+                    "kind": "resolve_review_proposal",
+                    "description": "Inspect /home/example/reviews/current.md",
+                    "target_path": "/home/example/reviews/current.md",
+                },
+            }
+        )
+
+        self.assertIn("Operator summary:", response)
+        self.assertIn("Authorization: Bearer [REDACTED]", response)
+        self.assertNotIn("/home/example", response)
+        self.assertNotIn("Bearer demo", response)
 
     def test_thread_intro_sanitizes_prompt_secrets(self):
         response = bot.format_thread_intro(

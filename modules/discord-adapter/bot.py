@@ -479,6 +479,7 @@ def format_prepare_response(
     preflight = data.get("preflight") if isinstance(data.get("preflight"), dict) else {}
     questions = data.get("questions") if isinstance(data.get("questions"), list) else []
     evidence = data.get("evidence_retrieval") if isinstance(data.get("evidence_retrieval"), dict) else {}
+    operator_summary = data.get("operator_summary") if isinstance(data.get("operator_summary"), dict) else {}
     followup_context = data.get("followup_context") if isinstance(data.get("followup_context"), dict) else {}
     lines = [
         "任务准备结果：",
@@ -496,6 +497,11 @@ def format_prepare_response(
         execution = followup_context.get("execution_evaluation") if isinstance(followup_context.get("execution_evaluation"), dict) else {}
         review_proposal = followup_context.get("review_proposal_draft") if isinstance(followup_context.get("review_proposal_draft"), dict) else {}
         ledger_note = followup_context.get("ledger_note_draft") if isinstance(followup_context.get("ledger_note_draft"), dict) else {}
+        prior_operator_summary = (
+            followup_context.get("operator_summary")
+            if isinstance(followup_context.get("operator_summary"), dict)
+            else {}
+        )
         if execution:
             lines.append(
                 "previous_result: "
@@ -513,8 +519,12 @@ def format_prepare_response(
             )
         if ledger_note:
             lines.append("previous_ledger_note: ready")
+        if prior_operator_summary:
+            lines.extend(["", format_operator_summary(prior_operator_summary, "Previous operator summary:")])
     if evidence.get("required"):
         lines.append(f"evidence: {evidence.get('decision') or 'unavailable'}")
+    if operator_summary:
+        lines.extend(["", format_operator_summary(operator_summary)])
     if questions:
         lines.extend(["", "还需要你补充："])
         for idx, question in enumerate(questions, start=1):
@@ -564,6 +574,7 @@ def format_intake_response(data: dict[str, Any], command_prefix: str = "agent") 
     contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
     preflight = data.get("preflight") if isinstance(data.get("preflight"), dict) else {}
     evidence = data.get("evidence_retrieval") if isinstance(data.get("evidence_retrieval"), dict) else {}
+    operator_summary = data.get("operator_summary") if isinstance(data.get("operator_summary"), dict) else {}
     questions = data.get("questions") if isinstance(data.get("questions"), list) else []
     lines = [
         "Intake 状态：",
@@ -578,6 +589,8 @@ def format_intake_response(data: dict[str, Any], command_prefix: str = "agent") 
     ]
     if evidence.get("required"):
         lines.append(f"evidence: {evidence.get('decision') or 'unavailable'}")
+    if operator_summary:
+        lines.extend(["", format_operator_summary(operator_summary)])
     if questions:
         lines.extend(["", "还需要你补充："])
         for idx, question in enumerate(questions[:5], start=1):
@@ -647,6 +660,47 @@ def format_execution_evaluation(evaluation: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_operator_summary(summary: dict[str, Any], title: str = "Operator summary:") -> str:
+    overall_status = sanitize_discord_text(str(summary.get("overall_status") or "unknown"))
+    operator_message = sanitize_discord_text(str(summary.get("operator_message") or ""))
+    lines = [
+        title,
+        f"- status: {overall_status}",
+        f"- blocked: {'yes' if summary.get('blocked') else 'no'}",
+    ]
+    if operator_message:
+        lines.append(f"- summary: {operator_message}")
+    evidence_decision = sanitize_discord_text(str(summary.get("evidence_decision") or ""))
+    if evidence_decision:
+        lines.append(f"- evidence: {evidence_decision}")
+    next_safe_action = summary.get("next_safe_action") if isinstance(summary.get("next_safe_action"), dict) else {}
+    if next_safe_action:
+        lines.append(f"- next: {sanitize_discord_text(str(next_safe_action.get('kind') or 'none'))}")
+        description = sanitize_discord_text(str(next_safe_action.get("description") or ""))
+        if description:
+            lines.append(f"- next_detail: {description}")
+        target_path = sanitize_discord_text(str(next_safe_action.get("target_path") or ""))
+        if target_path:
+            lines.append(f"- target: {target_path}")
+    blockers = summary.get("blockers") if isinstance(summary.get("blockers"), list) else []
+    if blockers and isinstance(blockers[0], dict):
+        blocker_kind = sanitize_discord_text(str(blockers[0].get("kind") or "unknown"))
+        blocker_reason = sanitize_discord_text(str(blockers[0].get("reason") or ""))
+        lines.append(f"- blocker: {blocker_kind}" + (f" ({blocker_reason})" if blocker_reason else ""))
+    unmet_requirements = summary.get("unmet_requirements") if isinstance(summary.get("unmet_requirements"), list) else []
+    if unmet_requirements:
+        lines.append(f"- unmet: {sanitize_discord_text(str(unmet_requirements[0]))}")
+    promotion_states = summary.get("promotion_states") if isinstance(summary.get("promotion_states"), dict) else {}
+    promotion_parts = [
+        f"{key}={sanitize_discord_text(str(value))}"
+        for key, value in promotion_states.items()
+        if value not in {None, ""}
+    ]
+    if promotion_parts:
+        lines.append(f"- promotions: {', '.join(promotion_parts[:3])}")
+    return "\n".join(lines)
+
+
 def format_followup_task_draft(draft: dict[str, Any], command_prefix: str = "agent") -> str:
     title = sanitize_discord_text(str(draft.get("title") or "Prepare the next bounded step"))
     next_action = sanitize_discord_text(str(draft.get("recommended_next_action") or "review"))
@@ -700,11 +754,14 @@ def format_task_response(status_data: dict[str, Any], result_data: dict[str, Any
         ])
     summary = sanitize_discord_text(result_text.strip() or "(empty result)")
     title = "Task done." if status == "done" else "Task finished with policy violation."
+    operator_summary = result_data.get("operator_summary") if isinstance(result_data.get("operator_summary"), dict) else {}
     evaluation = result_data.get("execution_evaluation") if isinstance(result_data.get("execution_evaluation"), dict) else {}
     followup = result_data.get("followup_task_draft") if isinstance(result_data.get("followup_task_draft"), dict) else {}
     ledger_note = result_data.get("ledger_note_draft") if isinstance(result_data.get("ledger_note_draft"), dict) else {}
     review_proposal = result_data.get("review_proposal_draft") if isinstance(result_data.get("review_proposal_draft"), dict) else {}
     body = [title]
+    if operator_summary:
+        body.extend(["", format_operator_summary(operator_summary)])
     if evaluation:
         body.extend(["", format_execution_evaluation(evaluation)])
     if followup:
@@ -724,6 +781,7 @@ def format_task_page_response(data: dict[str, Any], max_chars: int, command_pref
     total_pages = data.get("total_pages", "?")
     text = sanitize_discord_text(str(data.get("text") or ""))
     text, truncated = truncate_text(text, max_chars)
+    operator_summary = data.get("operator_summary") if isinstance(data.get("operator_summary"), dict) else {}
     evaluation = data.get("execution_evaluation") if isinstance(data.get("execution_evaluation"), dict) else {}
     followup = data.get("followup_task_draft") if isinstance(data.get("followup_task_draft"), dict) else {}
     ledger_note = data.get("ledger_note_draft") if isinstance(data.get("ledger_note_draft"), dict) else {}
@@ -744,6 +802,8 @@ def format_task_page_response(data: dict[str, Any], max_chars: int, command_pref
     if intake_id:
         lines.append(f"intake_id: {intake_id}")
     if page == 1:
+        if operator_summary:
+            lines.extend(["", format_operator_summary(operator_summary)])
         if evaluation:
             lines.extend(["", format_execution_evaluation(evaluation)])
         if followup:
@@ -769,6 +829,7 @@ def format_completion_message(
         result_text = str(result_data.get("text", "") or "")
         title = "任务完成。" if status == "done" else "任务触碰了 protected path policy，已结束。"
         summary = sanitize_discord_text(result_text.strip() or "(empty result)")
+        operator_summary = result_data.get("operator_summary") if isinstance(result_data.get("operator_summary"), dict) else {}
         evaluation = result_data.get("execution_evaluation") if isinstance(result_data.get("execution_evaluation"), dict) else {}
         followup = result_data.get("followup_task_draft") if isinstance(result_data.get("followup_task_draft"), dict) else {}
         ledger_note = result_data.get("ledger_note_draft") if isinstance(result_data.get("ledger_note_draft"), dict) else {}
@@ -780,6 +841,8 @@ def format_completion_message(
             "",
             f"Task: {task_id}",
         ]
+        if operator_summary:
+            lines.extend(["", format_operator_summary(operator_summary)])
         if evaluation:
             lines.extend(["", format_execution_evaluation(evaluation)])
         if followup:

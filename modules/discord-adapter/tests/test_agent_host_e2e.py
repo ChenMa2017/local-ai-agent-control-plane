@@ -238,6 +238,7 @@ class AgentHostHttpE2ETests(unittest.TestCase):
                 self.assertEqual(prepared["status"], "prepared")
                 self.assertTrue(prepared["ready_to_run"])
                 self.assertEqual(prepared["evidence_retrieval"]["decision"], "stale_conclusion")
+                self.assertEqual(prepared["operator_summary"]["overall_status"], "ready_to_run")
                 intake_id = str(prepared["intake_id"])
 
                 queued = client.run(
@@ -267,6 +268,7 @@ class AgentHostHttpE2ETests(unittest.TestCase):
                 self.assertEqual(page["execution_evaluation"]["execution_decision"], "result_ready_for_review")
                 self.assertEqual(page["followup_task_draft"]["recommended_next_action"], "review_result")
                 self.assertEqual(page["review_proposal_draft"]["review_scope"], "report_only")
+                self.assertEqual(page["operator_summary"]["overall_status"], "review_required")
 
                 intake = client.intake(intake_id)
                 self.assertTrue(intake["ok"])
@@ -275,6 +277,7 @@ class AgentHostHttpE2ETests(unittest.TestCase):
                 self.assertEqual(intake["followup_task_draft"]["source_task_id"], "task_20260618_120000_discorde2e01")
                 self.assertEqual(intake["ledger_note_draft"]["target_path_hint"], "research/LEDGER_NOTES.md")
                 self.assertEqual(intake["review_proposal_draft"]["review_scope"], "report_only")
+                self.assertEqual(intake["operator_summary"]["overall_status"], "review_required")
                 self.assertGreaterEqual(intake["event_count"], 5)
             finally:
                 server.shutdown()

@@ -249,9 +249,9 @@ If clarification is still needed, the adapter returns the generated questions pl
 
 `followup_task_id` is also optional on `/<prefix>_prepare`. When present, the adapter can omit `prompt` and let Agent Host seed a fresh intake from the latest `FOLLOWUP_TASK_DRAFT` attached to that finished task. Inside a bot-created task thread, calling `/<prefix>_prepare` with no prompt or intake id now falls back to that thread's latest task id as the follow-up seed.
 
-When that seeded follow-up also has post-run context such as `execution_evaluation`, `ledger_note_draft`, or `review_proposal_draft`, the adapter now surfaces a short summary in the prepare reply. This helps the user see whether they are continuing a normal review loop, a stale-claim review, or a policy-review handoff.
+When that seeded follow-up also has post-run context such as `execution_evaluation`, `ledger_note_draft`, `review_proposal_draft`, or `operator_summary`, the adapter now surfaces a short summary in the prepare reply. This helps the user see whether they are continuing a normal review loop, a stale-claim review, or a policy-review handoff.
 
-`/<prefix>_intake intake_id:...` is the read-only way to reopen a saved intake bundle from Discord. It shows the current `status / objective / preflight / questions`, and when available it also includes `execution_evaluation`, `followup_task_draft`, `ledger_note_draft`, and `review_proposal_draft`.
+`/<prefix>_intake intake_id:...` is the read-only way to reopen a saved intake bundle from Discord. It shows the current `status / objective / preflight / questions`, and when available it also includes `operator_summary`, `execution_evaluation`, `followup_task_draft`, `ledger_note_draft`, and `review_proposal_draft`.
 
 When Agent Host also performs metadata-first evidence retrieval, the prepare response now surfaces the retrieval `decision`, any warnings, and a short `read_plan` summary directly in Discord. This lets the user see whether the request looks like a safe-to-answer conclusion, a stale conclusion, or an auxiliary-only match before turning it into `/run`.
 
@@ -263,13 +263,13 @@ If the request looks like a real experiment and Agent Host marks `DECISION_GATE.
 
 `reference_task_id` is optional. When provided, the new task becomes a follow-up to a previous task. The Agent Host checks that the authenticated user can access the referenced task, and `codex-bridge` injects only the previous task's safe result excerpt into the new Codex prompt. If `/agent_run` is used inside a bot-created task thread and `reference_task_id` is omitted, the adapter uses that thread's current task as the reference.
 
-When a prepared run later finishes and Agent Host returns `execution_evaluation` inside `/codex/result`, the adapter now surfaces that evaluation summary in task replies and completion notifications. Users can see whether the result is ready for review, needs log inspection, or stopped on a policy boundary without opening the intake directory by hand.
+When a prepared run later finishes and Agent Host returns `operator_summary` and `execution_evaluation` inside `/codex/result`, the adapter now surfaces both the aggregated operator state and the execution summary in task replies and completion notifications. Users can see whether the result is ready for review, needs log inspection, or stopped on a policy boundary without opening the intake directory by hand.
 
 If Agent Host also returns `followup_task_draft`, the adapter now shows that draft's title and recommended next action in the same reply. This keeps the user in a structured `/prepare -> /run -> /prepare` loop instead of forcing them to invent the next prompt from memory.
 
 If Agent Host also returns `ledger_note_draft` or `review_proposal_draft`, the adapter surfaces those summaries in the same task reply / completion message. This gives the user an immediate hint that the result is ready to be turned into a bounded ledger note, or that a human/policy review bundle should be handled before any retry or claim promotion.
 
-The same rule now applies to `/<prefix>_task_page` page 1 for long results: the first paged reply can still show evaluation / follow-up / review summaries before the first safe-result slice, so paging does not erase the structured next-step context.
+The same rule now applies to `/<prefix>_task_page` page 1 for long results: the first paged reply can still show operator / evaluation / follow-up / review summaries before the first safe-result slice, so paging does not erase the structured next-step context.
 
 If you reply directly to a bot-authored task message inside a bot-created task thread, the adapter treats that reply as a follow-up task request in the same thread. It tries to resolve `reference_task_id` from the replied bot message first, then falls back to the thread's latest known task. This makes the thread behave more like an email chain:
 
