@@ -600,6 +600,72 @@ class BridgeTests(unittest.TestCase):
                 )
             self.assertEqual(ctx.exception.status, 400)
 
+    def test_codex_prepare_rejects_followup_task_without_prepared_intake(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            self.write_codex_task(
+                root,
+                "task_20260618_120000_followmissing",
+                user="chenma",
+                status="done",
+            )
+
+            with self.assertRaises(bridge.BridgeError) as ctx:
+                bridge.handle_codex_prepare(
+                    {
+                        "followup_task_id": "task_20260618_120000_followmissing",
+                        "source": "discord",
+                    },
+                    config,
+                    bridge.AuthPrincipal(user="chenma", role="admin"),
+                )
+
+            self.assertEqual(ctx.exception.status, 409)
+            self.assertEqual(ctx.exception.code, "followup_draft_unavailable")
+            self.assertIn("not linked to a prepared intake", str(ctx.exception))
+
+    def test_codex_prepare_rejects_followup_task_with_mismatched_draft_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            intake_id = "intake_20260618_demo_followinvalid"
+            intake_root = root / ".codex-bridge" / "intake" / intake_id
+            intake_root.mkdir(parents=True)
+            (intake_root / "FOLLOWUP_TASK_DRAFT.json").write_text(
+                json.dumps(
+                    {
+                        "source_task_id": "task_20260618_120000_other",
+                        "workspace": "demo",
+                        "prompt": "Review the safe result before promotion.",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            self.write_codex_task(
+                root,
+                "task_20260618_120000_followinvalid",
+                user="chenma",
+                status="done",
+                extra={"adapter_metadata": {"intake_id": intake_id}},
+            )
+
+            with self.assertRaises(bridge.BridgeError) as ctx:
+                bridge.handle_codex_prepare(
+                    {
+                        "followup_task_id": "task_20260618_120000_followinvalid",
+                        "source": "discord",
+                    },
+                    config,
+                    bridge.AuthPrincipal(user="chenma", role="admin"),
+                )
+
+            self.assertEqual(ctx.exception.status, 409)
+            self.assertEqual(ctx.exception.code, "followup_draft_invalid")
+            self.assertIn("source does not match task", str(ctx.exception))
+
     def test_codex_prepare_blocks_high_risk_training_request(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
