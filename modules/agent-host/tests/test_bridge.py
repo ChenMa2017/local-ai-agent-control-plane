@@ -1362,6 +1362,123 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(len(review_events), 1)
             self.assertEqual(review_events[0]["review_scope"], "report_only")
 
+    def test_result_replaces_post_run_artifacts_when_second_task_reuses_same_intake(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "codex-bridge.js"
+            script.parent.mkdir()
+            script.write_text(
+                "console.log(JSON.stringify({task_id:'task_20260616_120000_evalshared', text:'safe result summary', raw:false, redacted:true, truncated:false}));\n"
+            )
+            (root / "project_index").mkdir(parents=True)
+            self.write_watchdog_doc_search(
+                root,
+                {
+                    "query": "What is the current best candidate?",
+                    "decision": "stale_conclusion",
+                    "warnings": ["matching current conclusion is stale and should be rechecked before citation"],
+                    "read_plan": [
+                        {"path": "formal/current_best.md", "reason": "supports current conclusion: current best candidate"}
+                    ],
+                    "hits": [
+                        {"kind": "current_conclusion", "id": "current_best_candidate", "score": 6.0}
+                    ],
+                },
+            )
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "What is the current best candidate?",
+                    "source": "web",
+                },
+                config,
+                principal,
+            )
+            intake_id = prepared["intake_id"]
+            self.write_codex_task(
+                root,
+                "task_20260616_120000_evalshared01",
+                user="chenma",
+                status="done",
+                extra={
+                    "adapter_metadata": {
+                        "intake_id": intake_id,
+                        "prepared_objective": "report_only",
+                        "evidence_retrieval_decision": "stale_conclusion",
+                    }
+                },
+            )
+            self.write_codex_task(
+                root,
+                "task_20260616_120000_evalshared02",
+                user="chenma",
+                status="done",
+                updated_at="2026-05-23T12:02:00.000Z",
+                extra={
+                    "adapter_metadata": {
+                        "intake_id": intake_id,
+                        "prepared_objective": "report_only",
+                        "evidence_retrieval_decision": "stale_conclusion",
+                    }
+                },
+            )
+
+            first = bridge.handle_codex_query(
+                {"task_id": "task_20260616_120000_evalshared01"},
+                config,
+                "result",
+                principal,
+            )
+            second = bridge.handle_codex_query(
+                {"task_id": "task_20260616_120000_evalshared02"},
+                config,
+                "result",
+                principal,
+            )
+
+            self.assertEqual(first["execution_evaluation"]["task_id"], "task_20260616_120000_evalshared01")
+            self.assertEqual(second["execution_evaluation"]["task_id"], "task_20260616_120000_evalshared02")
+            self.assertEqual(second["followup_task_draft"]["source_task_id"], "task_20260616_120000_evalshared02")
+            self.assertEqual(second["ledger_note_draft"]["source_task_id"], "task_20260616_120000_evalshared02")
+            self.assertEqual(second["review_proposal_draft"]["source_task_id"], "task_20260616_120000_evalshared02")
+
+            intake_dir = bridge.intake_dir(config, intake_id)
+            persisted_evaluation = json.loads((intake_dir / "EXECUTION_EVALUATION.json").read_text())
+            persisted_followup = json.loads((intake_dir / "FOLLOWUP_TASK_DRAFT.json").read_text())
+            persisted_ledger = json.loads((intake_dir / "LEDGER_NOTE_DRAFT.json").read_text())
+            persisted_review = json.loads((intake_dir / "REVIEW_PROPOSAL_DRAFT.json").read_text())
+            self.assertEqual(persisted_evaluation["task_id"], "task_20260616_120000_evalshared02")
+            self.assertEqual(persisted_followup["source_task_id"], "task_20260616_120000_evalshared02")
+            self.assertEqual(persisted_ledger["source_task_id"], "task_20260616_120000_evalshared02")
+            self.assertEqual(persisted_review["source_task_id"], "task_20260616_120000_evalshared02")
+
+            events = [
+                json.loads(line)
+                for line in (intake_dir / "TASK_INTAKE.events.jsonl").read_text().strip().splitlines()
+            ]
+            execution_events = [item for item in events if item.get("event") == "execution_evaluated"]
+            followup_events = [item for item in events if item.get("event") == "followup_task_drafted"]
+            ledger_events = [item for item in events if item.get("event") == "ledger_note_drafted"]
+            review_events = [item for item in events if item.get("event") == "review_proposal_drafted"]
+            self.assertEqual(
+                [item["task_id"] for item in execution_events[-2:]],
+                ["task_20260616_120000_evalshared01", "task_20260616_120000_evalshared02"],
+            )
+            self.assertEqual(
+                [item["source_task_id"] for item in followup_events[-2:]],
+                ["task_20260616_120000_evalshared01", "task_20260616_120000_evalshared02"],
+            )
+            self.assertEqual(
+                [item["source_task_id"] for item in ledger_events[-2:]],
+                ["task_20260616_120000_evalshared01", "task_20260616_120000_evalshared02"],
+            )
+            self.assertEqual(
+                [item["source_task_id"] for item in review_events[-2:]],
+                ["task_20260616_120000_evalshared01", "task_20260616_120000_evalshared02"],
+            )
+
     def test_result_persists_policy_review_proposal_for_prepared_task(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
