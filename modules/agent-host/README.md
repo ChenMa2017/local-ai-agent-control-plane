@@ -255,6 +255,11 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
   当结果仍然需要 bounded-claim review，或任务因为 policy boundary 停止时，
 生成一份 reviewer-ready proposal，说明 review scope、reason、stop condition、safe result excerpt
   现在也会带 `provenance`，说明它是 agent-host 基于 post-run evaluation 自动合成出来的
+
+- OPERATOR_SUMMARY
+  这是一个面向操作员的轻量状态对象，
+  用统一字段解释“现在是不是被卡住了、为什么、证据决策是什么、下一步最安全动作是什么”
+  prepare 阶段会先写一版，post-run 阶段会再更新成结果期 summary
 ```
 
 同一次结果整理还会补齐六份一等研究对象：
@@ -350,6 +355,20 @@ curl -X POST http://127.0.0.1:8787/codex/prepare \
 - derived_from_report
 - generated_at_utc
 ```
+
+`OPERATOR_SUMMARY.json` 则会把这些分散对象再压成一个 operator-facing 视图，典型字段包括：
+
+```text
+- overall_status
+- blocked
+- blockers
+- evidence_decision
+- promotion_states
+- unmet_requirements
+- next_safe_action
+```
+
+它的目标不是替代原始 artifact，而是让操作者不用手工比对 `PRELIGHT / EVIDENCE_RETRIEVAL / REVIEW_PROPOSAL / CURRENT_CONCLUSION_PROMOTION` 才能知道现在到底卡在哪一层。
 
 如果上一轮任务已经产出了 `EXECUTION_EVALUATION / LEDGER_NOTE_DRAFT / REVIEW_PROPOSAL_DRAFT / HYPOTHESIS_UPDATE / HYPOTHESIS_PROMOTION / EXPERIMENT_INDEX_UPDATE / EXPERIMENT_PROMOTION / CURRENT_CONCLUSION_UPDATE / CURRENT_CONCLUSION_PROMOTION / EVALUATION_REPORT / CURRENT_CONCLUSIONS`，这条 follow-up prepare 响应也会把这些 post-run context 一并带回客户端，方便 UI 直接展示“这次 follow-up 是基于怎样的结果评估继续的”，以及“hypothesis / experiment / conclusion promotion state 现在处在哪一层”。
 

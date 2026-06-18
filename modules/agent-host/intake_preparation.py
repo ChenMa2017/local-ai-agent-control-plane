@@ -11,6 +11,10 @@ from typing import Any, Callable
 
 from evidence_retrieval import maybe_run_evidence_retrieval
 from execution_evaluation import ExecutionEvaluationDependencies
+from operator_summary import (
+    build_prepare_operator_summary,
+    operator_summary_markdown,
+)
 from prepared_context import (
     count_jsonl_records,
     filter_source_task_artifact,
@@ -404,6 +408,13 @@ def handle_codex_intake(
         intake_id_re=intake_id_re,
         error_factory=deps.error_factory,
     )
+    operator_summary = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "OPERATOR_SUMMARY.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
     events_path = root / "TASK_INTAKE.events.jsonl"
     event_count = count_jsonl_records(events_path.read_text() if events_path.exists() else "")
     return {
@@ -432,6 +443,7 @@ def handle_codex_intake(
         "current_conclusion_promotion": current_conclusion_promotion,
         "evaluation_report": evaluation_report,
         "current_conclusions": current_conclusions,
+        "operator_summary": operator_summary,
         "event_count": event_count,
         "ready_to_run": bool(bundle["preflight"].get("ok") and not questions),
     }
@@ -524,6 +536,11 @@ def load_followup_prepare_seed(
         followup_task_id,
         "source_task_id",
     )
+    operator_summary = filter_source_task_artifact(
+        read_json_object_if_exists(root / "OPERATOR_SUMMARY.json"),
+        followup_task_id,
+        "source_task_id",
+    )
     return {
         "task_id": followup_task_id,
         "source_intake_id": intake_id,
@@ -540,6 +557,7 @@ def load_followup_prepare_seed(
         "current_conclusion_promotion": current_conclusion_promotion,
         "evaluation_report": evaluation_report,
         "current_conclusions": current_conclusions,
+        "operator_summary": operator_summary,
     }
 
 
@@ -850,6 +868,14 @@ def persist_intake_artifacts(
         research_program,
         hypothesis_registry,
     )
+    operator_summary = build_prepare_operator_summary(
+        intent,
+        contract,
+        taskbox,
+        preflight,
+        evidence_retrieval,
+        questions,
+    )
     write_json_atomic(root / "INTENT_DRAFT.json", intent)
     write_json_atomic(root / "GRAY_AREAS.json", {"schema_version": 1, "intake_id": intake_id, "items": gray_areas})
     write_json_atomic(root / "QUESTIONS.json", {"schema_version": 1, "intake_id": intake_id, "items": questions})
@@ -875,7 +901,9 @@ def persist_intake_artifacts(
     write_json_atomic(root / "RESEARCH_PROGRAM.json", research_program)
     write_json_atomic(root / "HYPOTHESIS_REGISTRY.json", hypothesis_registry)
     write_json_atomic(root / "EXPERIMENT_SPEC.json", experiment_spec)
+    write_json_atomic(root / "OPERATOR_SUMMARY.json", operator_summary)
     write_text_atomic(root / "READ_PLAN.md", read_plan_markdown(evidence_retrieval))
+    write_text_atomic(root / "OPERATOR_SUMMARY.md", operator_summary_markdown(operator_summary))
     write_text_atomic(
         root / "ASSUMPTIONS.md",
         "\n".join(
@@ -1060,6 +1088,14 @@ def handle_codex_prepare(
         intake_id_re=intake_id_re,
         error_factory=deps.error_factory,
     )
+    operator_summary = build_prepare_operator_summary(
+        intent,
+        contract,
+        taskbox,
+        preflight,
+        evidence_retrieval,
+        questions,
+    )
     return {
         "ok": True,
         "intake_id": intake_id,
@@ -1125,6 +1161,11 @@ def handle_codex_prepare(
                 if isinstance(followup_seed.get("current_conclusions"), dict) and followup_seed.get("current_conclusions")
                 else None
             ),
+            "operator_summary": (
+                followup_seed.get("operator_summary")
+                if isinstance(followup_seed.get("operator_summary"), dict) and followup_seed.get("operator_summary")
+                else None
+            ),
         }
         if followup_task_id
         else None,
@@ -1136,6 +1177,7 @@ def handle_codex_prepare(
         "taskbox": taskbox,
         "preflight": preflight,
         "evidence_retrieval": evidence_retrieval,
+        "operator_summary": operator_summary,
         "research_program": load_optional_intake_json_artifact(
             config,
             intake_id,

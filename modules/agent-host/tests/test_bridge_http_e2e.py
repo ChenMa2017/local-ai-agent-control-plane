@@ -227,6 +227,7 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 self.assertEqual(page["evaluation_report"]["current_conclusions_promotion_state"], "bounded_only")
                 self.assertEqual(page["evaluation_report"]["assessment_basis"], "structural_only")
                 self.assertEqual(page["evaluation_report"]["validity"]["status"], "valid_with_limitations")
+                self.assertEqual(page["operator_summary"]["overall_status"], "review_required")
                 self.assertEqual(page["current_conclusions"]["promotion_state"], "bounded_only")
 
                 intake = self.request_json(base_url, f"/codex/intake?intake_id={intake_id}")
@@ -237,6 +238,7 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 self.assertEqual(intake["ledger_note_draft"]["target_path_hint"], "research/LEDGER_NOTES.md")
                 self.assertEqual(intake["review_proposal_draft"]["review_scope"], "report_only")
                 self.assertEqual(intake["ledger_note_draft"]["provenance"]["artifact_role"], "ledger_note_draft")
+                self.assertEqual(intake["operator_summary"]["overall_status"], "review_required")
                 self.assertEqual(intake["hypothesis_promotion"]["promotion_state"], "not_required")
                 self.assertEqual(intake["experiment_promotion"]["promotion_state"], "not_required")
                 self.assertEqual(intake["current_conclusion_update"]["source_task_id"], "task_20260618_120000_e2e01")

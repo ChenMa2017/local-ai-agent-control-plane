@@ -113,6 +113,7 @@ class IntakePreparationTests(unittest.TestCase):
                 intake_id_re=INTAKE_ID_RE,
                 error_factory=self.error_factory,
             )
+            self.assertTrue((root / ".codex-bridge" / "intake" / intake_id / "OPERATOR_SUMMARY.json").exists())
 
         self.assertEqual(bundle["intake_id"], intake_id)
         self.assertEqual(bundle["intent"]["workspace"], "demo")
@@ -138,6 +139,7 @@ class IntakePreparationTests(unittest.TestCase):
                 "RESEARCH_PROGRAM.json": {"program_id": "demo-program", "available": True},
                 "HYPOTHESIS_REGISTRY.json": {"registry_status": "analysis_only"},
                 "EXPERIMENT_SPEC.json": {"status": "not_required"},
+                "OPERATOR_SUMMARY.json": {"overall_status": "ready_to_run", "phase": "prepare"},
                 "QUESTIONS.json": {"items": []},
             }.items():
                 (intake_root / name).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
@@ -168,6 +170,7 @@ class IntakePreparationTests(unittest.TestCase):
         self.assertEqual(response["research_program"]["program_id"], "demo-program")
         self.assertEqual(response["hypothesis_registry"]["registry_status"], "analysis_only")
         self.assertEqual(response["experiment_spec"]["status"], "not_required")
+        self.assertEqual(response["operator_summary"]["overall_status"], "ready_to_run")
 
     def test_load_followup_prepare_seed_filters_mismatched_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,6 +247,14 @@ class IntakePreparationTests(unittest.TestCase):
                 )
                 + "\n"
             )
+            (intake_root / "OPERATOR_SUMMARY.json").write_text(
+                json.dumps(
+                    {"source_task_id": "task_20260617_follow01", "overall_status": "review_required"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
 
             seed = intake_preparation.load_followup_prepare_seed(
                 config,
@@ -269,3 +280,4 @@ class IntakePreparationTests(unittest.TestCase):
         self.assertEqual(seed["current_conclusion_promotion"]["promotion_state"], "review_required")
         self.assertEqual(seed["evaluation_report"]["task_id"], "task_20260617_follow01")
         self.assertEqual(seed["current_conclusions"]["promotion_state"], "review_required")
+        self.assertEqual(seed["operator_summary"]["overall_status"], "review_required")

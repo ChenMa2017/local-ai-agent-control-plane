@@ -291,6 +291,7 @@ def handle_codex_result_page(
         else None,
         "evaluation_report": result.get("evaluation_report") if isinstance(result.get("evaluation_report"), dict) else None,
         "current_conclusions": result.get("current_conclusions") if isinstance(result.get("current_conclusions"), dict) else None,
+        "operator_summary": result.get("operator_summary") if isinstance(result.get("operator_summary"), dict) else None,
         **page_data,
     }
 

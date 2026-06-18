@@ -184,6 +184,9 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertFalse(attachments["evaluation_report"]["machine_checks"]["evidence_safe_to_answer"])
             self.assertEqual(attachments["evaluation_report"]["conclusion_assessment"]["assessment"], "bounded_only")
             self.assertEqual(attachments["current_conclusions"]["promotion_state"], "bounded_only")
+            self.assertEqual(attachments["operator_summary"]["phase"], "post_run")
+            self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
+            self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "resolve_review_proposal")
             self.assertEqual(repeat["execution_evaluation"]["task_id"], "task_20260617_120000_eval")
             self.assertTrue((intake_root / "EXECUTION_EVALUATION.json").exists())
             self.assertTrue((intake_root / "FOLLOWUP_TASK_DRAFT.json").exists())
@@ -195,6 +198,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertTrue((intake_root / "CURRENT_CONCLUSION_PROMOTION.json").exists())
             self.assertTrue((intake_root / "EVALUATION_REPORT.json").exists())
             self.assertTrue((intake_root / "CURRENT_CONCLUSIONS.json").exists())
+            self.assertTrue((intake_root / "OPERATOR_SUMMARY.json").exists())
             events = [
                 json.loads(line)
                 for line in (intake_root / "TASK_INTAKE.events.jsonl").read_text().strip().splitlines()
@@ -406,6 +410,8 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(attachments["evaluation_report"]["hypothesis_assessment"]["assessment"], "active_candidate")
             self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["assessment"], "candidate_recorded")
             self.assertEqual(attachments["evaluation_report"]["conclusion_assessment"]["assessment"], "candidate_ready")
+            self.assertEqual(attachments["operator_summary"]["overall_status"], "promotion_ready")
+            self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "review_result")
             self.assertIn("experiment_latency_probe", attachments["current_conclusion_update"]["supporting_experiments"])
 
             hypothesis_registry_path = root / "research" / "HYPOTHESIS_REGISTRY.jsonl"
@@ -534,6 +540,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(attachments["evaluation_report"]["validity"]["status"], "valid_with_limitations")
             self.assertIn("hypothesis_review_required", attachments["evaluation_report"]["validity"]["limitations"])
             self.assertIn("experiment_review_required", attachments["evaluation_report"]["validity"]["limitations"])
+            self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
             self.assertIn(
                 "experiment_latency_probe_review",
                 attachments["current_conclusion_update"]["supporting_experiments"],
@@ -677,6 +684,8 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(experiment_sync["transition_validation"]["reason"], "transition_not_allowed")
             self.assertEqual(experiment_sync["transition_validation"]["current_status"], "archived")
             self.assertEqual(experiment_sync["transition_validation"]["proposed_status"], "draft")
+            self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
+            self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "review_hypothesis_transition_bundle")
 
             hypothesis_bundle = json.loads(
                 (root / "research" / "proposals" / "hypotheses" / "hypothesis_latency_probe.json").read_text()

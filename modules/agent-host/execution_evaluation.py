@@ -20,6 +20,11 @@ from post_run_artifacts import (
     review_proposal_draft_fingerprint,
     review_proposal_draft_markdown,
 )
+from operator_summary import (
+    build_post_run_operator_summary,
+    operator_summary_fingerprint,
+    operator_summary_markdown,
+)
 from research_objects import (
     build_experiment_index_update,
     build_experiment_promotion,
@@ -494,6 +499,25 @@ def persist_current_conclusion_promotion(
     return promotion
 
 
+def persist_operator_summary(
+    config: Any,
+    summary: dict[str, Any] | None,
+    deps: ExecutionEvaluationDependencies,
+) -> dict[str, Any] | None:
+    if not isinstance(summary, dict) or not summary:
+        return None
+    intake_id = str(summary.get("intake_id") or "")
+    if not intake_id:
+        return None
+    root = deps.intake_dir(config, intake_id)
+    existing = deps.read_json_object_if_exists(root / "OPERATOR_SUMMARY.json")
+    if existing and operator_summary_fingerprint(existing) == operator_summary_fingerprint(summary):
+        return existing
+    deps.write_json_atomic(root / "OPERATOR_SUMMARY.json", summary)
+    deps.write_text_atomic(root / "OPERATOR_SUMMARY.md", operator_summary_markdown(summary))
+    return summary
+
+
 def workspace_project_root(config: Any, workspace: str) -> Path | None:
     projects = getattr(config, "projects", None)
     if not isinstance(projects, dict):
@@ -692,6 +716,20 @@ def maybe_attach_execution_evaluation(
         current_conclusion_promotion_payload,
         deps,
     )
+    operator_summary = persist_operator_summary(
+        config,
+        build_post_run_operator_summary(
+            evaluation,
+            followup_task_draft,
+            review_proposal_draft,
+            hypothesis_promotion,
+            experiment_promotion,
+            current_conclusion_promotion,
+            evaluation_report,
+            current_conclusions,
+        ),
+        deps,
+    )
     attachments: dict[str, dict[str, Any]] = {"execution_evaluation": evaluation}
     if followup_task_draft:
         attachments["followup_task_draft"] = followup_task_draft
@@ -715,4 +753,6 @@ def maybe_attach_execution_evaluation(
         attachments["current_conclusions"] = current_conclusions
     if current_conclusion_promotion:
         attachments["current_conclusion_promotion"] = current_conclusion_promotion
+    if operator_summary:
+        attachments["operator_summary"] = operator_summary
     return attachments
