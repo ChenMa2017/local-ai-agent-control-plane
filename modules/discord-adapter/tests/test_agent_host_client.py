@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import threading
+import types
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1084,6 +1085,210 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("EnvironmentFile=%h/.config/agent-host/secrets.env", text)
         self.assertNotIn("Environment=DISCORD_BOT_TOKEN=", text)
         self.assertNotIn("Environment=AGENT_HOST_TOKEN=", text)
+
+
+class DiscordBotRuntimeTests(unittest.TestCase):
+    def make_config(self, state_dir: Path) -> bot.AdapterConfig:
+        return bot.AdapterConfig(
+            agent_host_base_url="http://127.0.0.1:8787",
+            agent_host_token="agent-token",
+            agent_host_timeout_seconds=30,
+            discord_bot_token="discord-token",
+            discord_guild_id="7",
+            allowed_guild_ids=("7",),
+            allowed_channel_ids=("1001",),
+            default_workspace="main_codex",
+            command_prefix="agent",
+            users={"42": bot.DiscordUser(internal_user="chenma", role="admin")},
+            max_prompt_chars=200,
+            max_result_chars=200,
+            state_dir=state_dir,
+            watcher_interval_seconds=10,
+        )
+
+    def test_on_message_creates_followup_task_in_same_thread(self):
+        class FakeIntents:
+            def __init__(self):
+                self.message_content = False
+
+            @classmethod
+            def default(cls):
+                return cls()
+
+        class FakeClient:
+            def __init__(self, *, intents):
+                self.intents = intents
+                self.user = None
+
+            def run(self, _token):
+                return None
+
+            async def close(self):
+                return None
+
+            def is_closed(self):
+                return False
+
+            async def wait_until_ready(self):
+                return None
+
+        class FakeObject:
+            def __init__(self, *, id):
+                self.id = id
+
+        class FakeCommandTree:
+            def __init__(self, client):
+                self.client = client
+
+            def command(self, **_kwargs):
+                def decorator(func):
+                    return func
+
+                return decorator
+
+            def copy_global_to(self, guild):
+                self.guild = guild
+
+            async def sync(self, guild=None):
+                self.synced_guild = guild
+                return []
+
+        class FakeAuthor:
+            def __init__(self, author_id, *, bot=False):
+                self.id = author_id
+                self.bot = bot
+
+        class FakeGuild:
+            def __init__(self, guild_id):
+                self.id = guild_id
+
+        class FakeSentMessage:
+            def __init__(self, message_id, content, author):
+                self.id = message_id
+                self.content = content
+                self.author = author
+
+        class FakeThread:
+            def __init__(self, *, thread_id, parent_id, guild, bot_author):
+                self.id = thread_id
+                self.parent_id = parent_id
+                self.guild = guild
+                self.bot_author = bot_author
+                self.messages = {}
+                self.sent_messages = []
+                self.fetch_requests = []
+
+            async def send(self, content):
+                message_id = 5000 + len(self.sent_messages) + 1
+                message = FakeSentMessage(message_id, content, self.bot_author)
+                self.sent_messages.append(message)
+                self.messages[message_id] = message
+                return message
+
+            async def fetch_message(self, message_id):
+                self.fetch_requests.append(message_id)
+                return self.messages[message_id]
+
+        class FakeMessageReference:
+            def __init__(self, message_id, *, resolved=None):
+                self.message_id = message_id
+                self.resolved = resolved
+
+        class FakeMessage:
+            def __init__(self, *, message_id, content, author, channel, guild, reference):
+                self.id = message_id
+                self.content = content
+                self.author = author
+                self.channel = channel
+                self.guild = guild
+                self.reference = reference
+
+        class FakeAgent:
+            def __init__(self):
+                self.run_calls = []
+
+            def workspaces(self):
+                return {"workspaces": [{"id": "main_codex", "default_mode": "workspace-write"}]}
+
+            def run(self, **kwargs):
+                self.run_calls.append(kwargs)
+                return {
+                    "task_id": "task_followup",
+                    "status": "queued",
+                    "mode": "workspace-write",
+                }
+
+        fake_discord = types.SimpleNamespace(
+            Client=FakeClient,
+            Intents=FakeIntents,
+            Thread=FakeThread,
+            ChannelType=types.SimpleNamespace(public_thread="public_thread"),
+            Object=FakeObject,
+        )
+        fake_app_commands = types.SimpleNamespace(CommandTree=FakeCommandTree)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.make_config(Path(tmp))
+            agent = FakeAgent()
+            adapter = bot.build_discord_bot(
+                config,
+                discord_module=fake_discord,
+                app_commands_module=fake_app_commands,
+                agent=agent,
+            )
+            adapter.user = FakeAuthor(9001, bot=True)
+
+            guild = FakeGuild(7)
+            thread = FakeThread(thread_id=2001, parent_id=1001, guild=guild, bot_author=adapter.user)
+            referenced_message = FakeSentMessage(3001, "任务完成。\n\nTask: task_parent", adapter.user)
+            thread.messages[3001] = referenced_message
+
+            adapter.thread_store.upsert_thread(
+                task_id="task_parent",
+                guild_id="7",
+                channel_id="1001",
+                thread_id="2001",
+                created_by="42",
+                workspace="main_codex",
+                status="done",
+            )
+            adapter.thread_store.remember_message(
+                message_id="3001",
+                task_id="task_parent",
+                thread_id="2001",
+                workspace="main_codex",
+                kind="completion",
+            )
+
+            message = FakeMessage(
+                message_id=4001,
+                content="Please continue with a bounded follow-up check",
+                author=FakeAuthor(42, bot=False),
+                channel=thread,
+                guild=guild,
+                reference=FakeMessageReference(3001),
+            )
+
+            asyncio.run(adapter.on_message(message))
+
+            self.assertEqual(thread.fetch_requests, [3001])
+            self.assertEqual(len(agent.run_calls), 1)
+            self.assertEqual(agent.run_calls[0]["workspace"], "main_codex")
+            self.assertEqual(agent.run_calls[0]["mode"], "workspace-write")
+            self.assertEqual(agent.run_calls[0]["source_channel_id"], "2001")
+            self.assertEqual(agent.run_calls[0]["source_message_id"], "4001")
+            self.assertEqual(agent.run_calls[0]["reference_task_id"], "task_parent")
+            self.assertEqual(agent.run_calls[0]["command_name"], "discord_reply")
+
+            self.assertEqual(adapter.thread_store.task_id_for_thread("2001"), "task_followup")
+            self.assertEqual(len(thread.sent_messages), 1)
+            self.assertIn("task_id: task_followup", thread.sent_messages[0].content)
+            self.assertIn("reference_task_id: task_parent", thread.sent_messages[0].content)
+            self.assertEqual(adapter.thread_store.task_id_for_message("5001"), "task_followup")
+            self.assertEqual(
+                adapter.thread_store.load_messages()["5001"]["kind"],
+                "thread_intro",
+            )
 
 
 if __name__ == "__main__":

@@ -1080,25 +1080,34 @@ def run_check_config(config: AdapterConfig) -> int:
     return 1 if failed else 0
 
 
-def run_bot(config: AdapterConfig) -> None:
-    if discord is None or app_commands is None:
+def build_discord_bot(
+    config: AdapterConfig,
+    *,
+    discord_module: Any | None = None,
+    app_commands_module: Any | None = None,
+    agent: AgentHostClient | None = None,
+) -> Any:
+    discord_module = discord if discord_module is None else discord_module
+    app_commands_module = app_commands if app_commands_module is None else app_commands_module
+    if discord_module is None or app_commands_module is None:
         raise RuntimeError("discord.py is not installed. Run: python3 -m pip install -r requirements.txt")
 
-    intents = discord.Intents.default()
+    intents = discord_module.Intents.default()
     intents.message_content = True
+    agent_client = agent or build_client(config)
 
-    class AgentDiscordBot(discord.Client):
+    class AgentDiscordBot(discord_module.Client):
         def __init__(self) -> None:
             super().__init__(intents=intents)
-            self.tree = app_commands.CommandTree(self)
-            self.agent = build_client(config)
+            self.tree = app_commands_module.CommandTree(self)
+            self.agent = agent_client
             self.thread_store = ThreadStateStore(config.state_dir)
             self._watcher_task: asyncio.Task[Any] | None = None
             self.register_commands()
 
         async def setup_hook(self) -> None:
             if config.discord_guild_id:
-                guild = discord.Object(id=int(config.discord_guild_id))
+                guild = discord_module.Object(id=int(config.discord_guild_id))
                 self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
             else:
@@ -1244,13 +1253,13 @@ def run_bot(config: AdapterConfig) -> None:
             if channel is None:
                 return None
 
-            if isinstance(channel, discord.Thread):
+            if isinstance(channel, discord_module.Thread):
                 thread = channel
             elif hasattr(channel, "create_thread"):
                 try:
                     thread = await channel.create_thread(
                         name=thread_name(task_id, workspace),
-                        type=discord.ChannelType.public_thread,
+                        type=discord_module.ChannelType.public_thread,
                         auto_archive_duration=1440,
                         reason="Codex Agent task thread",
                     )
@@ -1278,7 +1287,7 @@ def run_bot(config: AdapterConfig) -> None:
                 return
             if getattr(message.author, "bot", False):
                 return
-            if not isinstance(getattr(message, "channel", None), discord.Thread):
+            if not isinstance(getattr(message, "channel", None), discord_module.Thread):
                 return
             if not str(getattr(message, "content", "") or "").strip():
                 return
@@ -1415,12 +1424,12 @@ def run_bot(config: AdapterConfig) -> None:
                         raise ValueError(f"answers is too long; max {config.max_prompt_chars} chars")
                     selected_reference_task_id = safe_reference_task_id(reference_task_id)
                     selected_followup_task_id = safe_followup_task_id(followup_task_id)
-                    if not selected_reference_task_id and isinstance(interaction.channel, discord.Thread):
+                    if not selected_reference_task_id and isinstance(interaction.channel, discord_module.Thread):
                         selected_reference_task_id = self.thread_store.task_id_for_thread(str(interaction.channel.id))
-                    if not selected_followup_task_id and isinstance(interaction.channel, discord.Thread) and not clean_prompt and not selected_intake_id:
+                    if not selected_followup_task_id and isinstance(interaction.channel, discord_module.Thread) and not clean_prompt and not selected_intake_id:
                         selected_followup_task_id = self.thread_store.task_id_for_thread(str(interaction.channel.id))
                     selected_workspace = str(workspace or "").strip()
-                    if not selected_workspace and isinstance(interaction.channel, discord.Thread):
+                    if not selected_workspace and isinstance(interaction.channel, discord_module.Thread):
                         selected_workspace = str(self.thread_store.latest_record_for_thread(str(interaction.channel.id)).get("workspace") or "").strip()
                     if not selected_workspace and not selected_intake_id and not selected_followup_task_id:
                         selected_workspace = str(config.default_workspace or "").strip()
@@ -1488,7 +1497,7 @@ def run_bot(config: AdapterConfig) -> None:
                     if not selected_workspace:
                         raise ValueError("workspace is required; configure discord.default_workspace or pass workspace explicitly")
                     selected_reference_task_id = safe_reference_task_id(reference_task_id)
-                    if not selected_reference_task_id and isinstance(interaction.channel, discord.Thread):
+                    if not selected_reference_task_id and isinstance(interaction.channel, discord_module.Thread):
                         selected_reference_task_id = self.thread_store.task_id_for_thread(str(interaction.channel.id))
                     await interaction.response.defer(ephemeral=True, thinking=True)
                     mode = default_mode_for_workspace(self.agent.workspaces(), selected_workspace)
@@ -1569,7 +1578,11 @@ def run_bot(config: AdapterConfig) -> None:
                 except Exception as error:
                     await self.reply_error(interaction, error)
 
-    AgentDiscordBot().run(config.discord_bot_token)
+    return AgentDiscordBot()
+
+
+def run_bot(config: AdapterConfig) -> None:
+    build_discord_bot(config).run(config.discord_bot_token)
 
 
 def build_parser() -> argparse.ArgumentParser:
