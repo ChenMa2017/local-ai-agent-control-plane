@@ -36,6 +36,7 @@ from auth_policy import (
     reject_frontend_identity as reject_frontend_payload_identity,
     validate_auth as validate_mattermost_auth,
 )
+from codex_execution_handlers import build_codex_execution_handlers
 from execution_evaluation import (
     ExecutionEvaluationDependencies,
     maybe_attach_execution_evaluation,
@@ -63,13 +64,9 @@ from result_streaming import (
     task_snapshot as build_task_snapshot,
 )
 from codex_tasking import (
-    CodexTaskListDependencies,
-    CodexTaskQueryDependencies,
     authorize_codex_task as authorize_codex_task_record,
     codex_task_summary as build_codex_task_summary,
     codex_tasks_root as resolve_codex_tasks_root,
-    handle_codex_query as query_codex_task,
-    handle_codex_tasks as list_codex_tasks,
     load_codex_task as load_codex_task_record,
     parse_iso_datetime as parse_codex_iso_datetime,
     prompt_preview as build_prompt_preview,
@@ -77,19 +74,10 @@ from codex_tasking import (
     task_adapter_metadata as parse_task_adapter_metadata,
     task_duration_sec as compute_task_duration_sec,
     task_intake_id as resolve_task_intake_id,
-    task_list_limit as parse_task_list_limit,
     task_sort_value as codex_task_sort_value,
     validate_task_id as validate_codex_task_id,
 )
 from codex_runtime import (
-    CodexRunDependencies,
-    ResultPageDependencies,
-    StreamTokenDependencies,
-    handle_codex_result_page as render_codex_result_page,
-    handle_codex_run as queue_codex_run,
-    handle_stream_token as issue_codex_stream_token,
-    paginate_text as paginate_codex_text,
-    parse_positive_int as parse_codex_positive_int,
     principal_from_stream_token as resolve_stream_session_principal,
 )
 from codex_bridge_runtime import (
@@ -543,39 +531,6 @@ def codex_task_summary(task_dir: Path, task: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def task_list_limit(value: str | None) -> int:
-    return parse_task_list_limit(
-        value,
-        default_limit=TASK_LIST_DEFAULT_LIMIT,
-        max_limit=TASK_LIST_MAX_LIMIT,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def handle_codex_tasks(
-    payload: dict[str, str],
-    config: BridgeConfig,
-    principal: AuthPrincipal,
-) -> dict[str, Any]:
-    return list_codex_tasks(
-        payload,
-        config,
-        principal,
-        deps=CodexTaskListDependencies(
-            reject_frontend_identity=reject_frontend_identity,
-            validate_project=validate_codex_project,
-            reconcile_tasks=reconcile_codex_tasks,
-            can_access_task=can_access_task,
-            utc_now=utc_now,
-            error_factory=lambda message, status, code: BridgeError(message, status, code),
-        ),
-        task_id_re=CODEX_TASK_ID_RE,
-        default_limit=TASK_LIST_DEFAULT_LIMIT,
-        max_limit=TASK_LIST_MAX_LIMIT,
-        prompt_preview_chars=PROMPT_PREVIEW_CHARS,
-    )
-
-
 def workspace_summary(project: Project) -> dict[str, Any]:
     return build_workspace_summary(project)
 
@@ -959,107 +914,18 @@ def parse_run_receipt(output: str) -> dict[str, Any]:
     return parse_bridge_run_receipt(output)
 
 
-def handle_codex_run(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
-    return queue_codex_run(
-        payload,
-        config,
-        principal,
-        deps=CodexRunDependencies(
-            reject_frontend_identity=reject_frontend_identity,
-            validate_intake_id=validate_intake_id,
-            load_prepared_run_context=load_prepared_run_context,
-            prepared_run_summary=prepared_run_summary,
-            safe_intake_text=safe_intake_text,
-            validate_project=validate_codex_project,
-            safe_adapter_source=safe_adapter_source,
-            safe_idempotency_key=safe_idempotency_key,
-            parse_adapter_metadata=parse_adapter_metadata,
-            validate_task_id=validate_task_id,
-            authorize_task=authorize_codex_task,
-            prepared_run_prompt=prepared_run_prompt,
-            compact_adapter_metadata_object=compact_adapter_metadata_object,
-            bool_from_payload=bool_from_payload,
-            run_codex_bridge=run_codex_bridge,
-            require_success=require_success,
-            parse_queued_task_id=parse_queued_task_id,
-            parse_run_receipt=parse_run_receipt,
-            append_jsonl=append_jsonl,
-            intake_dir=intake_dir,
-            utc_now=utc_now,
-            error_factory=lambda message, status, code: BridgeError(message, status, code),
-        ),
-        max_task_chars=MAX_TASK_CHARS,
-    )
-
-
-def handle_codex_query(
-    payload: dict[str, str],
-    config: BridgeConfig,
-    command: str,
-    principal: AuthPrincipal,
+def attach_execution_evaluation(
+    current_config: BridgeConfig,
+    task_dir: Path,
+    task: dict[str, Any],
+    rendered: dict[str, Any],
 ) -> dict[str, Any]:
-    return query_codex_task(
-        payload,
-        config,
-        command,
-        principal,
-        deps=CodexTaskQueryDependencies(
-            reject_frontend_identity=reject_frontend_identity,
-            authorize_task=authorize_codex_task,
-            bool_from_payload=bool_from_payload,
-            is_admin=is_admin,
-            run_codex_bridge=run_codex_bridge,
-            require_success=require_success,
-            task_intake_id=task_intake_id,
-            attach_execution_evaluation=lambda current_config, task_dir, task, rendered: maybe_attach_execution_evaluation(
-                current_config,
-                task_dir,
-                task,
-                rendered,
-                execution_evaluation_dependencies(),
-            ),
-            safe_status_text=safe_codex_status_text,
-            error_factory=lambda message, status, code: BridgeError(message, status, code),
-        ),
-        task_id_re=CODEX_TASK_ID_RE,
-        final_statuses=CODEX_FINAL_STATUSES,
-    )
-
-
-def parse_positive_int(value: str | None, default: int, max_value: int, field: str) -> int:
-    return parse_codex_positive_int(
-        value,
-        default,
-        max_value,
-        field,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def paginate_text(text: str, page: int, page_size: int) -> dict[str, Any]:
-    return paginate_codex_text(
-        text,
-        page,
-        page_size,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def handle_codex_result_page(
-    payload: dict[str, str],
-    config: BridgeConfig,
-    principal: AuthPrincipal,
-) -> dict[str, Any]:
-    return render_codex_result_page(
-        payload,
-        config,
-        principal,
-        deps=ResultPageDependencies(
-            handle_codex_query=handle_codex_query,
-            error_factory=lambda message, status, code: BridgeError(message, status, code),
-        ),
-        default_page_size=RESULT_PAGE_DEFAULT_SIZE,
-        max_page_size=RESULT_PAGE_MAX_SIZE,
+    return maybe_attach_execution_evaluation(
+        current_config,
+        task_dir,
+        task,
+        rendered,
+        execution_evaluation_dependencies(),
     )
 
 
@@ -1067,49 +933,82 @@ def cleanup_stream_tokens() -> None:
     cleanup_stream_token_records(STREAM_TOKENS, STREAM_TOKEN_LOCK, utc_now)
 
 
-def handle_stream_token(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
-    return issue_codex_stream_token(
-        payload,
-        config,
-        principal,
-        deps=StreamTokenDependencies(
-            reject_frontend_identity=reject_frontend_identity,
-            validate_task_id=validate_task_id,
-            authorize_task=authorize_codex_task,
-            cleanup_stream_tokens=cleanup_stream_tokens,
-            issue_stream_token=lambda task_id, user, role: issue_stream_token(
-                task_id,
-                user,
-                role,
-                STREAM_TOKENS,
-                STREAM_TOKEN_LOCK,
-                utc_now,
-                STREAM_TOKEN_TTL_SECONDS,
-            ),
-            resolve_stream_principal=lambda task_id, stream_token: resolve_stream_principal(
-                task_id,
-                stream_token,
-                STREAM_TOKENS,
-                STREAM_TOKEN_LOCK,
-                utc_now,
-                lambda message, status: BridgeError(message, status),
-            ),
-        ),
+def create_stream_token_payload(task_id: str, user: str, role: str) -> dict[str, Any]:
+    return issue_stream_token(
+        task_id,
+        user,
+        role,
+        STREAM_TOKENS,
+        STREAM_TOKEN_LOCK,
+        utc_now,
+        STREAM_TOKEN_TTL_SECONDS,
     )
+
+
+def resolve_active_stream_principal(task_id: str, stream_token: str) -> tuple[str, str]:
+    return resolve_stream_principal(
+        task_id,
+        stream_token,
+        STREAM_TOKENS,
+        STREAM_TOKEN_LOCK,
+        utc_now,
+        lambda message, status: BridgeError(message, status),
+    )
+
+
+CODEX_EXECUTION_HANDLERS = build_codex_execution_handlers(
+    reject_frontend_identity=reject_frontend_identity,
+    validate_project=validate_codex_project,
+    reconcile_tasks=reconcile_codex_tasks,
+    can_access_task=can_access_task,
+    utc_now=utc_now,
+    error_factory=lambda message, status, code: BridgeError(message, status, code),
+    task_id_re=CODEX_TASK_ID_RE,
+    default_limit=TASK_LIST_DEFAULT_LIMIT,
+    max_limit=TASK_LIST_MAX_LIMIT,
+    prompt_preview_chars=PROMPT_PREVIEW_CHARS,
+    validate_intake_id=validate_intake_id,
+    load_prepared_run_context=load_prepared_run_context,
+    prepared_run_summary=prepared_run_summary,
+    safe_intake_text=safe_intake_text,
+    safe_adapter_source=safe_adapter_source,
+    safe_idempotency_key=safe_idempotency_key,
+    parse_adapter_metadata=parse_adapter_metadata,
+    validate_task_id=validate_task_id,
+    authorize_task=authorize_codex_task,
+    prepared_run_prompt=prepared_run_prompt,
+    compact_adapter_metadata_object=compact_adapter_metadata_object,
+    bool_from_payload=bool_from_payload,
+    run_codex_bridge=run_codex_bridge,
+    require_success=require_success,
+    parse_queued_task_id=parse_queued_task_id,
+    parse_run_receipt=parse_run_receipt,
+    append_jsonl=append_jsonl,
+    intake_dir=intake_dir,
+    attach_execution_evaluation=attach_execution_evaluation,
+    task_intake_id=task_intake_id,
+    is_admin=is_admin,
+    safe_status_text=safe_codex_status_text,
+    final_statuses=CODEX_FINAL_STATUSES,
+    max_task_chars=MAX_TASK_CHARS,
+    default_page_size=RESULT_PAGE_DEFAULT_SIZE,
+    max_page_size=RESULT_PAGE_MAX_SIZE,
+    cleanup_stream_tokens=cleanup_stream_tokens,
+    issue_stream_token=create_stream_token_payload,
+    resolve_stream_principal=resolve_active_stream_principal,
+)
+handle_codex_tasks = CODEX_EXECUTION_HANDLERS.handle_codex_tasks
+handle_codex_run = CODEX_EXECUTION_HANDLERS.handle_codex_run
+handle_codex_query = CODEX_EXECUTION_HANDLERS.handle_codex_query
+handle_codex_result_page = CODEX_EXECUTION_HANDLERS.handle_codex_result_page
+handle_stream_token = CODEX_EXECUTION_HANDLERS.handle_stream_token
 
 
 def principal_from_stream_token(task_id: str, stream_token: str) -> AuthPrincipal:
     user, role = resolve_stream_session_principal(
         task_id,
         stream_token,
-        resolve_stream_principal=lambda current_task_id, current_stream_token: resolve_stream_principal(
-            current_task_id,
-            current_stream_token,
-            STREAM_TOKENS,
-            STREAM_TOKEN_LOCK,
-            utc_now,
-            lambda message, status: BridgeError(message, status),
-        ),
+        resolve_stream_principal=resolve_active_stream_principal,
     )
     return AuthPrincipal(user=user, role=role)
 
