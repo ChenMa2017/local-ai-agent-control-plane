@@ -271,6 +271,26 @@ def handle_codex_result_page(
         "followup_task_draft": result.get("followup_task_draft") if isinstance(result.get("followup_task_draft"), dict) else None,
         "ledger_note_draft": result.get("ledger_note_draft") if isinstance(result.get("ledger_note_draft"), dict) else None,
         "review_proposal_draft": result.get("review_proposal_draft") if isinstance(result.get("review_proposal_draft"), dict) else None,
+        "hypothesis_update": result.get("hypothesis_update")
+        if isinstance(result.get("hypothesis_update"), dict)
+        else None,
+        "hypothesis_promotion": result.get("hypothesis_promotion")
+        if isinstance(result.get("hypothesis_promotion"), dict)
+        else None,
+        "experiment_index_update": result.get("experiment_index_update")
+        if isinstance(result.get("experiment_index_update"), dict)
+        else None,
+        "experiment_promotion": result.get("experiment_promotion")
+        if isinstance(result.get("experiment_promotion"), dict)
+        else None,
+        "current_conclusion_update": result.get("current_conclusion_update")
+        if isinstance(result.get("current_conclusion_update"), dict)
+        else None,
+        "current_conclusion_promotion": result.get("current_conclusion_promotion")
+        if isinstance(result.get("current_conclusion_promotion"), dict)
+        else None,
+        "evaluation_report": result.get("evaluation_report") if isinstance(result.get("evaluation_report"), dict) else None,
+        "current_conclusions": result.get("current_conclusions") if isinstance(result.get("current_conclusions"), dict) else None,
         **page_data,
     }
 

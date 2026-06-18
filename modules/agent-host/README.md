@@ -151,6 +151,7 @@ POST /codex/cancel
 - persist DECISION_GATE.json for experiment-like requests
 - consult project-local evidence retrieval for current-conclusion / comparison / formal-result style requests when a workspace exposes project_index + watchdog_doc_search.py
 - persist EVIDENCE_RETRIEVAL.json and READ_PLAN.md beside the intake artifacts
+- snapshot project-level RESEARCH_PROGRAM.json into the intake and synthesize HYPOTHESIS_REGISTRY.json / EXPERIMENT_SPEC.json as first-class research objects
 - expose GET/POST `/codex/intake` so clients can reload the current intake bundle and any post-run drafts by `intake_id`
 - allow POST /codex/prepare to start a new intake from followup_task_id by reusing the latest FOLLOWUP_TASK_DRAFT prompt/reference context
 - allow POST /codex/run to continue a prepared intake_id and inject the stored read-plan / claim-boundary context into the final run prompt
@@ -158,6 +159,8 @@ POST /codex/cancel
 - persist FOLLOWUP_TASK_DRAFT.json / FOLLOWUP_TASK_DRAFT.md so a later client can turn the latest result into a new /codex/prepare prompt without guessing from scratch
 - persist LEDGER_NOTE_DRAFT.json / LEDGER_NOTE_DRAFT.md as an intake-local proposed fragment for `research/LEDGER_NOTES.md` without touching the real project ledger
 - persist REVIEW_PROPOSAL_DRAFT.json / REVIEW_PROPOSAL_DRAFT.md when the result still needs a bounded claim review or human policy review
+- persist CURRENT_CONCLUSION_UPDATE.json / CURRENT_CONCLUSION_PROMOTION.json as watchdog-compatible draft objects for conclusion publication/review handoff
+- persist EVALUATION_REPORT.json / CURRENT_CONCLUSIONS.json as intake-local research-object outputs, so result review and conclusion-promotion state become queryable objects instead of only prose drafts
 - block direct execution until missing experiment decisions are clarified
 ```
 
@@ -205,7 +208,14 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
   -d '{"intake_id":"intake_20260616_000001_ab12cd"}'
 ```
 
-返回会包含 `intent / questions / contract / taskbox / preflight / evidence_retrieval`，以及在可用时附带 `execution_evaluation / followup_task_draft / ledger_note_draft / review_proposal_draft`。
+返回会包含 `intent / questions / contract / taskbox / preflight / evidence_retrieval`，以及在可用时附带 `execution_evaluation / followup_task_draft / ledger_note_draft / review_proposal_draft / current_conclusion_update / current_conclusion_promotion`。
+
+如果 workspace 自身有 `research/RESEARCH_PROGRAM.json`，这条 intake 路径还会把它快照成 intake-local `RESEARCH_PROGRAM.json`，并额外返回：
+
+```text
+- hypothesis_registry
+- experiment_spec
+```
 
 当一个带 `intake_id` 的任务后续通过 `POST /codex/result` 暴露 safe result 时，Agent Host 还会把这次执行整理成结构化 `EXECUTION_EVALUATION`：
 
@@ -241,12 +251,80 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
 
 - REVIEW_PROPOSAL_DRAFT
   当结果仍然需要 bounded-claim review，或任务因为 policy boundary 停止时，
-  生成一份 reviewer-ready proposal，说明 review scope、reason、stop condition、safe result excerpt
+生成一份 reviewer-ready proposal，说明 review scope、reason、stop condition、safe result excerpt
 ```
 
-这样 intake 目录现在不仅记录“怎么准备”和“执行后建议做什么”，还会记录“如果要交给人接手，应该把什么材料一起交出去”。
+同一次结果整理还会补齐六份一等研究对象：
 
-如果客户端改用 `POST /codex/result-page` 分页读取长结果，第 1 页也会复用同一批 post-run metadata：`EXECUTION_EVALUATION`、`FOLLOWUP_TASK_DRAFT`、`LEDGER_NOTE_DRAFT`、`REVIEW_PROPOSAL_DRAFT` 会和第一页 safe result slice 一起返回，不会因为结果过长而丢掉下一步建议。
+```text
+- HYPOTHESIS_UPDATE
+  当 intake 阶段已经形成 hypothesis candidate 时，
+  Agent Host 会把结果整理成一份 project-level hypothesis record 草稿，
+  包含 hypothesis_id / claim / mechanism / prediction / falsification_criteria / supporting_evidence
+
+- HYPOTHESIS_PROMOTION
+  把 hypothesis_update 包成一个 promotion bundle，
+  明确它现在是 not_required / not_ready / review_required / candidate_ready / human_review_required 中的哪一种，
+  并通过 `project_sync` 说明这次结果是否已经：
+  - 直接 upsert 到 `research/HYPOTHESIS_REGISTRY.jsonl`
+  - 写成 `research/proposals/hypotheses/*.json` review bundle
+  - 或者仍然停留在 not_required / not_ready 状态
+
+- EXPERIMENT_INDEX_UPDATE
+  当 prepare 阶段已经判定“这次工作对应一个 experiment object”时，
+  Agent Host 会把结果整理成一份尽量贴近 watchdog `experiment_index_update` 契约的草稿，
+  包含 experiment_id / experiment_type / evidence_scope / primary_metrics / run_id
+
+- EXPERIMENT_PROMOTION
+  把 experiment_index_update 包成一个 promotion bundle，
+  明确它现在是 not_required / not_ready / review_required / candidate_ready / human_review_required 中的哪一种，
+  并通过 `project_sync` 说明这次结果是否已经：
+  - 直接 upsert 到 `project_index/experiment_index.jsonl`
+  - 写成 `research/proposals/experiments/*.json` review bundle
+  - 或者仍然停留在 not_required / not_ready 状态
+
+- EVALUATION_REPORT
+  把 execution_decision / claim_boundary / read_plan / review requirement 组织成统一的评估对象，
+  同时记录 hypothesis / experiment / conclusion promotion state，
+  以及一组 `structural_only` 的 machine checks、validity、assessment 字段，
+  明确这次评估只是“结构化有效性检查”，不是自动科学裁决
+
+- CURRENT_CONCLUSION_UPDATE
+  生成一个尽量贴近 watchdog `current_conclusion_update` 契约的结论草稿，
+  包含 topic_id / conclusion_status / claim / evidence_scope / risk_flags
+
+- CURRENT_CONCLUSION_PROMOTION
+  把 current_conclusion_update 和 evidence-search receipt 包成一个 promotion bundle，
+  明确它现在是 bounded_only / review_required / candidate_ready / human_review_required 中的哪一种
+  并通过 `project_sync` 说明这次结果是否已经：
+  - 直接 upsert 到 `project_index/current_conclusions.json`
+  - 写成 `research/proposals/current_conclusions/*.json` review bundle
+  - 或者仍然停留在 bounded_only / not_ready 状态
+
+- CURRENT_CONCLUSIONS
+  不直接改项目里的正式 current_conclusions.json，
+  但会明确记录当前 safe result 处于 not_ready / bounded_only / review_required / candidate_ready / human_review_required 中的哪一种 promotion state
+```
+
+这样 intake 目录现在不仅记录“怎么准备”和“执行后建议做什么”，还会记录“如果要交给人接手，应该把什么材料一起交出去”，以及“这次结果在研究对象层面到底推进到了哪一步”。
+
+当 `HYPOTHESIS_PROMOTION.promotion_state == candidate_ready` 且当前 workspace 已配置项目根目录时，Agent Host 现在会把规范化后的 hypothesis record 受控 upsert 到项目级 `research/HYPOTHESIS_REGISTRY.jsonl`。
+
+在真正 upsert 之前，Agent Host 还会先校验 hypothesis status transition 是否安全；如果当前项目里的旧状态与这次候选更新不兼容，它不会强行覆盖，而是自动把这次 promotion 降级成 `transition_review_required`，并改写成 `research/proposals/hypotheses/*.json` review bundle。
+
+当 hypothesis promotion state 是 `review_required` 或 `human_review_required` 时，Agent Host 不会自动落到正式 hypothesis registry；它只会把一份 reviewer bundle 写到 `research/proposals/hypotheses/`，把 project-level promotion 继续留给人或 watchdog review 流程。
+
+当 `EXPERIMENT_PROMOTION.promotion_state == candidate_ready` 且当前 workspace 已配置项目索引时，Agent Host 现在会把规范化后的 experiment item 受控 upsert 到项目级 `project_index/experiment_index.jsonl`。
+
+在真正 upsert 之前，Agent Host 也会先校验 experiment status transition；如果项目里已有 record 的状态已经进入 `archived / invalidated / deprecated` 之类不适合回退的阶段，它不会直接覆盖，而是自动把这次 promotion 降级成 `transition_review_required`，并改写成 `research/proposals/experiments/*.json` review bundle。
+
+当 experiment promotion state 是 `review_required` 或 `human_review_required` 时，Agent Host 不会自动发布 experiment record；它只会把一份 reviewer bundle 写到 `research/proposals/experiments/`，把 project-level 发布动作继续留给人或 watchdog review 流程。
+
+当 `CURRENT_CONCLUSION_PROMOTION.promotion_state == candidate_ready` 且当前 workspace 已配置项目索引时，Agent Host 现在会把规范化后的 conclusion item 受控 upsert 到项目级 `project_index/current_conclusions.json`。
+
+当 promotion state 是 `review_required` 或 `human_review_required` 时，Agent Host 不会自动发布；它只会把一份 reviewer bundle 写到 `research/proposals/current_conclusions/`，把 project-level 发布动作继续留给人或 watchdog review 流程。
+
+如果客户端改用 `POST /codex/result-page` 分页读取长结果，第 1 页也会复用同一批 post-run metadata：`EXECUTION_EVALUATION`、`FOLLOWUP_TASK_DRAFT`、`LEDGER_NOTE_DRAFT`、`REVIEW_PROPOSAL_DRAFT`、`HYPOTHESIS_UPDATE`、`HYPOTHESIS_PROMOTION`、`EXPERIMENT_INDEX_UPDATE`、`EXPERIMENT_PROMOTION`、`CURRENT_CONCLUSION_UPDATE`、`CURRENT_CONCLUSION_PROMOTION`、`EVALUATION_REPORT`、`CURRENT_CONCLUSIONS` 会和第一页 safe result slice 一起返回，不会因为结果过长而丢掉下一步建议。
 
 如果客户端拿到了上一轮任务的 `task_id`，现在也可以直接这样发起下一轮 prepare：
 
@@ -259,7 +337,7 @@ curl -X POST http://127.0.0.1:8787/codex/prepare \
 
 这条路径会读取该任务关联 intake 下最新的 `FOLLOWUP_TASK_DRAFT.json`，并把其中的 `prompt / reference_task_id / suggested_mode / read_plan context` 重新带回新的 prepare 流程。
 
-如果上一轮任务已经产出了 `EXECUTION_EVALUATION / LEDGER_NOTE_DRAFT / REVIEW_PROPOSAL_DRAFT`，这条 follow-up prepare 响应也会把这些 post-run context 一并带回客户端，方便 UI 直接展示“这次 follow-up 是基于怎样的结果评估继续的”。
+如果上一轮任务已经产出了 `EXECUTION_EVALUATION / LEDGER_NOTE_DRAFT / REVIEW_PROPOSAL_DRAFT / HYPOTHESIS_UPDATE / HYPOTHESIS_PROMOTION / EXPERIMENT_INDEX_UPDATE / EXPERIMENT_PROMOTION / CURRENT_CONCLUSION_UPDATE / CURRENT_CONCLUSION_PROMOTION / EVALUATION_REPORT / CURRENT_CONCLUSIONS`，这条 follow-up prepare 响应也会把这些 post-run context 一并带回客户端，方便 UI 直接展示“这次 follow-up 是基于怎样的结果评估继续的”，以及“hypothesis / experiment / conclusion promotion state 现在处在哪一层”。
 
 确认当前 token 身份：
 

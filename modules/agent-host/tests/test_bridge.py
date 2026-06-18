@@ -477,6 +477,26 @@ class BridgeTests(unittest.TestCase):
                 response["followup_context"]["ledger_note_draft"]["target_path_hint"],
                 "research/LEDGER_NOTES.md",
             )
+            self.assertEqual(
+                response["followup_context"]["hypothesis_promotion"]["promotion_state"],
+                "not_required",
+            )
+            self.assertEqual(
+                response["followup_context"]["experiment_promotion"]["promotion_state"],
+                "not_required",
+            )
+            self.assertEqual(
+                response["followup_context"]["current_conclusion_update"]["source_task_id"],
+                "task_20260616_120000_follow01",
+            )
+            self.assertEqual(
+                response["followup_context"]["current_conclusion_promotion"]["promotion_state"],
+                "bounded_only",
+            )
+            self.assertEqual(
+                response["followup_context"]["current_conclusion_promotion"]["project_sync"]["status"],
+                "bounded_only",
+            )
             self.assertEqual(response["contract"]["reference_task_id"], "task_20260616_120000_follow01")
             self.assertIn("Review the safe result", response["contract"]["prompt"])
             seeded_intent = json.loads((Path(response["artifacts_dir"]) / "INTENT_DRAFT.json").read_text())
@@ -1318,6 +1338,12 @@ class BridgeTests(unittest.TestCase):
             followup = response["followup_task_draft"]
             ledger_note = response["ledger_note_draft"]
             review_proposal = response["review_proposal_draft"]
+            hypothesis_promotion = response["hypothesis_promotion"]
+            experiment_promotion = response["experiment_promotion"]
+            current_conclusion_update = response["current_conclusion_update"]
+            current_conclusion_promotion = response["current_conclusion_promotion"]
+            evaluation_report = response["evaluation_report"]
+            current_conclusions = response["current_conclusions"]
             self.assertEqual(evaluation["execution_decision"], "result_ready_for_review")
             self.assertEqual(evaluation["recommended_next_action"], "review_result")
             self.assertEqual(evaluation["evidence_retrieval_decision"], "stale_conclusion")
@@ -1332,10 +1358,27 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(review_proposal["review_scope"], "report_only")
             self.assertFalse(review_proposal["requires_human_review"])
             self.assertIn("stale_conclusion", review_proposal["summary"])
+            self.assertEqual(hypothesis_promotion["promotion_state"], "not_required")
+            self.assertEqual(hypothesis_promotion["project_sync"]["status"], "not_required")
+            self.assertEqual(experiment_promotion["promotion_state"], "not_required")
+            self.assertEqual(experiment_promotion["project_sync"]["status"], "not_required")
+            self.assertEqual(current_conclusion_update["conclusion_status"], "auxiliary_only")
+            self.assertEqual(current_conclusion_promotion["decision"], "bounded_only_do_not_publish")
+            self.assertEqual(current_conclusion_promotion["project_sync"]["status"], "bounded_only")
+            self.assertEqual(evaluation_report["hypothesis_promotion_state"], "not_required")
+            self.assertEqual(evaluation_report["experiment_promotion_state"], "not_required")
+            self.assertEqual(evaluation_report["current_conclusions_promotion_state"], "bounded_only")
+            self.assertEqual(evaluation_report["assessment_basis"], "structural_only")
+            self.assertEqual(evaluation_report["validity"]["status"], "valid_with_limitations")
+            self.assertEqual(current_conclusions["promotion_state"], "bounded_only")
             self.assertEqual(repeat["execution_evaluation"]["task_id"], "task_20260616_120000_eval01")
             self.assertEqual(repeat["followup_task_draft"]["source_task_id"], "task_20260616_120000_eval01")
             self.assertEqual(repeat["ledger_note_draft"]["source_task_id"], "task_20260616_120000_eval01")
             self.assertEqual(repeat["review_proposal_draft"]["source_task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(repeat["hypothesis_promotion"]["source_task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(repeat["experiment_promotion"]["source_task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(repeat["current_conclusion_update"]["source_task_id"], "task_20260616_120000_eval01")
+            self.assertEqual(repeat["current_conclusion_promotion"]["source_task_id"], "task_20260616_120000_eval01")
             intake_dir = bridge.intake_dir(config, intake_id)
             self.assertTrue((intake_dir / "EXECUTION_EVALUATION.json").exists())
             self.assertTrue((intake_dir / "EXECUTION_EVALUATION.md").exists())
@@ -1345,6 +1388,12 @@ class BridgeTests(unittest.TestCase):
             self.assertTrue((intake_dir / "LEDGER_NOTE_DRAFT.md").exists())
             self.assertTrue((intake_dir / "REVIEW_PROPOSAL_DRAFT.json").exists())
             self.assertTrue((intake_dir / "REVIEW_PROPOSAL_DRAFT.md").exists())
+            self.assertTrue((intake_dir / "HYPOTHESIS_PROMOTION.json").exists())
+            self.assertTrue((intake_dir / "EXPERIMENT_PROMOTION.json").exists())
+            self.assertTrue((intake_dir / "CURRENT_CONCLUSION_UPDATE.json").exists())
+            self.assertTrue((intake_dir / "CURRENT_CONCLUSION_PROMOTION.json").exists())
+            self.assertTrue((intake_dir / "EVALUATION_REPORT.json").exists())
+            self.assertTrue((intake_dir / "CURRENT_CONCLUSIONS.json").exists())
             events = [
                 json.loads(line)
                 for line in (intake_dir / "TASK_INTAKE.events.jsonl").read_text().strip().splitlines()
@@ -1353,6 +1402,10 @@ class BridgeTests(unittest.TestCase):
             followup_events = [item for item in events if item.get("event") == "followup_task_drafted"]
             ledger_events = [item for item in events if item.get("event") == "ledger_note_drafted"]
             review_events = [item for item in events if item.get("event") == "review_proposal_drafted"]
+            hypothesis_promotion_events = [item for item in events if item.get("event") == "hypothesis_promotion_updated"]
+            experiment_promotion_events = [item for item in events if item.get("event") == "experiment_promotion_updated"]
+            current_conclusion_update_events = [item for item in events if item.get("event") == "current_conclusion_update_drafted"]
+            current_conclusion_promotion_events = [item for item in events if item.get("event") == "current_conclusion_promotion_updated"]
             self.assertEqual(len(execution_events), 1)
             self.assertEqual(execution_events[0]["task_id"], "task_20260616_120000_eval01")
             self.assertEqual(len(followup_events), 1)
@@ -1361,6 +1414,14 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(ledger_events[0]["source_task_id"], "task_20260616_120000_eval01")
             self.assertEqual(len(review_events), 1)
             self.assertEqual(review_events[0]["review_scope"], "report_only")
+            self.assertEqual(len(hypothesis_promotion_events), 1)
+            self.assertEqual(hypothesis_promotion_events[0]["promotion_state"], "not_required")
+            self.assertEqual(len(experiment_promotion_events), 1)
+            self.assertEqual(experiment_promotion_events[0]["promotion_state"], "not_required")
+            self.assertEqual(len(current_conclusion_update_events), 1)
+            self.assertEqual(current_conclusion_update_events[0]["topic_id"], "current_best_candidate")
+            self.assertEqual(len(current_conclusion_promotion_events), 1)
+            self.assertEqual(current_conclusion_promotion_events[0]["promotion_state"], "bounded_only")
 
     def test_result_replaces_post_run_artifacts_when_second_task_reuses_same_intake(self):
         with tempfile.TemporaryDirectory() as tmp:

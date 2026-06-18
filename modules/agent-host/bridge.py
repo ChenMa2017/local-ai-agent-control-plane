@@ -867,6 +867,7 @@ def intake_summary_markdown(contract: dict[str, Any], questions: list[str], pref
 def persist_intake_artifacts(
     *,
     config: BridgeConfig,
+    project: Project,
     intake_id: str,
     intent: dict[str, Any],
     gray_areas: list[str],
@@ -880,6 +881,7 @@ def persist_intake_artifacts(
 ) -> None:
     write_intake_artifacts(
         config=config,
+        project=project,
         intake_id=intake_id,
         intent=intent,
         gray_areas=gray_areas,

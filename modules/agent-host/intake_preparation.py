@@ -27,6 +27,11 @@ from prepare_intent import (
     read_plan_markdown,
     should_consult_evidence_index,
 )
+from research_objects import (
+    build_experiment_spec,
+    build_hypothesis_registry,
+    load_research_program_snapshot,
+)
 
 JsonObject = dict[str, Any]
 Payload = dict[str, str]
@@ -247,6 +252,27 @@ def load_prepared_run_context(
         intake_id_re=intake_id_re,
         error_factory=error_factory,
     )
+    research_program = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "RESEARCH_PROGRAM.json",
+        intake_id_re=intake_id_re,
+        error_factory=error_factory,
+    )
+    hypothesis_registry = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "HYPOTHESIS_REGISTRY.json",
+        intake_id_re=intake_id_re,
+        error_factory=error_factory,
+    )
+    experiment_spec = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "EXPERIMENT_SPEC.json",
+        intake_id_re=intake_id_re,
+        error_factory=error_factory,
+    )
     return {
         "intake_id": intake_id,
         "intent": intent,
@@ -254,6 +280,9 @@ def load_prepared_run_context(
         "taskbox": taskbox,
         "preflight": preflight,
         "evidence_retrieval": evidence,
+        "research_program": research_program or None,
+        "hypothesis_registry": hypothesis_registry or None,
+        "experiment_spec": experiment_spec or None,
     }
 
 
@@ -319,6 +348,62 @@ def handle_codex_intake(
         intake_id_re=intake_id_re,
         error_factory=deps.error_factory,
     )
+    hypothesis_update = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "HYPOTHESIS_UPDATE.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    hypothesis_promotion = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "HYPOTHESIS_PROMOTION.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    experiment_index_update = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "EXPERIMENT_INDEX_UPDATE.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    experiment_promotion = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "EXPERIMENT_PROMOTION.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    current_conclusion_update = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "CURRENT_CONCLUSION_UPDATE.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    current_conclusion_promotion = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "CURRENT_CONCLUSION_PROMOTION.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    evaluation_report = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "EVALUATION_REPORT.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
+    current_conclusions = load_optional_intake_json_artifact(
+        config,
+        intake_id,
+        "CURRENT_CONCLUSIONS.json",
+        intake_id_re=intake_id_re,
+        error_factory=deps.error_factory,
+    )
     events_path = root / "TASK_INTAKE.events.jsonl"
     event_count = count_jsonl_records(events_path.read_text() if events_path.exists() else "")
     return {
@@ -332,10 +417,21 @@ def handle_codex_intake(
         "preflight": bundle["preflight"],
         "decision_gate": decision_gate,
         "evidence_retrieval": bundle["evidence_retrieval"],
+        "research_program": bundle.get("research_program"),
+        "hypothesis_registry": bundle.get("hypothesis_registry"),
+        "experiment_spec": bundle.get("experiment_spec"),
         "execution_evaluation": execution_evaluation,
         "followup_task_draft": followup_task_draft,
         "ledger_note_draft": ledger_note_draft,
         "review_proposal_draft": review_proposal_draft,
+        "hypothesis_update": hypothesis_update,
+        "hypothesis_promotion": hypothesis_promotion,
+        "experiment_index_update": experiment_index_update,
+        "experiment_promotion": experiment_promotion,
+        "current_conclusion_update": current_conclusion_update,
+        "current_conclusion_promotion": current_conclusion_promotion,
+        "evaluation_report": evaluation_report,
+        "current_conclusions": current_conclusions,
         "event_count": event_count,
         "ready_to_run": bool(bundle["preflight"].get("ok") and not questions),
     }
@@ -388,6 +484,46 @@ def load_followup_prepare_seed(
         followup_task_id,
         "source_task_id",
     )
+    hypothesis_update = filter_source_task_artifact(
+        read_json_object_if_exists(root / "HYPOTHESIS_UPDATE.json"),
+        followup_task_id,
+        "source_task_id",
+    )
+    hypothesis_promotion = filter_source_task_artifact(
+        read_json_object_if_exists(root / "HYPOTHESIS_PROMOTION.json"),
+        followup_task_id,
+        "source_task_id",
+    )
+    experiment_index_update = filter_source_task_artifact(
+        read_json_object_if_exists(root / "EXPERIMENT_INDEX_UPDATE.json"),
+        followup_task_id,
+        "source_task_id",
+    )
+    experiment_promotion = filter_source_task_artifact(
+        read_json_object_if_exists(root / "EXPERIMENT_PROMOTION.json"),
+        followup_task_id,
+        "source_task_id",
+    )
+    current_conclusion_update = filter_source_task_artifact(
+        read_json_object_if_exists(root / "CURRENT_CONCLUSION_UPDATE.json"),
+        followup_task_id,
+        "source_task_id",
+    )
+    current_conclusion_promotion = filter_source_task_artifact(
+        read_json_object_if_exists(root / "CURRENT_CONCLUSION_PROMOTION.json"),
+        followup_task_id,
+        "source_task_id",
+    )
+    evaluation_report = filter_source_task_artifact(
+        read_json_object_if_exists(root / "EVALUATION_REPORT.json"),
+        followup_task_id,
+        "task_id",
+    )
+    current_conclusions = filter_source_task_artifact(
+        read_json_object_if_exists(root / "CURRENT_CONCLUSIONS.json"),
+        followup_task_id,
+        "source_task_id",
+    )
     return {
         "task_id": followup_task_id,
         "source_intake_id": intake_id,
@@ -396,6 +532,14 @@ def load_followup_prepare_seed(
         "execution_evaluation": execution_evaluation,
         "ledger_note_draft": ledger_note_draft,
         "review_proposal_draft": review_proposal_draft,
+        "hypothesis_update": hypothesis_update,
+        "hypothesis_promotion": hypothesis_promotion,
+        "experiment_index_update": experiment_index_update,
+        "experiment_promotion": experiment_promotion,
+        "current_conclusion_update": current_conclusion_update,
+        "current_conclusion_promotion": current_conclusion_promotion,
+        "evaluation_report": evaluation_report,
+        "current_conclusions": current_conclusions,
     }
 
 
@@ -680,6 +824,7 @@ def intake_summary_markdown(contract: JsonObject, questions: list[str], prefligh
 def persist_intake_artifacts(
     *,
     config: Any,
+    project: Any,
     intake_id: str,
     intent: JsonObject,
     gray_areas: list[str],
@@ -695,6 +840,16 @@ def persist_intake_artifacts(
     error_factory: ErrorFactory,
 ) -> None:
     root = intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=error_factory)
+    research_program = load_research_program_snapshot(project.root, workspace=project.name, intake_id=intake_id)
+    hypothesis_registry = build_hypothesis_registry(contract, evidence_retrieval, research_program)
+    experiment_spec = build_experiment_spec(
+        contract,
+        taskbox,
+        preflight,
+        evidence_retrieval,
+        research_program,
+        hypothesis_registry,
+    )
     write_json_atomic(root / "INTENT_DRAFT.json", intent)
     write_json_atomic(root / "GRAY_AREAS.json", {"schema_version": 1, "intake_id": intake_id, "items": gray_areas})
     write_json_atomic(root / "QUESTIONS.json", {"schema_version": 1, "intake_id": intake_id, "items": questions})
@@ -717,6 +872,9 @@ def persist_intake_artifacts(
     write_json_atomic(root / "POLICY_PREFLIGHT.json", preflight)
     write_json_atomic(root / "DECISION_GATE.json", contract.get("experiment_decision_gate", {}))
     write_json_atomic(root / "EVIDENCE_RETRIEVAL.json", evidence_retrieval)
+    write_json_atomic(root / "RESEARCH_PROGRAM.json", research_program)
+    write_json_atomic(root / "HYPOTHESIS_REGISTRY.json", hypothesis_registry)
+    write_json_atomic(root / "EXPERIMENT_SPEC.json", experiment_spec)
     write_text_atomic(root / "READ_PLAN.md", read_plan_markdown(evidence_retrieval))
     write_text_atomic(
         root / "ASSUMPTIONS.md",
@@ -885,6 +1043,7 @@ def handle_codex_prepare(
     }
     persist_intake_artifacts(
         config=config,
+        project=project,
         intake_id=intake_id,
         intent=intent,
         gray_areas=gray_areas,
@@ -926,6 +1085,46 @@ def handle_codex_prepare(
                 if isinstance(followup_seed.get("review_proposal_draft"), dict) and followup_seed.get("review_proposal_draft")
                 else None
             ),
+            "hypothesis_update": (
+                followup_seed.get("hypothesis_update")
+                if isinstance(followup_seed.get("hypothesis_update"), dict) and followup_seed.get("hypothesis_update")
+                else None
+            ),
+            "hypothesis_promotion": (
+                followup_seed.get("hypothesis_promotion")
+                if isinstance(followup_seed.get("hypothesis_promotion"), dict) and followup_seed.get("hypothesis_promotion")
+                else None
+            ),
+            "experiment_index_update": (
+                followup_seed.get("experiment_index_update")
+                if isinstance(followup_seed.get("experiment_index_update"), dict) and followup_seed.get("experiment_index_update")
+                else None
+            ),
+            "experiment_promotion": (
+                followup_seed.get("experiment_promotion")
+                if isinstance(followup_seed.get("experiment_promotion"), dict) and followup_seed.get("experiment_promotion")
+                else None
+            ),
+            "current_conclusion_update": (
+                followup_seed.get("current_conclusion_update")
+                if isinstance(followup_seed.get("current_conclusion_update"), dict) and followup_seed.get("current_conclusion_update")
+                else None
+            ),
+            "current_conclusion_promotion": (
+                followup_seed.get("current_conclusion_promotion")
+                if isinstance(followup_seed.get("current_conclusion_promotion"), dict) and followup_seed.get("current_conclusion_promotion")
+                else None
+            ),
+            "evaluation_report": (
+                followup_seed.get("evaluation_report")
+                if isinstance(followup_seed.get("evaluation_report"), dict) and followup_seed.get("evaluation_report")
+                else None
+            ),
+            "current_conclusions": (
+                followup_seed.get("current_conclusions")
+                if isinstance(followup_seed.get("current_conclusions"), dict) and followup_seed.get("current_conclusions")
+                else None
+            ),
         }
         if followup_task_id
         else None,
@@ -937,6 +1136,27 @@ def handle_codex_prepare(
         "taskbox": taskbox,
         "preflight": preflight,
         "evidence_retrieval": evidence_retrieval,
+        "research_program": load_optional_intake_json_artifact(
+            config,
+            intake_id,
+            "RESEARCH_PROGRAM.json",
+            intake_id_re=intake_id_re,
+            error_factory=deps.error_factory,
+        ),
+        "hypothesis_registry": load_optional_intake_json_artifact(
+            config,
+            intake_id,
+            "HYPOTHESIS_REGISTRY.json",
+            intake_id_re=intake_id_re,
+            error_factory=deps.error_factory,
+        ),
+        "experiment_spec": load_optional_intake_json_artifact(
+            config,
+            intake_id,
+            "EXPERIMENT_SPEC.json",
+            intake_id_re=intake_id_re,
+            error_factory=deps.error_factory,
+        ),
         "artifacts_dir": str(intake_dir(config, intake_id, intake_id_re=intake_id_re, error_factory=deps.error_factory)),
         "ready_to_run": bool(preflight.get("ok") and not questions),
     }

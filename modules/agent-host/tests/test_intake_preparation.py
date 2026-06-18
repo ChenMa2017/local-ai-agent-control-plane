@@ -68,8 +68,28 @@ class IntakePreparationTests(unittest.TestCase):
             root = Path(tmp)
             config = FakeConfig(root, {"demo": FakeProject("demo", root)})
             intake_id = "intake_20260617_demo01"
+            (root / "research").mkdir(parents=True, exist_ok=True)
+            (root / "research" / "RESEARCH_PROGRAM.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "research_program.v0.1",
+                        "program_id": "demo-program",
+                        "domain": {"name": "demo-domain", "allowed_project_areas": ["analysis"]},
+                        "autonomy_policy": {"mode": "domain_bounded"},
+                        "baseline_policy": {"required": True},
+                        "conclusion_policy": {
+                            "allowed_conclusion_statuses": ["confirmed", "tentative", "auxiliary_only"],
+                            "publish_only_after_review": True,
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
             intake_preparation.persist_intake_artifacts(
                 config=config,
+                project=config.projects["demo"],
                 intake_id=intake_id,
                 intent={"workspace": "demo", "user": "chenma", "prompt": "hello"},
                 gray_areas=["scope_missing"],
@@ -98,6 +118,9 @@ class IntakePreparationTests(unittest.TestCase):
         self.assertEqual(bundle["intent"]["workspace"], "demo")
         self.assertEqual(bundle["contract"]["objective"], "report_only")
         self.assertEqual(bundle["taskbox"]["workspace_mode"], "readonly")
+        self.assertEqual(bundle["research_program"]["program_id"], "demo-program")
+        self.assertEqual(bundle["hypothesis_registry"]["registry_status"], "analysis_only")
+        self.assertEqual(bundle["experiment_spec"]["status"], "not_required")
 
     def test_handle_codex_intake_counts_events_and_ready_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,6 +135,9 @@ class IntakePreparationTests(unittest.TestCase):
                 "TASKBOX_DRAFT.json": {"status": "ready"},
                 "POLICY_PREFLIGHT.json": {"ok": True},
                 "EVIDENCE_RETRIEVAL.json": {"required": False},
+                "RESEARCH_PROGRAM.json": {"program_id": "demo-program", "available": True},
+                "HYPOTHESIS_REGISTRY.json": {"registry_status": "analysis_only"},
+                "EXPERIMENT_SPEC.json": {"status": "not_required"},
                 "QUESTIONS.json": {"items": []},
             }.items():
                 (intake_root / name).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
@@ -139,6 +165,9 @@ class IntakePreparationTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertEqual(response["event_count"], 2)
         self.assertTrue(response["ready_to_run"])
+        self.assertEqual(response["research_program"]["program_id"], "demo-program")
+        self.assertEqual(response["hypothesis_registry"]["registry_status"], "analysis_only")
+        self.assertEqual(response["experiment_spec"]["status"], "not_required")
 
     def test_load_followup_prepare_seed_filters_mismatched_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,6 +184,65 @@ class IntakePreparationTests(unittest.TestCase):
             )
             (intake_root / "LEDGER_NOTE_DRAFT.json").write_text(
                 json.dumps({"source_task_id": "other_task", "note": "ignore"}, ensure_ascii=False, indent=2) + "\n"
+            )
+            (intake_root / "HYPOTHESIS_UPDATE.json").write_text(
+                json.dumps(
+                    {"source_task_id": "task_20260617_follow01", "hypothesis_id": "hypothesis_demo"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "HYPOTHESIS_PROMOTION.json").write_text(
+                json.dumps(
+                    {"source_task_id": "task_20260617_follow01", "promotion_state": "candidate_ready"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "EXPERIMENT_INDEX_UPDATE.json").write_text(
+                json.dumps(
+                    {"source_task_id": "task_20260617_follow01", "experiment_id": "experiment_demo"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "EXPERIMENT_PROMOTION.json").write_text(
+                json.dumps(
+                    {"source_task_id": "task_20260617_follow01", "promotion_state": "candidate_ready"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "CURRENT_CONCLUSION_UPDATE.json").write_text(
+                json.dumps(
+                    {"source_task_id": "task_20260617_follow01", "topic_id": "demo_topic"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "CURRENT_CONCLUSION_PROMOTION.json").write_text(
+                json.dumps(
+                    {"source_task_id": "task_20260617_follow01", "promotion_state": "review_required"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "EVALUATION_REPORT.json").write_text(
+                json.dumps({"task_id": "task_20260617_follow01", "summary": "ok"}, ensure_ascii=False, indent=2) + "\n"
+            )
+            (intake_root / "CURRENT_CONCLUSIONS.json").write_text(
+                json.dumps(
+                    {"source_task_id": "task_20260617_follow01", "promotion_state": "review_required"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
             )
 
             seed = intake_preparation.load_followup_prepare_seed(
@@ -173,3 +261,11 @@ class IntakePreparationTests(unittest.TestCase):
         self.assertEqual(seed["source_intake_id"], intake_id)
         self.assertEqual(seed["execution_evaluation"]["task_id"], "task_20260617_follow01")
         self.assertEqual(seed["ledger_note_draft"], {})
+        self.assertEqual(seed["hypothesis_update"]["hypothesis_id"], "hypothesis_demo")
+        self.assertEqual(seed["hypothesis_promotion"]["promotion_state"], "candidate_ready")
+        self.assertEqual(seed["experiment_index_update"]["experiment_id"], "experiment_demo")
+        self.assertEqual(seed["experiment_promotion"]["promotion_state"], "candidate_ready")
+        self.assertEqual(seed["current_conclusion_update"]["topic_id"], "demo_topic")
+        self.assertEqual(seed["current_conclusion_promotion"]["promotion_state"], "review_required")
+        self.assertEqual(seed["evaluation_report"]["task_id"], "task_20260617_follow01")
+        self.assertEqual(seed["current_conclusions"]["promotion_state"], "review_required")
