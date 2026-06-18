@@ -98,6 +98,86 @@ def current_conclusion_operator_context(promotion: JsonObject | None) -> tuple[s
     return state or decision or sync_status, target_path, sync_status, decision
 
 
+def hypothesis_operator_context(promotion: JsonObject | None) -> tuple[str, str | None, str, str]:
+    if not isinstance(promotion, dict):
+        return "", None, "", ""
+    notes = [str(item) for item in (promotion.get("notes") or []) if str(item or "").strip()]
+    decision = str(promotion.get("decision") or "").strip()
+    state = str(promotion.get("promotion_state") or "").strip()
+    project_sync = promotion.get("project_sync") if isinstance(promotion.get("project_sync"), dict) else {}
+    sync_status = str(project_sync.get("status") or "").strip()
+    target_path = (
+        str(project_sync.get("target_path") or "").strip()
+        or str(promotion.get("review_proposal_path_hint") or "").strip()
+        or str(promotion.get("target_path_hint") or "").strip()
+        or None
+    )
+    if notes:
+        return notes[0], target_path, sync_status, decision
+    if sync_status == "review_bundle_written":
+        return (
+            "A hypothesis review bundle was written and needs operator resolution before project publication.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    if state == "review_required":
+        return (
+            "The hypothesis candidate still has unresolved clarification or review requirements.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    if state == "human_review_required" or decision == "blocked_on_human_review":
+        return (
+            "A human decision is required before any hypothesis promotion can proceed.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    return state or decision or sync_status, target_path, sync_status, decision
+
+
+def experiment_operator_context(promotion: JsonObject | None) -> tuple[str, str | None, str, str]:
+    if not isinstance(promotion, dict):
+        return "", None, "", ""
+    notes = [str(item) for item in (promotion.get("notes") or []) if str(item or "").strip()]
+    decision = str(promotion.get("decision") or "").strip()
+    state = str(promotion.get("promotion_state") or "").strip()
+    project_sync = promotion.get("project_sync") if isinstance(promotion.get("project_sync"), dict) else {}
+    sync_status = str(project_sync.get("status") or "").strip()
+    target_path = (
+        str(project_sync.get("target_path") or "").strip()
+        or str(promotion.get("review_proposal_path_hint") or "").strip()
+        or str(promotion.get("target_path_hint") or "").strip()
+        or None
+    )
+    if notes:
+        return notes[0], target_path, sync_status, decision
+    if sync_status == "review_bundle_written":
+        return (
+            "An experiment review bundle was written and needs operator resolution before project publication.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    if state == "review_required":
+        return (
+            "The experiment candidate is structurally ready, but project policy still requires review before publication.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    if state == "human_review_required" or decision == "blocked_on_human_review":
+        return (
+            "A human decision is required before any experiment promotion can proceed.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    return state or decision or sync_status, target_path, sync_status, decision
+
+
 def build_prepare_operator_summary(
     intent: JsonObject,
     contract: JsonObject,
@@ -289,6 +369,68 @@ def build_post_run_operator_summary(
         )
         unmet_requirements.append(str(transition_validation.get("reason") or "transition_review_required"))
 
+    hypothesis_state = ""
+    hypothesis_reason = ""
+    hypothesis_target_path: str | None = None
+    hypothesis_sync_status = ""
+    hypothesis_decision = ""
+    if isinstance(hypothesis_promotion, dict):
+        hypothesis_state = str(hypothesis_promotion.get("promotion_state") or "").strip()
+        (
+            hypothesis_reason,
+            hypothesis_target_path,
+            hypothesis_sync_status,
+            hypothesis_decision,
+        ) = hypothesis_operator_context(hypothesis_promotion)
+    if hypothesis_state in {"review_required", "human_review_required"}:
+        description = "Hypothesis promotion still requires review before broader reuse."
+        if hypothesis_sync_status == "review_bundle_written":
+            description = "A hypothesis review bundle is waiting for operator resolution."
+        elif hypothesis_state == "human_review_required":
+            description = "A human decision is still required before the hypothesis can be promoted."
+        blockers.append(
+            blocker_payload(
+                kind="hypothesis_promotion_gate",
+                description=description,
+                reason=hypothesis_reason or hypothesis_state,
+                can_execute_automatically=False,
+            )
+        )
+        for item in (hypothesis_state, hypothesis_decision, hypothesis_sync_status):
+            if item and item not in unmet_requirements:
+                unmet_requirements.append(item)
+
+    experiment_state = ""
+    experiment_reason = ""
+    experiment_target_path: str | None = None
+    experiment_sync_status = ""
+    experiment_decision = ""
+    if isinstance(experiment_promotion, dict):
+        experiment_state = str(experiment_promotion.get("promotion_state") or "").strip()
+        (
+            experiment_reason,
+            experiment_target_path,
+            experiment_sync_status,
+            experiment_decision,
+        ) = experiment_operator_context(experiment_promotion)
+    if experiment_state in {"review_required", "human_review_required"}:
+        description = "Experiment promotion still requires review before broader reuse."
+        if experiment_sync_status == "review_bundle_written":
+            description = "An experiment review bundle is waiting for operator resolution."
+        elif experiment_state == "human_review_required":
+            description = "A human decision is still required before the experiment can be promoted."
+        blockers.append(
+            blocker_payload(
+                kind="experiment_promotion_gate",
+                description=description,
+                reason=experiment_reason or experiment_state,
+                can_execute_automatically=False,
+            )
+        )
+        for item in (experiment_state, experiment_decision, experiment_sync_status):
+            if item and item not in unmet_requirements:
+                unmet_requirements.append(item)
+
     conclusion_state = ""
     current_conclusion_reason = ""
     current_conclusion_target_path: str | None = None
@@ -345,9 +487,33 @@ def build_post_run_operator_summary(
         next_safe_action = action_payload(
             kind="resolve_review_proposal",
             description=str(review_proposal_draft.get("suggested_reviewer_action") or review_proposal_draft.get("title") or "Resolve the review proposal."),
-            reason=current_conclusion_reason or str(review_proposal_draft.get("summary") or review_proposal_draft.get("reason") or "Review is required."),
+            reason=current_conclusion_reason or hypothesis_reason or experiment_reason or str(review_proposal_draft.get("summary") or review_proposal_draft.get("reason") or "Review is required."),
             can_execute_automatically=False,
-            target_path=current_conclusion_target_path,
+            target_path=current_conclusion_target_path or hypothesis_target_path or experiment_target_path,
+        )
+    elif hypothesis_state in {"review_required", "human_review_required"}:
+        next_safe_action = action_payload(
+            kind="review_hypothesis_bundle" if hypothesis_sync_status == "review_bundle_written" else "review_hypothesis_promotion",
+            description=(
+                "Review the generated hypothesis bundle before applying it to the project registry."
+                if hypothesis_sync_status == "review_bundle_written"
+                else "Review the hypothesis promotion gate before broader reuse."
+            ),
+            reason=hypothesis_reason or "Hypothesis promotion is still blocked.",
+            can_execute_automatically=False,
+            target_path=hypothesis_target_path,
+        )
+    elif experiment_state in {"review_required", "human_review_required"}:
+        next_safe_action = action_payload(
+            kind="review_experiment_bundle" if experiment_sync_status == "review_bundle_written" else "review_experiment_promotion",
+            description=(
+                "Review the generated experiment bundle before applying it to the project index."
+                if experiment_sync_status == "review_bundle_written"
+                else "Review the experiment promotion gate before broader reuse."
+            ),
+            reason=experiment_reason or "Experiment promotion is still blocked.",
+            can_execute_automatically=False,
+            target_path=experiment_target_path,
         )
     elif conclusion_state in {"review_required", "human_review_required", "bounded_only"}:
         next_safe_action = action_payload(
@@ -404,8 +570,16 @@ def build_post_run_operator_summary(
     if overall_status == "promotion_ready":
         operator_message = "The result is structurally ready for bounded promotion and follow-up."
     elif overall_status == "review_required":
-        if current_conclusion_sync_status == "review_bundle_written":
+        if hypothesis_sync_status == "review_bundle_written":
+            operator_message = "The result exists, but hypothesis publication is waiting on the generated review bundle."
+        elif experiment_sync_status == "review_bundle_written":
+            operator_message = "The result exists, but experiment publication is waiting on the generated review bundle."
+        elif current_conclusion_sync_status == "review_bundle_written":
             operator_message = "The result exists, but current conclusion publication is waiting on the generated review bundle."
+        elif hypothesis_state in {"review_required", "human_review_required"}:
+            operator_message = "The result exists, but hypothesis promotion still requires review before broader reuse."
+        elif experiment_state in {"review_required", "human_review_required"}:
+            operator_message = "The result exists, but experiment promotion still requires review before broader reuse."
         elif conclusion_state == "bounded_only":
             operator_message = "The result exists, but current conclusion reuse remains bounded until stronger evidence or review resolves the claim."
         elif conclusion_state in {"review_required", "human_review_required"}:

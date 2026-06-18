@@ -549,6 +549,15 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertIn("hypothesis_review_required", attachments["evaluation_report"]["validity"]["limitations"])
             self.assertIn("experiment_review_required", attachments["evaluation_report"]["validity"]["limitations"])
             self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
+            self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "review_hypothesis_bundle")
+            self.assertEqual(
+                attachments["operator_summary"]["next_safe_action"]["target_path"],
+                "research/proposals/hypotheses/hypothesis_latency_probe.json",
+            )
+            self.assertIn(
+                "hypothesis publication is waiting on the generated review bundle",
+                attachments["operator_summary"]["operator_message"],
+            )
             self.assertIn(
                 "experiment_latency_probe_review",
                 attachments["current_conclusion_update"]["supporting_experiments"],
@@ -694,6 +703,10 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(experiment_sync["transition_validation"]["proposed_status"], "draft")
             self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
             self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "review_hypothesis_transition_bundle")
+            self.assertEqual(
+                attachments["operator_summary"]["next_safe_action"]["target_path"],
+                "research/proposals/hypotheses/hypothesis_latency_probe.json",
+            )
 
             hypothesis_bundle = json.loads(
                 (root / "research" / "proposals" / "hypotheses" / "hypothesis_latency_probe.json").read_text()
