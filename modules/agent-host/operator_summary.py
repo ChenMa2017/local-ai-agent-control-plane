@@ -51,6 +51,53 @@ def blocker_payload(
     }
 
 
+def current_conclusion_operator_context(promotion: JsonObject | None) -> tuple[str, str | None, str, str]:
+    if not isinstance(promotion, dict):
+        return "", None, "", ""
+    notes = [str(item) for item in (promotion.get("notes") or []) if str(item or "").strip()]
+    decision = str(promotion.get("decision") or "").strip()
+    state = str(promotion.get("promotion_state") or "").strip()
+    project_sync = promotion.get("project_sync") if isinstance(promotion.get("project_sync"), dict) else {}
+    sync_status = str(project_sync.get("status") or "").strip()
+    target_path = (
+        str(project_sync.get("target_path") or "").strip()
+        or str(promotion.get("review_proposal_path_hint") or "").strip()
+        or str(promotion.get("target_path_hint") or "").strip()
+        or None
+    )
+    if notes:
+        return notes[0], target_path, sync_status, decision
+    if decision == "bounded_only_do_not_publish":
+        return (
+            "The current conclusion stays bounded until evidence retrieval can support a safe_to_answer publication path.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    if sync_status == "review_bundle_written":
+        return (
+            "A current conclusion review bundle was written and needs operator resolution before publication.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    if state == "review_required":
+        return (
+            "The current conclusion is structurally ready, but publication still requires review.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    if state == "human_review_required":
+        return (
+            "A human decision is still required before any conclusion promotion.",
+            target_path,
+            sync_status,
+            decision,
+        )
+    return state or decision or sync_status, target_path, sync_status, decision
+
+
 def build_prepare_operator_summary(
     intent: JsonObject,
     contract: JsonObject,
@@ -243,18 +290,37 @@ def build_post_run_operator_summary(
         unmet_requirements.append(str(transition_validation.get("reason") or "transition_review_required"))
 
     conclusion_state = ""
+    current_conclusion_reason = ""
+    current_conclusion_target_path: str | None = None
+    current_conclusion_sync_status = ""
+    current_conclusion_decision = ""
     if isinstance(current_conclusion_promotion, dict):
         conclusion_state = str(current_conclusion_promotion.get("promotion_state") or "").strip()
+        (
+            current_conclusion_reason,
+            current_conclusion_target_path,
+            current_conclusion_sync_status,
+            current_conclusion_decision,
+        ) = current_conclusion_operator_context(current_conclusion_promotion)
     if conclusion_state in {"review_required", "human_review_required", "bounded_only"}:
+        description = "The current conclusion cannot yet be promoted to a fully reusable result."
+        if current_conclusion_sync_status == "review_bundle_written":
+            description = "A current conclusion review bundle is waiting for operator resolution."
+        elif conclusion_state == "bounded_only":
+            description = "The current conclusion remains bounded and cannot be published yet."
+        elif conclusion_state == "human_review_required":
+            description = "A human decision is still required before the current conclusion can be promoted."
         blockers.append(
             blocker_payload(
                 kind="current_conclusion_gate",
-                description="The current conclusion cannot yet be promoted to a fully reusable result.",
-                reason=conclusion_state,
+                description=description,
+                reason=current_conclusion_reason or conclusion_state,
                 can_execute_automatically=False,
             )
         )
-        unmet_requirements.append(conclusion_state)
+        for item in (conclusion_state, current_conclusion_decision, current_conclusion_sync_status):
+            if item and item not in unmet_requirements:
+                unmet_requirements.append(item)
 
     next_safe_action: JsonObject
     hypothesis_sync = hypothesis_promotion.get("project_sync") if isinstance(hypothesis_promotion, dict) and isinstance(hypothesis_promotion.get("project_sync"), dict) else {}
@@ -279,8 +345,25 @@ def build_post_run_operator_summary(
         next_safe_action = action_payload(
             kind="resolve_review_proposal",
             description=str(review_proposal_draft.get("suggested_reviewer_action") or review_proposal_draft.get("title") or "Resolve the review proposal."),
-            reason=str(review_proposal_draft.get("summary") or review_proposal_draft.get("reason") or "Review is required."),
+            reason=current_conclusion_reason or str(review_proposal_draft.get("summary") or review_proposal_draft.get("reason") or "Review is required."),
             can_execute_automatically=False,
+            target_path=current_conclusion_target_path,
+        )
+    elif conclusion_state in {"review_required", "human_review_required", "bounded_only"}:
+        next_safe_action = action_payload(
+            kind=(
+                "review_current_conclusion_bundle"
+                if current_conclusion_sync_status == "review_bundle_written"
+                else "review_bounded_conclusion"
+            ),
+            description=(
+                "Review the generated current conclusion bundle before publication."
+                if current_conclusion_sync_status == "review_bundle_written"
+                else "Review the bounded current conclusion gate before broader reuse."
+            ),
+            reason=current_conclusion_reason or "Current conclusion promotion is still blocked.",
+            can_execute_automatically=False,
+            target_path=current_conclusion_target_path,
         )
     elif isinstance(followup_task_draft, dict) and followup_task_draft:
         next_safe_action = action_payload(
@@ -321,7 +404,14 @@ def build_post_run_operator_summary(
     if overall_status == "promotion_ready":
         operator_message = "The result is structurally ready for bounded promotion and follow-up."
     elif overall_status == "review_required":
-        operator_message = "The result exists, but review or bounded claim resolution is still required before broader reuse."
+        if current_conclusion_sync_status == "review_bundle_written":
+            operator_message = "The result exists, but current conclusion publication is waiting on the generated review bundle."
+        elif conclusion_state == "bounded_only":
+            operator_message = "The result exists, but current conclusion reuse remains bounded until stronger evidence or review resolves the claim."
+        elif conclusion_state in {"review_required", "human_review_required"}:
+            operator_message = "The result exists, but current conclusion publication still requires review before broader reuse."
+        else:
+            operator_message = "The result exists, but review or bounded claim resolution is still required before broader reuse."
     elif overall_status == "blocked":
         operator_message = "The result flow is blocked; inspect the current blocker before any retry or promotion."
     else:

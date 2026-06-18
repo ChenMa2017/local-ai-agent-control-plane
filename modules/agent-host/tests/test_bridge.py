@@ -1376,6 +1376,10 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(evaluation_report["validity"]["status"], "valid_with_limitations")
             self.assertEqual(response["operator_summary"]["overall_status"], "review_required")
             self.assertEqual(response["operator_summary"]["next_safe_action"]["kind"], "resolve_review_proposal")
+            self.assertEqual(
+                response["operator_summary"]["next_safe_action"]["target_path"],
+                "research/proposals/current_conclusions/",
+            )
             self.assertEqual(current_conclusions["promotion_state"], "bounded_only")
             self.assertEqual(repeat["execution_evaluation"]["task_id"], "task_20260616_120000_eval01")
             self.assertEqual(repeat["followup_task_draft"]["source_task_id"], "task_20260616_120000_eval01")

@@ -187,6 +187,14 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(attachments["operator_summary"]["phase"], "post_run")
             self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
             self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "resolve_review_proposal")
+            self.assertEqual(
+                attachments["operator_summary"]["next_safe_action"]["target_path"],
+                "research/proposals/current_conclusions/",
+            )
+            self.assertIn(
+                "current conclusion reuse remains bounded",
+                attachments["operator_summary"]["operator_message"],
+            )
             self.assertEqual(repeat["execution_evaluation"]["task_id"], "task_20260617_120000_eval")
             self.assertTrue((intake_root / "EXECUTION_EVALUATION.json").exists())
             self.assertTrue((intake_root / "FOLLOWUP_TASK_DRAFT.json").exists())
@@ -780,6 +788,16 @@ class ExecutionEvaluationTests(unittest.TestCase):
             promotion = attachments["current_conclusion_promotion"]
             self.assertEqual(promotion["promotion_state"], "review_required")
             self.assertEqual(promotion["project_sync"]["status"], "review_bundle_written")
+            self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
+            self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "review_current_conclusion_bundle")
+            self.assertEqual(
+                attachments["operator_summary"]["next_safe_action"]["target_path"],
+                "research/proposals/current_conclusions/current_best_candidate.json",
+            )
+            self.assertIn(
+                "waiting on the generated review bundle",
+                attachments["operator_summary"]["operator_message"],
+            )
             bundle_path = root / "research" / "proposals" / "current_conclusions" / "current_best_candidate.json"
             self.assertTrue(bundle_path.exists())
             bundle = json.loads(bundle_path.read_text())
