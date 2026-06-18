@@ -139,6 +139,120 @@ class HealthSummaryTests(unittest.TestCase):
         self.assertNotIn("secret-token-12345", text)
         self.assertNotIn("ghp_abcdefghijklmnopqrstuvwxyz123456", text)
 
+    def test_handle_health_summary_normalizes_multi_workspace_supervisor_signals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            alpha_root = root / "alpha"
+            beta_root = root / "beta"
+            alpha_agent = alpha_root / "agent"
+            beta_agent = beta_root / "agent"
+            alpha_agent.mkdir(parents=True)
+            beta_agent.mkdir(parents=True)
+
+            (alpha_agent / "RUN_STATE.json").write_text(
+                json.dumps(
+                    {
+                        "role": "watchdog",
+                        "supervisor_mode": "audit",
+                        "runner_started_count": "12",
+                        "runner_completed_count": "9",
+                        "runner_failure_drift": "NaN",
+                        "status": "waiting",
+                        "blocker_type": "mystery",
+                        "requires_human_review": False,
+                        "updated_utc": "2026-06-17T15:00:00Z",
+                        "next_action": {
+                            "kind": "review",
+                            "description": "",
+                            "can_execute_automatically": False,
+                            "reason": "Awaiting bounded review",
+                        },
+                    }
+                )
+            )
+            (alpha_agent / "NEXT_ACTION.md").write_text(
+                f"Review {alpha_root}/private Authorization: Bearer secret-token-12345 "
+                + ("alpha " * 80)
+            )
+            (alpha_agent / "BLOCKERS.md").write_text(
+                f"Alpha blockers {alpha_root}/private ghp_abcdefghijklmnopqrstuvwxyz123456 " + ("block " * 80)
+            )
+
+            (beta_agent / "RUN_STATE.json").write_text(
+                json.dumps(
+                    {
+                        "role": "supervisor",
+                        "supervisor_mode": "light",
+                        "runner_started_count": 4,
+                        "runner_completed_count": 4,
+                        "runner_failure_drift": 0,
+                        "status": "ready",
+                        "blocker_type": "none",
+                        "requires_human_review": True,
+                        "updated_utc": "2026-06-17T15:05:00Z",
+                        "next_action": {
+                            "kind": "monitor",
+                            "description": f"Monitor {beta_root}/safe-state",
+                            "can_execute_automatically": True,
+                            "reason": "Normal steady-state operation",
+                        },
+                    }
+                )
+            )
+            (beta_agent / "BLOCKERS.md").write_text("No blockers")
+
+            config = FakeConfig(
+                {
+                    "beta": FakeProject("beta", beta_root),
+                    "alpha": FakeProject("alpha", alpha_root),
+                }
+            )
+
+            response = health_summary.handle_health_summary(
+                config,
+                FakePrincipal("chenma"),
+                deps=health_summary.HealthSummaryDependencies(
+                    read_recent_task_summaries=lambda _config, _principal, _limit: [
+                        {"task_id": "task_done", "status": "done"},
+                    ]
+                ),
+                version="mvp-v0.7",
+                active_statuses={"running", "queued"},
+                final_statuses={"done", "failed"},
+                allowed_blockers={"none", "unknown", "env"},
+                supervisor_text_max_chars=120,
+            )
+            text = json.dumps(response, ensure_ascii=False)
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["supervisor"]["workspace_count"], 2)
+        self.assertEqual(response["supervisor"]["blocked_count"], 0)
+        self.assertEqual(response["supervisor"]["review_required_count"], 1)
+        self.assertEqual(response["supervisor"]["runner_drift_count"], 0)
+
+        alpha_signal, beta_signal = response["supervisor"]["signals"]
+        self.assertEqual(alpha_signal["workspace"], "alpha")
+        self.assertEqual(alpha_signal["role"], "unknown")
+        self.assertEqual(alpha_signal["blocker_type"], "unknown")
+        self.assertEqual(alpha_signal["runner_failure_drift"], "unknown")
+        self.assertIn("[workspace:alpha]", alpha_signal["next_action"]["description"])
+        self.assertTrue(alpha_signal["next_action"]["description"].endswith("...(truncated)"))
+        self.assertIn("[workspace:alpha]", alpha_signal["blockers_preview"])
+        self.assertTrue(alpha_signal["blockers_preview"].endswith("...(truncated)"))
+
+        self.assertEqual(beta_signal["workspace"], "beta")
+        self.assertEqual(beta_signal["role"], "supervisor")
+        self.assertEqual(beta_signal["blocker_type"], "none")
+        self.assertEqual(beta_signal["runner_failure_drift"], "0")
+        self.assertTrue(beta_signal["requires_human_review"])
+        self.assertEqual(beta_signal["next_action"]["kind"], "monitor")
+        self.assertIn("[workspace:beta]", beta_signal["next_action"]["description"])
+
+        self.assertNotIn(str(alpha_root), text)
+        self.assertNotIn(str(beta_root), text)
+        self.assertNotIn("secret-token-12345", text)
+        self.assertNotIn("ghp_abcdefghijklmnopqrstuvwxyz123456", text)
+
     def test_safe_codex_status_text_masks_project_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
