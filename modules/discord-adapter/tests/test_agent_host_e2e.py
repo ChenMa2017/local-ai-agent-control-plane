@@ -1,3 +1,4 @@
+import json
 import tempfile
 import threading
 import time
@@ -13,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(AGENT_HOST_ROOT))
 
 from agent_host_client import AgentHostClient
+import bot
 import bridge
 
 
@@ -118,6 +120,71 @@ class AgentHostHttpE2ETests(unittest.TestCase):
             "console.log('ok');\n"
         )
 
+    def write_codex_task(
+        self,
+        codex_root: Path,
+        workspace_root: Path,
+        task_id: str,
+        *,
+        status: str = "done",
+        prompt: str = "health summary test",
+        created_at: str = "2026-06-18T12:00:00.000Z",
+        updated_at: str = "2026-06-18T12:01:00.000Z",
+        exit_code: int | None = 0,
+    ) -> None:
+        task_dir = codex_root / ".codex-bridge" / "tasks" / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        task = {
+            "version": 1,
+            "task_id": task_id,
+            "status": status,
+            "user": "chenma",
+            "project": "demo",
+            "source": "discord",
+            "project_path": str(workspace_root / "secret-real-project-path"),
+            "mode": "readonly",
+            "prompt": prompt,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "started_at": created_at,
+            "ended_at": updated_at,
+            "exit_code": exit_code,
+        }
+        (task_dir / "task.json").write_text(json.dumps(task, ensure_ascii=False, indent=2))
+        (task_dir / "result.md").write_text("safe result")
+        (task_dir / "bridge.log").write_text("log line\n")
+
+    def write_supervisor_runtime(self, workspace_root: Path) -> None:
+        agent_dir = workspace_root / "agent"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        (agent_dir / "RUN_STATE.json").write_text(
+            json.dumps(
+                {
+                    "role": "runner",
+                    "supervisor_mode": "light",
+                    "runner_started_count": 5,
+                    "runner_completed_count": 3,
+                    "runner_failure_drift": 2,
+                    "status": "blocked",
+                    "blocker_type": "env",
+                    "requires_human_review": True,
+                    "updated_utc": "2026-06-18T12:00:00Z",
+                    "next_action": {
+                        "kind": "repair",
+                        "description": f"Inspect {workspace_root}/private and Authorization: Bearer secret-token-12345",
+                        "can_execute_automatically": False,
+                        "reason": "Needs reviewer approval",
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        (agent_dir / "NEXT_ACTION.md").write_text("Fallback next action")
+        (agent_dir / "BLOCKERS.md").write_text(
+            f"Blockers mention {workspace_root}/private and ghp_abcdefghijklmnopqrstuvwxyz123456"
+        )
+
     def wait_for_server(self, client: AgentHostClient) -> None:
         deadline = time.monotonic() + 5
         last_error: Exception | None = None
@@ -207,6 +274,78 @@ class AgentHostHttpE2ETests(unittest.TestCase):
                 self.assertEqual(intake["ledger_note_draft"]["target_path_hint"], "research/LEDGER_NOTES.md")
                 self.assertEqual(intake["review_proposal_draft"]["review_scope"], "report_only")
                 self.assertGreaterEqual(intake["event_count"], 5)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        bridge.STREAM_TOKENS.clear()
+
+    def test_discord_adapter_health_summary_round_trips_watchdog_runtime_state(self):
+        bridge.STREAM_TOKENS.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir(parents=True)
+            codex_root = root / "codex-bridge"
+            self.write_supervisor_runtime(workspace_root)
+            self.write_codex_task(
+                codex_root,
+                workspace_root,
+                "task_20260618_120000_healthdone01",
+                status="done",
+                updated_at="2026-06-18T12:01:00.000Z",
+            )
+            self.write_codex_task(
+                codex_root,
+                workspace_root,
+                "task_20260618_120500_healthrun01",
+                status="running",
+                updated_at="2026-06-18T12:05:00.000Z",
+            )
+            config = self.make_config(workspace_root, codex_root)
+
+            handler_class = type(
+                "ConfiguredWatchdogBridgeHandler",
+                (bridge.WatchdogBridgeHandler,),
+                {"config": config},
+            )
+            server = ThreadingHTTPServer((config.host, 0), handler_class)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = AgentHostClient(f"http://{config.host}:{server.server_port}", "bearer-1", timeout_seconds=5)
+                self.wait_for_server(client)
+
+                summary = client.health_summary()
+                self.assertTrue(summary["ok"])
+                self.assertEqual(summary["tasks"]["recent_count"], 2)
+                self.assertEqual(summary["tasks"]["active_count"], 1)
+                self.assertEqual(summary["tasks"]["terminal_count"], 1)
+                self.assertEqual(summary["supervisor"]["blocked_count"], 1)
+                self.assertEqual(summary["supervisor"]["review_required_count"], 1)
+                self.assertEqual(summary["supervisor"]["runner_drift_count"], 1)
+                signal = summary["supervisor"]["signals"][0]
+                self.assertEqual(signal["workspace"], "demo")
+                self.assertEqual(signal["role"], "runner")
+                self.assertEqual(signal["blocker_type"], "env")
+                self.assertIn("[workspace:demo]", signal["next_action"]["description"])
+
+                raw_text = json.dumps(summary, ensure_ascii=False)
+                self.assertNotIn(str(workspace_root), raw_text)
+                self.assertNotIn("secret-token-12345", raw_text)
+                self.assertNotIn("ghp_abcdefghijklmnopqrstuvwxyz123456", raw_text)
+
+                rendered = bot.format_health_summary(summary, command_prefix="agent")
+                self.assertIn("Agent Host 健康摘要", rendered)
+                self.assertIn("Supervisor signals", rendered)
+                self.assertIn("blocked", rendered)
+                self.assertIn("mode=light", rendered)
+                self.assertIn("drift=2", rendered)
+                self.assertIn("blocker=env", rendered)
+                self.assertIn("/agent_task_page", rendered)
+                self.assertNotIn(str(workspace_root), rendered)
+                self.assertNotIn("secret-token-12345", rendered)
+                self.assertNotIn("ghp_abcdefghijklmnopqrstuvwxyz123456", rendered)
             finally:
                 server.shutdown()
                 server.server_close()
