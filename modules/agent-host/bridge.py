@@ -37,8 +37,8 @@ from auth_policy import (
     validate_auth as validate_mattermost_auth,
 )
 from codex_execution_handlers import build_codex_execution_handlers
+from intake_bridge_bindings import build_intake_bridge_bindings
 from execution_evaluation import (
-    ExecutionEvaluationDependencies,
     maybe_attach_execution_evaluation,
 )
 from request_contracts import (
@@ -103,34 +103,6 @@ from health_summary import (
     workspace_summary as build_workspace_summary,
     workspace_supervisor_signal as build_workspace_supervisor_signal,
     workspace_supervisor_signals as build_workspace_supervisor_signals,
-)
-from intake_preparation import (
-    IntakePreparationDependencies,
-    append_jsonl as append_intake_jsonl,
-    execution_evaluation_dependencies as build_execution_evaluation_dependencies,
-    handle_codex_intake as read_codex_intake,
-    handle_codex_prepare as prepare_codex_intake,
-    intake_answers_text as read_intake_answers_text,
-    intake_dir as resolve_intake_dir,
-    intake_root as resolve_intake_root,
-    intake_summary_markdown as render_intake_summary_markdown,
-    load_followup_prepare_seed as load_followup_seed,
-    load_intake_intent as load_intake_draft,
-    load_intake_json_artifact as load_intake_required_json_artifact,
-    load_intake_questions as load_intake_question_list,
-    load_optional_intake_json_artifact as load_intake_optional_json_artifact,
-    load_prepared_run_context as load_prepared_intake_bundle,
-    make_policy_preflight as build_policy_preflight,
-    make_task_contract as build_task_contract,
-    make_taskbox_draft as build_taskbox_draft,
-    new_intake_id as generate_intake_id,
-    persist_intake_artifacts as write_intake_artifacts,
-    read_json_object_if_exists as read_intake_json_object_if_exists,
-    safe_intake_text as validate_intake_text,
-    validate_codex_project as resolve_codex_project,
-    validate_intake_id as resolve_intake_id,
-    write_json_atomic as write_intake_json_atomic,
-    write_text_atomic as write_intake_text_atomic,
 )
 from web_ui import render_index_html
 from watchdog_commands import (
@@ -613,268 +585,6 @@ def safe_codex_status_text(config: BridgeConfig, task: dict[str, Any], text: str
     return build_safe_codex_status_text(config, task, text)
 
 
-def validate_codex_project(config: BridgeConfig, project: str) -> Project:
-    return resolve_codex_project(
-        config,
-        project,
-        project_name_re=PROJECT_NAME_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def validate_intake_id(intake_id: str) -> str:
-    return resolve_intake_id(
-        intake_id,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def new_intake_id() -> str:
-    return generate_intake_id(utc_now=utc_now)
-
-
-def intake_root(config: BridgeConfig) -> Path:
-    return resolve_intake_root(config)
-
-
-def intake_dir(config: BridgeConfig, intake_id: str) -> Path:
-    return resolve_intake_dir(
-        config,
-        intake_id,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def load_intake_intent(config: BridgeConfig, intake_id: str) -> dict[str, Any]:
-    return load_intake_draft(
-        config,
-        intake_id,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def load_intake_json_artifact(config: BridgeConfig, intake_id: str, filename: str) -> dict[str, Any]:
-    return load_intake_required_json_artifact(
-        config,
-        intake_id,
-        filename,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def load_optional_intake_json_artifact(config: BridgeConfig, intake_id: str, filename: str) -> dict[str, Any] | None:
-    return load_intake_optional_json_artifact(
-        config,
-        intake_id,
-        filename,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def load_intake_questions(config: BridgeConfig, intake_id: str) -> list[str]:
-    return load_intake_question_list(
-        config,
-        intake_id,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def load_prepared_run_context(config: BridgeConfig, intake_id: str, principal: AuthPrincipal) -> dict[str, Any]:
-    return load_prepared_intake_bundle(
-        config,
-        intake_id,
-        principal,
-        can_access_intake=can_access_intake,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def handle_codex_intake(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
-    return read_codex_intake(
-        payload,
-        config,
-        principal,
-        deps=IntakePreparationDependencies(
-            utc_now=utc_now,
-            reject_frontend_identity=reject_frontend_identity,
-            can_access_intake=can_access_intake,
-            validate_task_id=validate_task_id,
-            authorize_task=authorize_codex_task,
-            task_intake_id=task_intake_id,
-            safe_adapter_source=safe_adapter_source,
-            prompt_preview=prompt_preview,
-            project_name_re=PROJECT_NAME_RE,
-            error_factory=lambda message, status, code: BridgeError(message, status, code),
-        ),
-        intake_id_re=INTAKE_ID_RE,
-    )
-
-
-def load_followup_prepare_seed(config: BridgeConfig, followup_task_id: str, principal: AuthPrincipal) -> dict[str, Any]:
-    return load_followup_seed(
-        config,
-        followup_task_id,
-        principal,
-        authorize_task=authorize_codex_task,
-        task_intake_id=task_intake_id,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def read_json_object_if_exists(path: Path) -> dict[str, Any]:
-    return read_intake_json_object_if_exists(path)
-
-
-def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    write_intake_json_atomic(path, data)
-
-
-def write_text_atomic(path: Path, text: str) -> None:
-    write_intake_text_atomic(path, text)
-
-
-def append_jsonl(path: Path, event: dict[str, Any]) -> None:
-    append_intake_jsonl(path, event)
-
-
-def execution_evaluation_dependencies() -> ExecutionEvaluationDependencies:
-    return build_execution_evaluation_dependencies(
-        utc_now=utc_now,
-        task_intake_id=task_intake_id,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def safe_intake_text(value: str, max_chars: int = 6000) -> str:
-    return validate_intake_text(
-        value,
-        max_chars,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def intake_answers_text(payload: dict[str, str]) -> str:
-    return read_intake_answers_text(
-        payload,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-
-def make_task_contract(
-    *,
-    intake_id: str,
-    project: Project,
-    prompt: str,
-    answers: str,
-    objective: str,
-    mode: str,
-    reference_task_id: str,
-    risk_class: str,
-    signals: dict[str, bool],
-    status: str,
-    evidence_retrieval: dict[str, Any],
-) -> dict[str, Any]:
-    return build_task_contract(
-        intake_id=intake_id,
-        project=project,
-        prompt=prompt,
-        answers=answers,
-        objective=objective,
-        mode=mode,
-        reference_task_id=reference_task_id,
-        risk_class=risk_class,
-        signals=signals,
-        status=status,
-        evidence_retrieval=evidence_retrieval,
-        prompt_preview=prompt_preview,
-        utc_now=utc_now,
-    )
-
-
-def make_taskbox_draft(contract: dict[str, Any]) -> dict[str, Any]:
-    return build_taskbox_draft(contract)
-
-
-def make_policy_preflight(
-    project: Project,
-    contract: dict[str, Any],
-    taskbox: dict[str, Any],
-    questions: list[str],
-    evidence_retrieval: dict[str, Any],
-) -> dict[str, Any]:
-    return build_policy_preflight(project, contract, taskbox, questions, evidence_retrieval)
-
-
-def intake_summary_markdown(contract: dict[str, Any], questions: list[str], preflight: dict[str, Any]) -> str:
-    return render_intake_summary_markdown(contract, questions, preflight)
-
-
-def persist_intake_artifacts(
-    *,
-    config: BridgeConfig,
-    project: Project,
-    intake_id: str,
-    intent: dict[str, Any],
-    gray_areas: list[str],
-    questions: list[str],
-    contract: dict[str, Any],
-    taskbox: dict[str, Any],
-    preflight: dict[str, Any],
-    evidence_retrieval: dict[str, Any],
-    answers: str,
-    event_type: str,
-) -> None:
-    write_intake_artifacts(
-        config=config,
-        project=project,
-        intake_id=intake_id,
-        intent=intent,
-        gray_areas=gray_areas,
-        questions=questions,
-        contract=contract,
-        taskbox=taskbox,
-        preflight=preflight,
-        evidence_retrieval=evidence_retrieval,
-        answers=answers,
-        event_type=event_type,
-        utc_now=utc_now,
-        intake_id_re=INTAKE_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def handle_codex_prepare(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
-    return prepare_codex_intake(
-        payload,
-        config,
-        principal,
-        deps=IntakePreparationDependencies(
-            utc_now=utc_now,
-            reject_frontend_identity=reject_frontend_identity,
-            can_access_intake=can_access_intake,
-            validate_task_id=validate_task_id,
-            authorize_task=authorize_codex_task,
-            task_intake_id=task_intake_id,
-            safe_adapter_source=safe_adapter_source,
-            prompt_preview=prompt_preview,
-            project_name_re=PROJECT_NAME_RE,
-            error_factory=lambda message, status, code: BridgeError(message, status, code),
-        ),
-        intake_id_re=INTAKE_ID_RE,
-        max_task_chars=MAX_TASK_CHARS,
-    )
-
-
 def safe_adapter_source(value: str) -> str:
     return validate_adapter_source(
         value,
@@ -908,6 +618,47 @@ def compact_adapter_metadata_object(data: dict[str, Any]) -> str:
         data,
         error_factory=lambda message, status, code: BridgeError(message, status, code),
     )
+
+
+INTAKE_BRIDGE_BINDINGS = build_intake_bridge_bindings(
+    utc_now=utc_now,
+    reject_frontend_identity=reject_frontend_identity,
+    can_access_intake=can_access_intake,
+    validate_task_id=validate_task_id,
+    authorize_task=authorize_codex_task,
+    task_intake_id=task_intake_id,
+    safe_adapter_source=safe_adapter_source,
+    prompt_preview=prompt_preview,
+    project_name_re=PROJECT_NAME_RE,
+    error_factory=lambda message, status, code: BridgeError(message, status, code),
+    intake_id_re=INTAKE_ID_RE,
+    max_task_chars=MAX_TASK_CHARS,
+)
+validate_codex_project = INTAKE_BRIDGE_BINDINGS.validate_codex_project
+validate_intake_id = INTAKE_BRIDGE_BINDINGS.validate_intake_id
+new_intake_id = INTAKE_BRIDGE_BINDINGS.new_intake_id
+intake_root = INTAKE_BRIDGE_BINDINGS.intake_root
+intake_dir = INTAKE_BRIDGE_BINDINGS.intake_dir
+load_intake_intent = INTAKE_BRIDGE_BINDINGS.load_intake_intent
+load_intake_json_artifact = INTAKE_BRIDGE_BINDINGS.load_intake_json_artifact
+load_optional_intake_json_artifact = INTAKE_BRIDGE_BINDINGS.load_optional_intake_json_artifact
+load_intake_questions = INTAKE_BRIDGE_BINDINGS.load_intake_questions
+load_prepared_run_context = INTAKE_BRIDGE_BINDINGS.load_prepared_run_context
+handle_codex_intake = INTAKE_BRIDGE_BINDINGS.handle_codex_intake
+load_followup_prepare_seed = INTAKE_BRIDGE_BINDINGS.load_followup_prepare_seed
+read_json_object_if_exists = INTAKE_BRIDGE_BINDINGS.read_json_object_if_exists
+write_json_atomic = INTAKE_BRIDGE_BINDINGS.write_json_atomic
+write_text_atomic = INTAKE_BRIDGE_BINDINGS.write_text_atomic
+append_jsonl = INTAKE_BRIDGE_BINDINGS.append_jsonl
+execution_evaluation_dependencies = INTAKE_BRIDGE_BINDINGS.execution_evaluation_dependencies
+safe_intake_text = INTAKE_BRIDGE_BINDINGS.safe_intake_text
+intake_answers_text = INTAKE_BRIDGE_BINDINGS.intake_answers_text
+make_task_contract = INTAKE_BRIDGE_BINDINGS.make_task_contract
+make_taskbox_draft = INTAKE_BRIDGE_BINDINGS.make_taskbox_draft
+make_policy_preflight = INTAKE_BRIDGE_BINDINGS.make_policy_preflight
+intake_summary_markdown = INTAKE_BRIDGE_BINDINGS.intake_summary_markdown
+persist_intake_artifacts = INTAKE_BRIDGE_BINDINGS.persist_intake_artifacts
+handle_codex_prepare = INTAKE_BRIDGE_BINDINGS.handle_codex_prepare
 
 
 def parse_run_receipt(output: str) -> dict[str, Any]:
