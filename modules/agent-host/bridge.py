@@ -83,6 +83,17 @@ from codex_tasking import (
     task_sort_value as codex_task_sort_value,
     validate_task_id as validate_codex_task_id,
 )
+from codex_runtime import (
+    CodexRunDependencies,
+    ResultPageDependencies,
+    StreamTokenDependencies,
+    handle_codex_result_page as render_codex_result_page,
+    handle_codex_run as queue_codex_run,
+    handle_stream_token as issue_codex_stream_token,
+    paginate_text as paginate_codex_text,
+    parse_positive_int as parse_codex_positive_int,
+    principal_from_stream_token as resolve_stream_session_principal,
+)
 from health_summary import (
     HealthSummaryDependencies,
     compact_control_text as compact_health_control_text,
@@ -992,122 +1003,36 @@ def parse_run_receipt(output: str) -> dict[str, Any]:
 
 
 def handle_codex_run(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
-    reject_frontend_identity(payload)
-    intake_id = (payload.get("intake_id") or "").strip()
-    prepared_bundle: dict[str, Any] | None = None
-    prepared_intent: dict[str, Any] = {}
-    prepared_contract: dict[str, Any] = {}
-    prepared_taskbox: dict[str, Any] = {}
-    prepared_preflight: dict[str, Any] = {}
-    prepared_summary: dict[str, Any] = {}
-    if intake_id:
-        intake_id = validate_intake_id(intake_id)
-        prepared_bundle = load_prepared_run_context(config, intake_id, principal)
-        prepared_intent = prepared_bundle["intent"]
-        prepared_contract = prepared_bundle["contract"]
-        prepared_taskbox = prepared_bundle["taskbox"]
-        prepared_preflight = prepared_bundle["preflight"]
-        prepared_summary = prepared_run_summary(prepared_bundle)
-    project = (payload.get("workspace") or payload.get("project", "")).strip() or str(prepared_intent.get("workspace") or "")
-    prompt = safe_intake_text(payload.get("prompt", "") or "", MAX_TASK_CHARS) if payload.get("prompt") else ""
-    if not project:
-        raise BridgeError("workspace is required", 400, "invalid_request")
-    project_item = validate_codex_project(config, project)
-    if prepared_intent and project != str(prepared_intent.get("workspace") or ""):
-        raise BridgeError(
-            f"workspace mismatch for intake {intake_id}: expected {prepared_intent.get('workspace')}",
-            409,
-            "prepare_workspace_mismatch",
-        )
-    prepared_mode = str(prepared_contract.get("mode") or prepared_intent.get("desired_mode") or "").strip()
-    mode = (payload.get("mode") or prepared_mode or project_item.default_mode).strip() or project_item.default_mode
-    if prepared_mode and mode != prepared_mode:
-        raise BridgeError(
-            f"mode mismatch for intake {intake_id}: expected {prepared_mode}",
-            409,
-            "prepare_mode_mismatch",
-        )
-    if mode not in project_item.allowed_modes:
-        allowed = ", ".join(project_item.allowed_modes)
-        raise BridgeError(f"mode {mode} is not allowed for workspace {project}; allowed: {allowed}", 400, "invalid_request")
-
-    source = safe_adapter_source(payload.get("source", "web"))
-    idempotency_key = safe_idempotency_key(payload.get("idempotency_key", ""))
-    metadata_obj = parse_adapter_metadata(payload.get("metadata", ""))
-    reference_task_id = (
-        payload.get("reference_task_id")
-        or payload.get("referenceTaskId")
-        or str(prepared_intent.get("reference_task_id") or "")
-    ).strip()
-    if reference_task_id:
-        reference_task_id = validate_task_id(reference_task_id)
-        authorize_codex_task(config, principal, reference_task_id)
-    if prepared_bundle:
-        if not prepared_preflight.get("ok") or str(prepared_taskbox.get("status") or "") != "ready":
-            reason_text = "; ".join(str(item) for item in prepared_preflight.get("reasons", [])[:2])
-            required_action = str(prepared_preflight.get("required_action") or "prepare")
-            message = f"prepared intake {intake_id} is not runnable; required_action={required_action}"
-            if reason_text:
-                message += f"; reasons: {reason_text}"
-            raise BridgeError(message, 409, "prepare_not_runnable")
-        prompt = prepared_run_prompt(prepared_bundle, prompt, safe_intake_text, MAX_TASK_CHARS)
-        metadata_obj.update({
-            "intake_id": intake_id,
-            "prepared_objective": prepared_summary.get("objective") or "",
-            "prepared_workspace_mode": prepared_summary.get("workspace_mode") or "",
-            "evidence_retrieval_decision": prepared_summary.get("evidence_retrieval_decision") or "",
-        })
-    elif not prompt:
-        raise BridgeError("prompt is required", 400, "invalid_request")
-    metadata = compact_adapter_metadata_object(metadata_obj)
-    args = ["run", "--project", project, "--mode", mode, "--user", principal.user]
-    args.extend(["--source", source])
-    args.extend(["--source-user-id", payload.get("source_user_id") or principal.user])
-    if payload.get("source_channel_id"):
-        args.extend(["--source-channel-id", payload["source_channel_id"]])
-    if payload.get("source_message_id"):
-        args.extend(["--source-message-id", payload["source_message_id"]])
-    if idempotency_key:
-        args.extend(["--idempotency-key", idempotency_key])
-    if reference_task_id:
-        args.extend(["--reference-task-id", reference_task_id])
-    if metadata:
-        args.extend(["--metadata", metadata])
-    if bool_from_payload(payload.get("dry_run", "")):
-        args.append("--dry-run")
-    args.append(prompt)
-
-    output = require_success(run_codex_bridge(config, args))
-    task_id = parse_queued_task_id(output)
-    receipt = parse_run_receipt(output)
-    if intake_id:
-        append_jsonl(
-            intake_dir(config, intake_id) / "TASK_INTAKE.events.jsonl",
-            {
-                "event": "run_queued",
-                "intake_id": intake_id,
-                "task_id": task_id,
-                "workspace": project_item.name,
-                "mode": mode,
-                "user": principal.user,
-                "timestamp": utc_now().isoformat().replace("+00:00", "Z"),
-            },
-        )
-    return {
-        "ok": True,
-        "task_id": task_id,
-        "status": "queued",
-        "mode": mode,
-        "source": source,
-        "intake_id": intake_id or None,
-        "prepare_context": prepared_summary or None,
-        "reference_task_id": reference_task_id or None,
-        "idempotent_replay": receipt["idempotent_replay"],
-        "output": output,
-        "status_url": f"/codex/status?task_id={task_id}",
-        "result_url": f"/codex/result?task_id={task_id}",
-        "logs_url": f"/codex/logs?task_id={task_id}",
-    }
+    return queue_codex_run(
+        payload,
+        config,
+        principal,
+        deps=CodexRunDependencies(
+            reject_frontend_identity=reject_frontend_identity,
+            validate_intake_id=validate_intake_id,
+            load_prepared_run_context=load_prepared_run_context,
+            prepared_run_summary=prepared_run_summary,
+            safe_intake_text=safe_intake_text,
+            validate_project=validate_codex_project,
+            safe_adapter_source=safe_adapter_source,
+            safe_idempotency_key=safe_idempotency_key,
+            parse_adapter_metadata=parse_adapter_metadata,
+            validate_task_id=validate_task_id,
+            authorize_task=authorize_codex_task,
+            prepared_run_prompt=prepared_run_prompt,
+            compact_adapter_metadata_object=compact_adapter_metadata_object,
+            bool_from_payload=bool_from_payload,
+            run_codex_bridge=run_codex_bridge,
+            require_success=require_success,
+            parse_queued_task_id=parse_queued_task_id,
+            parse_run_receipt=parse_run_receipt,
+            append_jsonl=append_jsonl,
+            intake_dir=intake_dir,
+            utc_now=utc_now,
+            error_factory=lambda message, status, code: BridgeError(message, status, code),
+        ),
+        max_task_chars=MAX_TASK_CHARS,
+    )
 
 
 def handle_codex_query(
@@ -1145,34 +1070,22 @@ def handle_codex_query(
 
 
 def parse_positive_int(value: str | None, default: int, max_value: int, field: str) -> int:
-    if not value:
-        return default
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise BridgeError(f"{field} must be a number", 400, "invalid_request") from exc
-    if parsed < 1:
-        raise BridgeError(f"{field} must be at least 1", 400, "invalid_request")
-    return min(parsed, max_value)
+    return parse_codex_positive_int(
+        value,
+        default,
+        max_value,
+        field,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def paginate_text(text: str, page: int, page_size: int) -> dict[str, Any]:
-    value = str(text or "")
-    total_chars = len(value)
-    total_pages = max(1, (total_chars + page_size - 1) // page_size)
-    if page > total_pages:
-        raise BridgeError(f"page out of range; total_pages={total_pages}", 400, "invalid_request")
-    start = (page - 1) * page_size
-    end = start + page_size
-    return {
-        "page": page,
-        "page_size": page_size,
-        "total_pages": total_pages,
-        "total_chars": total_chars,
-        "has_next": page < total_pages,
-        "has_prev": page > 1,
-        "text": value[start:end],
-    }
+    return paginate_codex_text(
+        text,
+        page,
+        page_size,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def handle_codex_result_page(
@@ -1180,34 +1093,17 @@ def handle_codex_result_page(
     config: BridgeConfig,
     principal: AuthPrincipal,
 ) -> dict[str, Any]:
-    page = parse_positive_int(payload.get("page"), 1, 1000000, "page")
-    page_size = parse_positive_int(payload.get("page_size") or payload.get("pageSize"), RESULT_PAGE_DEFAULT_SIZE, RESULT_PAGE_MAX_SIZE, "page_size")
-    result = handle_codex_query(
-        {
-            "task_id": payload.get("task_id", ""),
-            "max_chars": str(RESULT_PAGE_MAX_SIZE * 100),
-        },
+    return render_codex_result_page(
+        payload,
         config,
-        "result",
         principal,
+        deps=ResultPageDependencies(
+            handle_codex_query=handle_codex_query,
+            error_factory=lambda message, status, code: BridgeError(message, status, code),
+        ),
+        default_page_size=RESULT_PAGE_DEFAULT_SIZE,
+        max_page_size=RESULT_PAGE_MAX_SIZE,
     )
-    if result.get("raw"):
-        raise BridgeError("result pages only support safe output", 403, "permission_denied")
-    page_data = paginate_text(str(result.get("text", "")), page, page_size)
-    return {
-        "ok": True,
-        "task_id": result.get("task_id"),
-        "intake_id": result.get("intake_id"),
-        "command": "result-page",
-        "redacted": bool(result.get("redacted", True)),
-        "raw": False,
-        "source_truncated": bool(result.get("truncated", False)),
-        "execution_evaluation": result.get("execution_evaluation") if isinstance(result.get("execution_evaluation"), dict) else None,
-        "followup_task_draft": result.get("followup_task_draft") if isinstance(result.get("followup_task_draft"), dict) else None,
-        "ledger_note_draft": result.get("ledger_note_draft") if isinstance(result.get("ledger_note_draft"), dict) else None,
-        "review_proposal_draft": result.get("review_proposal_draft") if isinstance(result.get("review_proposal_draft"), dict) else None,
-        **page_data,
-    }
 
 
 def cleanup_stream_tokens() -> None:
@@ -1254,34 +1150,48 @@ def http_route_dependencies() -> HttpRouteDependencies:
 
 
 def handle_stream_token(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
-    reject_frontend_identity(payload)
-    task_id = validate_task_id(payload.get("task_id", ""))
-    authorize_codex_task(config, principal, task_id)
-    cleanup_stream_tokens()
-    token_payload = issue_stream_token(
-        task_id,
-        principal.user,
-        principal.role,
-        STREAM_TOKENS,
-        STREAM_TOKEN_LOCK,
-        utc_now,
-        STREAM_TOKEN_TTL_SECONDS,
+    return issue_codex_stream_token(
+        payload,
+        config,
+        principal,
+        deps=StreamTokenDependencies(
+            reject_frontend_identity=reject_frontend_identity,
+            validate_task_id=validate_task_id,
+            authorize_task=authorize_codex_task,
+            cleanup_stream_tokens=cleanup_stream_tokens,
+            issue_stream_token=lambda task_id, user, role: issue_stream_token(
+                task_id,
+                user,
+                role,
+                STREAM_TOKENS,
+                STREAM_TOKEN_LOCK,
+                utc_now,
+                STREAM_TOKEN_TTL_SECONDS,
+            ),
+            resolve_stream_principal=lambda task_id, stream_token: resolve_stream_principal(
+                task_id,
+                stream_token,
+                STREAM_TOKENS,
+                STREAM_TOKEN_LOCK,
+                utc_now,
+                lambda message, status: BridgeError(message, status),
+            ),
+        ),
     )
-    return {
-        "ok": True,
-        "task_id": task_id,
-        **token_payload,
-    }
 
 
 def principal_from_stream_token(task_id: str, stream_token: str) -> AuthPrincipal:
-    user, role = resolve_stream_principal(
+    user, role = resolve_stream_session_principal(
         task_id,
         stream_token,
-        STREAM_TOKENS,
-        STREAM_TOKEN_LOCK,
-        utc_now,
-        lambda message, status: BridgeError(message, status),
+        resolve_stream_principal=lambda current_task_id, current_stream_token: resolve_stream_principal(
+            current_task_id,
+            current_stream_token,
+            STREAM_TOKENS,
+            STREAM_TOKEN_LOCK,
+            utc_now,
+            lambda message, status: BridgeError(message, status),
+        ),
     )
     return AuthPrincipal(user=user, role=role)
 
