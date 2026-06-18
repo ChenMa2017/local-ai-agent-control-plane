@@ -54,6 +54,7 @@ def dispatch_get(
     config: Any,
     deps: HttpRouteDependencies,
 ) -> None:
+    path = path.rstrip("/") or "/"
     if path == "/health":
         handler.send_json(200, {"ok": True})
         return
@@ -139,6 +140,7 @@ def dispatch_post(
     config: Any,
     deps: HttpRouteDependencies,
 ) -> None:
+    route = route.rstrip("/") or "/"
     if route not in POST_ROUTES:
         if route.startswith("/codex"):
             handler.send_api_error(deps.bridge_error_type("not found", 404, "invalid_request"))

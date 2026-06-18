@@ -75,6 +75,19 @@ class HttpRoutesTests(unittest.TestCase):
 
         self.assertEqual(handler.html_calls, [(200, "<html>/whoami</html>")])
 
+    def test_dispatch_get_codex_trailing_slash_renders_html(self):
+        handler = FakeHandler()
+        http_routes.dispatch_get(
+            handler,
+            path="/codex/",
+            query="",
+            authorization="Bearer token",
+            config=object(),
+            deps=make_deps(),
+        )
+
+        self.assertEqual(handler.html_calls, [(200, "<html>/whoami</html>")])
+
     def test_dispatch_get_events_passes_query_payload(self):
         handler = FakeHandler()
         http_routes.dispatch_get(
@@ -115,6 +128,20 @@ class HttpRoutesTests(unittest.TestCase):
         http_routes.dispatch_post(
             handler,
             route="/codex/run",
+            content_type="application/json",
+            raw=b"{}",
+            authorization="Bearer token",
+            config=object(),
+            deps=make_deps(),
+        )
+
+        self.assertEqual(handler.json_calls, [(200, {"ok": True, "run": {"workspace": "demo"}})])
+
+    def test_dispatch_post_run_trailing_slash_uses_authenticated_handler(self):
+        handler = FakeHandler()
+        http_routes.dispatch_post(
+            handler,
+            route="/codex/run/",
             content_type="application/json",
             raw=b"{}",
             authorization="Bearer token",
