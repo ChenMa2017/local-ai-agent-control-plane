@@ -177,6 +177,7 @@ def persist_followup_task_draft(
     existing = deps.read_json_object_if_exists(root / "FOLLOWUP_TASK_DRAFT.json")
     if existing and followup_task_draft_fingerprint(existing) == followup_task_draft_fingerprint(draft):
         return existing
+    provenance = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
     deps.write_json_atomic(root / "FOLLOWUP_TASK_DRAFT.json", draft)
     deps.write_text_atomic(root / "FOLLOWUP_TASK_DRAFT.md", followup_task_draft_markdown(draft))
     deps.append_jsonl(
@@ -187,6 +188,9 @@ def persist_followup_task_draft(
             "source_task_id": evaluation.get("task_id"),
             "recommended_next_action": draft.get("recommended_next_action"),
             "requires_prepare": bool(draft.get("requires_prepare")),
+            "artifact_provenance_source": provenance.get("source"),
+            "artifact_repair_origin": provenance.get("repair_origin"),
+            "artifact_generated_by": provenance.get("generated_by"),
             "timestamp": deps.utc_now().isoformat().replace("+00:00", "Z"),
         },
     )
@@ -208,6 +212,7 @@ def persist_ledger_note_draft(
     existing = deps.read_json_object_if_exists(root / "LEDGER_NOTE_DRAFT.json")
     if existing and ledger_note_draft_fingerprint(existing) == ledger_note_draft_fingerprint(draft):
         return existing
+    provenance = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
     deps.write_json_atomic(root / "LEDGER_NOTE_DRAFT.json", draft)
     deps.write_text_atomic(root / "LEDGER_NOTE_DRAFT.md", ledger_note_draft_markdown(draft))
     deps.append_jsonl(
@@ -217,6 +222,9 @@ def persist_ledger_note_draft(
             "intake_id": intake_id,
             "source_task_id": evaluation.get("task_id"),
             "recommended_next_action": draft.get("recommended_next_action"),
+            "artifact_provenance_source": provenance.get("source"),
+            "artifact_repair_origin": provenance.get("repair_origin"),
+            "artifact_generated_by": provenance.get("generated_by"),
             "timestamp": deps.utc_now().isoformat().replace("+00:00", "Z"),
         },
     )
@@ -240,6 +248,7 @@ def persist_review_proposal_draft(
     existing = deps.read_json_object_if_exists(root / "REVIEW_PROPOSAL_DRAFT.json")
     if existing and review_proposal_draft_fingerprint(existing) == review_proposal_draft_fingerprint(draft):
         return existing
+    provenance = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
     deps.write_json_atomic(root / "REVIEW_PROPOSAL_DRAFT.json", draft)
     deps.write_text_atomic(root / "REVIEW_PROPOSAL_DRAFT.md", review_proposal_draft_markdown(draft))
     deps.append_jsonl(
@@ -250,6 +259,9 @@ def persist_review_proposal_draft(
             "source_task_id": evaluation.get("task_id"),
             "review_scope": draft.get("review_scope"),
             "requires_human_review": bool(draft.get("requires_human_review")),
+            "artifact_provenance_source": provenance.get("source"),
+            "artifact_repair_origin": provenance.get("repair_origin"),
+            "artifact_generated_by": provenance.get("generated_by"),
             "timestamp": deps.utc_now().isoformat().replace("+00:00", "Z"),
         },
     )

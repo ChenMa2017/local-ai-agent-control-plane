@@ -115,6 +115,35 @@ def claim_boundary_for_evaluation(evaluation: dict[str, Any]) -> str:
     return "Normal bounded review rules apply; keep claims tied to cited evidence."
 
 
+def build_post_run_artifact_provenance(
+    evaluation: dict[str, Any],
+    *,
+    artifact_role: str,
+    repair_origin: str,
+) -> dict[str, Any]:
+    intake_id = str(evaluation.get("intake_id") or "").strip()
+    report_path = f".codex-bridge/intake/{intake_id}/EXECUTION_EVALUATION.json" if intake_id else None
+    report_timestamp = str(evaluation.get("updated_at") or "").strip() or None
+    return {
+        "artifact_role": artifact_role,
+        "source": "fallback_synthesized",
+        "repair_origin": repair_origin,
+        "generated_by": "agent_host_post_run_artifacts",
+        "derived_from_report": {
+            "path": report_path,
+            "timestamp_utc": report_timestamp,
+            "report_type": "execution_evaluation",
+        },
+        "parent_route_id": None,
+        "parent_route_epoch": None,
+        "parent_task_box_id": None,
+        "generated_at_utc": report_timestamp or utc_now().isoformat().replace("+00:00", "Z"),
+        "model_authored": False,
+        "route_repair_authored": False,
+        "fallback_synthesized": True,
+    }
+
+
 def followup_prompt_for_evaluation(evaluation: dict[str, Any], contract: dict[str, Any], evidence: dict[str, Any]) -> str:
     task_id = str(evaluation.get("task_id") or "")
     workspace = str(evaluation.get("workspace") or "")
@@ -215,6 +244,11 @@ def build_followup_task_draft(
         "prompt": followup_prompt_for_evaluation(evaluation, contract, evidence),
         "claim_boundary": claim_boundary,
         "read_plan": list(evidence.get("read_plan") or []),
+        "provenance": build_post_run_artifact_provenance(
+            evaluation,
+            artifact_role="followup_task_draft",
+            repair_origin="execution_evaluation.followup_task_draft",
+        ),
         "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
     }
 
@@ -229,6 +263,7 @@ def followup_task_draft_fingerprint(draft: dict[str, Any]) -> str:
         "prompt": draft.get("prompt"),
         "claim_boundary": draft.get("claim_boundary"),
         "read_plan": draft.get("read_plan"),
+        "provenance": draft.get("provenance"),
     }
     return json.dumps(stable, ensure_ascii=False, sort_keys=True)
 
@@ -261,6 +296,17 @@ def followup_task_draft_markdown(draft: dict[str, Any]) -> str:
         str(draft.get("claim_boundary") or ""),
         "",
     ]
+    provenance = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
+    if provenance:
+        lines.extend([
+            "## Provenance",
+            "",
+            f"- source: {provenance.get('source') or 'none'}",
+            f"- repair_origin: {provenance.get('repair_origin') or 'none'}",
+            f"- generated_by: {provenance.get('generated_by') or 'none'}",
+            f"- derived_from_report: {((provenance.get('derived_from_report') or {}).get('path') if isinstance(provenance.get('derived_from_report'), dict) else 'none') or 'none'}",
+            "",
+        ])
     read_plan = draft.get("read_plan") if isinstance(draft.get("read_plan"), list) else []
     if read_plan:
         lines.extend(["## Read Plan", ""])
@@ -352,6 +398,11 @@ def build_ledger_note_draft(
         "evidence_retrieval_decision": evaluation.get("evidence_retrieval_decision"),
         "warnings": list(evaluation.get("warnings") or []),
         "read_plan": list(evidence.get("read_plan") or []),
+        "provenance": build_post_run_artifact_provenance(
+            evaluation,
+            artifact_role="ledger_note_draft",
+            repair_origin="execution_evaluation.ledger_note_draft",
+        ),
         "note_markdown": ledger_note_markdown_for_evaluation(evaluation, contract, evidence),
         "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
     }
@@ -368,6 +419,7 @@ def ledger_note_draft_fingerprint(draft: dict[str, Any]) -> str:
         "claim_boundary": draft.get("claim_boundary"),
         "warnings": draft.get("warnings"),
         "read_plan": draft.get("read_plan"),
+        "provenance": draft.get("provenance"),
         "note_markdown": draft.get("note_markdown"),
     }
     return json.dumps(stable, ensure_ascii=False, sort_keys=True)
@@ -392,9 +444,21 @@ def ledger_note_draft_markdown(draft: dict[str, Any]) -> str:
         "",
         str(draft.get("claim_boundary") or ""),
         "",
+    ]
+    provenance = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
+    if provenance:
+        lines.extend([
+            "## Provenance",
+            "",
+            f"- source: {provenance.get('source') or 'none'}",
+            f"- repair_origin: {provenance.get('repair_origin') or 'none'}",
+            f"- generated_by: {provenance.get('generated_by') or 'none'}",
+            "",
+        ])
+    lines.extend([
         str(draft.get("note_markdown") or "").rstrip(),
         "",
-    ]
+    ])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -509,6 +573,11 @@ def build_review_proposal_draft(
         "stop_condition": stop_condition,
         "claim_boundary": claim_boundary_for_evaluation(evaluation),
         "read_plan": list(read_plan),
+        "provenance": build_post_run_artifact_provenance(
+            evaluation,
+            artifact_role="review_proposal_draft",
+            repair_origin="execution_evaluation.review_proposal_draft",
+        ),
         "proposal_markdown": "\n".join(proposal_lines).rstrip() + "\n",
         "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
     }
@@ -528,6 +597,7 @@ def review_proposal_draft_fingerprint(draft: dict[str, Any]) -> str:
         "stop_condition": draft.get("stop_condition"),
         "claim_boundary": draft.get("claim_boundary"),
         "read_plan": draft.get("read_plan"),
+        "provenance": draft.get("provenance"),
         "proposal_markdown": draft.get("proposal_markdown"),
     }
     return json.dumps(stable, ensure_ascii=False, sort_keys=True)
@@ -547,7 +617,19 @@ def review_proposal_draft_markdown(draft: dict[str, Any]) -> str:
         "",
         str(draft.get("summary") or ""),
         "",
+    ]
+    provenance = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
+    if provenance:
+        lines.extend([
+            "## Provenance",
+            "",
+            f"- source: {provenance.get('source') or 'none'}",
+            f"- repair_origin: {provenance.get('repair_origin') or 'none'}",
+            f"- generated_by: {provenance.get('generated_by') or 'none'}",
+            "",
+        ])
+    lines.extend([
         str(draft.get("proposal_markdown") or "").rstrip(),
         "",
-    ]
+    ])
     return "\n".join(lines).rstrip() + "\n"

@@ -238,6 +238,7 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
 - prompt
 - claim_boundary
 - read_plan
+- provenance
 ```
 
 这份 draft 仍然只是下一轮 `/prepare` 的输入草案，不会自动绕过 prepare gate 或直接创建新任务。
@@ -248,10 +249,12 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
 - LEDGER_NOTE_DRAFT
   把 safe result、warning、claim boundary、read plan 组织成一份“建议写入 research/LEDGER_NOTES.md 的草稿”
   这只是 intake 本地草稿，不会直接修改项目里的正式 ledger / notes
+  现在还会带 `provenance`，说明它来自哪份 `EXECUTION_EVALUATION`
 
 - REVIEW_PROPOSAL_DRAFT
   当结果仍然需要 bounded-claim review，或任务因为 policy boundary 停止时，
 生成一份 reviewer-ready proposal，说明 review scope、reason、stop condition、safe result excerpt
+  现在也会带 `provenance`，说明它是 agent-host 基于 post-run evaluation 自动合成出来的
 ```
 
 同一次结果整理还会补齐六份一等研究对象：
@@ -336,6 +339,17 @@ curl -X POST http://127.0.0.1:8787/codex/prepare \
 ```
 
 这条路径会读取该任务关联 intake 下最新的 `FOLLOWUP_TASK_DRAFT.json`，并把其中的 `prompt / reference_task_id / suggested_mode / read_plan context` 重新带回新的 prepare 流程。
+
+这些 post-run draft 现在还带统一的 provenance payload，字段风格尽量向 watchdog 既有 successor provenance 对齐，例如：
+
+```text
+- artifact_role
+- source
+- repair_origin
+- generated_by
+- derived_from_report
+- generated_at_utc
+```
 
 如果上一轮任务已经产出了 `EXECUTION_EVALUATION / LEDGER_NOTE_DRAFT / REVIEW_PROPOSAL_DRAFT / HYPOTHESIS_UPDATE / HYPOTHESIS_PROMOTION / EXPERIMENT_INDEX_UPDATE / EXPERIMENT_PROMOTION / CURRENT_CONCLUSION_UPDATE / CURRENT_CONCLUSION_PROMOTION / EVALUATION_REPORT / CURRENT_CONCLUSIONS`，这条 follow-up prepare 响应也会把这些 post-run context 一并带回客户端，方便 UI 直接展示“这次 follow-up 是基于怎样的结果评估继续的”，以及“hypothesis / experiment / conclusion promotion state 现在处在哪一层”。
 

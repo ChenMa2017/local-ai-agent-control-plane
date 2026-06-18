@@ -149,6 +149,26 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(attachments["followup_task_draft"]["recommended_next_action"], "review_result")
             self.assertEqual(attachments["ledger_note_draft"]["source_task_id"], "task_20260617_120000_eval")
             self.assertEqual(attachments["review_proposal_draft"]["review_scope"], "report_only")
+            self.assertEqual(
+                attachments["followup_task_draft"]["provenance"]["artifact_role"],
+                "followup_task_draft",
+            )
+            self.assertEqual(
+                attachments["followup_task_draft"]["provenance"]["repair_origin"],
+                "execution_evaluation.followup_task_draft",
+            )
+            self.assertEqual(
+                attachments["ledger_note_draft"]["provenance"]["artifact_role"],
+                "ledger_note_draft",
+            )
+            self.assertEqual(
+                attachments["review_proposal_draft"]["provenance"]["artifact_role"],
+                "review_proposal_draft",
+            )
+            self.assertEqual(
+                attachments["review_proposal_draft"]["provenance"]["generated_by"],
+                "agent_host_post_run_artifacts",
+            )
             self.assertEqual(attachments["hypothesis_promotion"]["promotion_state"], "not_required")
             self.assertEqual(attachments["hypothesis_promotion"]["project_sync"]["status"], "workspace_unavailable")
             self.assertEqual(attachments["experiment_promotion"]["promotion_state"], "not_required")
@@ -188,6 +208,13 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertIn("evaluation_report_persisted", event_names)
             self.assertIn("current_conclusions_updated", event_names)
             self.assertEqual(event_names[-1], "current_conclusion_promotion_updated")
+            followup_events = [item for item in events if item["event"] == "followup_task_drafted"]
+            ledger_events = [item for item in events if item["event"] == "ledger_note_drafted"]
+            review_events = [item for item in events if item["event"] == "review_proposal_drafted"]
+            self.assertEqual(followup_events[0]["artifact_provenance_source"], "fallback_synthesized")
+            self.assertEqual(followup_events[0]["artifact_generated_by"], "agent_host_post_run_artifacts")
+            self.assertEqual(ledger_events[0]["artifact_repair_origin"], "execution_evaluation.ledger_note_draft")
+            self.assertEqual(review_events[0]["artifact_repair_origin"], "execution_evaluation.review_proposal_draft")
 
     def test_maybe_attach_execution_evaluation_applies_project_current_conclusions_when_candidate_ready(self):
         with tempfile.TemporaryDirectory() as tmp:
