@@ -83,6 +83,7 @@ class AgentHostHttpE2ETests(unittest.TestCase):
             "    started_at: '2026-06-18T12:00:05.000Z',\n"
             "    ended_at: '2026-06-18T12:01:00.000Z',\n"
             "    exit_code: 0,\n"
+            "    reference_task_id: readFlag('--reference-task-id', ''),\n"
             "    adapter_metadata: readJsonFlag('--metadata'),\n"
             "  };\n"
             "  fs.writeFileSync(path.join(taskDir, 'task.json'), JSON.stringify(task, null, 2));\n"
@@ -346,6 +347,89 @@ class AgentHostHttpE2ETests(unittest.TestCase):
                 self.assertNotIn(str(workspace_root), rendered)
                 self.assertNotIn("secret-token-12345", rendered)
                 self.assertNotIn("ghp_abcdefghijklmnopqrstuvwxyz123456", rendered)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        bridge.STREAM_TOKENS.clear()
+
+    def test_discord_reply_followup_round_trips_reference_task_via_thread_mapping(self):
+        bridge.STREAM_TOKENS.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir(parents=True)
+            codex_root = root / "codex-bridge"
+            self.write_codex_bridge_script(codex_root)
+            config = self.make_config(workspace_root, codex_root)
+            source_task_id = "task_20260618_115959_source01"
+            self.write_codex_task(
+                codex_root,
+                workspace_root,
+                source_task_id,
+                status="done",
+                prompt="source task for reply follow-up",
+                updated_at="2026-06-18T11:59:59.000Z",
+            )
+
+            store = bot.ThreadStateStore(root / "discord-state")
+            store.upsert_thread(
+                task_id=source_task_id,
+                guild_id="guild-1",
+                channel_id="channel-1",
+                thread_id="thread-1",
+                created_by="discord-user",
+                workspace="demo",
+                status="done",
+            )
+            store.remember_message(
+                message_id="msg-1",
+                task_id=source_task_id,
+                thread_id="thread-1",
+                workspace="demo",
+                kind="completion",
+            )
+            resolved_reference_task_id = bot.resolve_reference_task_id_from_reply(
+                store,
+                thread_id="thread-1",
+                referenced_message_id="msg-1",
+                referenced_message_text="Task: task_20260618_000000_other99",
+            )
+            self.assertEqual(resolved_reference_task_id, source_task_id)
+
+            handler_class = type(
+                "ConfiguredWatchdogBridgeHandler",
+                (bridge.WatchdogBridgeHandler,),
+                {"config": config},
+            )
+            server = ThreadingHTTPServer((config.host, 0), handler_class)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = AgentHostClient(f"http://{config.host}:{server.server_port}", "bearer-1", timeout_seconds=5)
+                self.wait_for_server(client)
+
+                queued = client.run(
+                    workspace="demo",
+                    prompt="Please continue from the previous result with a narrower follow-up.",
+                    mode="readonly",
+                    source_user_id="discord-user",
+                    source_channel_id="thread-1",
+                    source_message_id="reply-1",
+                    idempotency_key="discord-message:reply-1",
+                    guild_id="guild-1",
+                    reference_task_id=resolved_reference_task_id,
+                    command_name="discord_reply",
+                )
+                self.assertTrue(queued["ok"])
+                self.assertEqual(queued["task_id"], "task_20260618_120000_discorde2e01")
+
+                task_path = codex_root / ".codex-bridge" / "tasks" / queued["task_id"] / "task.json"
+                task = json.loads(task_path.read_text())
+                self.assertEqual(task["source"], "discord")
+                self.assertEqual(task["reference_task_id"], source_task_id)
+                self.assertEqual(task["adapter_metadata"]["command"], "discord_reply")
+                self.assertEqual(task["adapter_metadata"]["guild_id"], "guild-1")
             finally:
                 server.shutdown()
                 server.server_close()
