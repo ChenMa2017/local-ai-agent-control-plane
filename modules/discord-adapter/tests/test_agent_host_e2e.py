@@ -1,4 +1,5 @@
 import json
+import asyncio
 import tempfile
 import threading
 import time
@@ -430,6 +431,110 @@ class AgentHostHttpE2ETests(unittest.TestCase):
                 self.assertEqual(task["reference_task_id"], source_task_id)
                 self.assertEqual(task["adapter_metadata"]["command"], "discord_reply")
                 self.assertEqual(task["adapter_metadata"]["guild_id"], "guild-1")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        bridge.STREAM_TOKENS.clear()
+
+    def test_completion_notifications_round_trip_artifacts_from_real_agent_host(self):
+        class FakeNotifier:
+            def __init__(self) -> None:
+                self.messages: list[tuple[dict[str, object], str]] = []
+
+            async def send(self, record: dict[str, object], message: str) -> None:
+                self.messages.append((record, message))
+
+        bridge.STREAM_TOKENS.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir(parents=True)
+            (workspace_root / "project_index").mkdir(parents=True)
+            codex_root = root / "codex-bridge"
+            self.write_watchdog_doc_search(workspace_root)
+            self.write_codex_bridge_script(codex_root)
+            config = self.make_config(workspace_root, codex_root)
+
+            handler_class = type(
+                "ConfiguredWatchdogBridgeHandler",
+                (bridge.WatchdogBridgeHandler,),
+                {"config": config},
+            )
+            server = ThreadingHTTPServer((config.host, 0), handler_class)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = AgentHostClient(f"http://{config.host}:{server.server_port}", "bearer-1", timeout_seconds=5)
+                self.wait_for_server(client)
+
+                prepared = client.prepare(
+                    workspace="demo",
+                    prompt="What is the current best candidate?",
+                    source_user_id="discord-user",
+                    source_channel_id="discord-channel",
+                    source_message_id="interaction-prepare-notify-1",
+                    guild_id="guild-1",
+                )
+                intake_id = str(prepared["intake_id"])
+                queued = client.run(
+                    workspace="demo",
+                    prompt="",
+                    source_user_id="discord-user",
+                    source_channel_id="discord-channel",
+                    source_message_id="interaction-run-notify-1",
+                    idempotency_key="discord:interaction-run-notify-1",
+                    guild_id="guild-1",
+                    intake_id=intake_id,
+                )
+                task_id = str(queued["task_id"])
+
+                store = bot.ThreadStateStore(root / "discord-state")
+                store.upsert_thread(
+                    task_id=task_id,
+                    guild_id="guild-1",
+                    channel_id="channel-1",
+                    thread_id="thread-1",
+                    created_by="discord-user",
+                    workspace="demo",
+                    status="queued",
+                )
+                notifier = FakeNotifier()
+
+                sent = asyncio.run(bot.process_completion_notifications(
+                    store=store,
+                    agent=client,
+                    notifier=notifier,
+                    max_result_chars=500,
+                    command_prefix="agent",
+                ))
+                sent_again = asyncio.run(bot.process_completion_notifications(
+                    store=store,
+                    agent=client,
+                    notifier=notifier,
+                    max_result_chars=500,
+                    command_prefix="agent",
+                ))
+
+                self.assertEqual(sent, 1)
+                self.assertEqual(sent_again, 0)
+                self.assertEqual(len(notifier.messages), 1)
+                record, message = notifier.messages[0]
+                self.assertEqual(record["task_id"], task_id)
+                self.assertIn("**🤖 AI 回答**", message)
+                self.assertIn("任务完成。", message)
+                self.assertIn("Evaluation:", message)
+                self.assertIn("Follow-up draft:", message)
+                self.assertIn("Ledger note draft:", message)
+                self.assertIn("Review proposal draft:", message)
+                self.assertIn("result_ready_for_review", message)
+                self.assertIn("review_result", message)
+                self.assertIn("research/LEDGER_NOTES.md", message)
+                self.assertIn(f"/agent_prepare followup_task_id:{task_id}", message)
+
+                stored_record = store.load()[task_id]
+                self.assertTrue(stored_record["notified_done"])
+                self.assertEqual(stored_record["last_status"], "done")
             finally:
                 server.shutdown()
                 server.server_close()
