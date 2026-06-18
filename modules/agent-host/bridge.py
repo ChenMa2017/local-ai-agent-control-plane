@@ -36,6 +36,7 @@ from auth_policy import (
     validate_auth as validate_mattermost_auth,
 )
 from codex_execution_handlers import build_codex_execution_handlers
+from health_bridge_bindings import build_health_bridge_bindings
 from intake_bridge_bindings import build_intake_bridge_bindings
 from watchdog_bridge_bindings import build_watchdog_bridge_bindings
 from execution_evaluation import (
@@ -87,22 +88,6 @@ from codex_bridge_runtime import (
     require_success as require_codex_bridge_success,
     run_codex_bridge as execute_codex_bridge,
     write_codex_bridge_config as write_codex_bridge_runtime_config,
-)
-from health_summary import (
-    HealthSummaryDependencies,
-    compact_control_text as compact_health_control_text,
-    handle_codex_capabilities as build_codex_capabilities,
-    handle_codex_workspaces as build_codex_workspaces,
-    handle_health_summary as build_health_summary,
-    read_limited_json as read_health_limited_json,
-    read_limited_text as read_health_limited_text,
-    safe_blocker_type as normalize_supervisor_blocker_type,
-    safe_codex_status_text as build_safe_codex_status_text,
-    safe_control_text as build_safe_control_text,
-    safe_count_text as build_safe_count_text,
-    workspace_summary as build_workspace_summary,
-    workspace_supervisor_signal as build_workspace_supervisor_signal,
-    workspace_supervisor_signals as build_workspace_supervisor_signals,
 )
 from web_ui import render_index_html
 from prepared_context import (
@@ -405,86 +390,32 @@ def codex_task_summary(task_dir: Path, task: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def workspace_summary(project: Project) -> dict[str, Any]:
-    return build_workspace_summary(project)
-
-
-def handle_codex_workspaces(config: BridgeConfig, _principal: AuthPrincipal) -> dict[str, Any]:
-    return build_codex_workspaces(config)
-
-
-def handle_codex_capabilities(config: BridgeConfig, _principal: AuthPrincipal) -> dict[str, Any]:
-    return build_codex_capabilities(config, version=AGENT_HOST_VERSION)
-
-
-def read_recent_task_summaries(config: BridgeConfig, principal: AuthPrincipal, limit: int = 50) -> list[dict[str, Any]]:
-    return read_visible_task_summaries(
-        config,
-        principal,
-        can_access_task=can_access_task,
-        task_id_re=CODEX_TASK_ID_RE,
-        utc_now=utc_now,
-        prompt_preview_chars=PROMPT_PREVIEW_CHARS,
-        limit=max(1, limit),
-    )
-
-
-def safe_control_text(config: BridgeConfig, text: str) -> str:
-    return build_safe_control_text(config, text)
-
-
-def compact_control_text(config: BridgeConfig, text: str, max_chars: int = SUPERVISOR_TEXT_MAX_CHARS) -> str:
-    return compact_health_control_text(config, text, max_chars=max_chars)
-
-
-def read_limited_text(path: Path, max_chars: int = 8192) -> str:
-    return read_health_limited_text(path, max_chars=max_chars)
-
-
-def read_limited_json(path: Path, max_chars: int = 65536) -> dict[str, Any] | None:
-    return read_health_limited_json(path, max_chars=max_chars)
-
-
-def safe_blocker_type(value: Any) -> str:
-    return normalize_supervisor_blocker_type(value, allowed_blockers=SUPERVISOR_ALLOWED_BLOCKERS)
-
-
-def safe_count_text(config: BridgeConfig, value: Any) -> str:
-    return build_safe_count_text(config, value)
-
-
-def workspace_supervisor_signal(config: BridgeConfig, project: Project) -> dict[str, Any]:
-    return build_workspace_supervisor_signal(
-        config,
-        project,
-        allowed_blockers=SUPERVISOR_ALLOWED_BLOCKERS,
-        supervisor_text_max_chars=SUPERVISOR_TEXT_MAX_CHARS,
-    )
-
-
-def workspace_supervisor_signals(config: BridgeConfig) -> list[dict[str, Any]]:
-    return build_workspace_supervisor_signals(
-        config,
-        allowed_blockers=SUPERVISOR_ALLOWED_BLOCKERS,
-        supervisor_text_max_chars=SUPERVISOR_TEXT_MAX_CHARS,
-    )
-
-
-def handle_health_summary(config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
-    return build_health_summary(
-        config,
-        principal,
-        deps=HealthSummaryDependencies(read_recent_task_summaries=read_recent_task_summaries),
-        version=AGENT_HOST_VERSION,
-        active_statuses=CODEX_ACTIVE_STATUSES,
-        final_statuses=CODEX_FINAL_STATUSES,
-        allowed_blockers=SUPERVISOR_ALLOWED_BLOCKERS,
-        supervisor_text_max_chars=SUPERVISOR_TEXT_MAX_CHARS,
-    )
-
-
-def safe_codex_status_text(config: BridgeConfig, task: dict[str, Any], text: str) -> str:
-    return build_safe_codex_status_text(config, task, text)
+HEALTH_BRIDGE_BINDINGS = build_health_bridge_bindings(
+    can_access_task=can_access_task,
+    read_visible_task_summaries=read_visible_task_summaries,
+    task_id_re=CODEX_TASK_ID_RE,
+    utc_now=utc_now,
+    prompt_preview_chars=PROMPT_PREVIEW_CHARS,
+    version=AGENT_HOST_VERSION,
+    active_statuses=CODEX_ACTIVE_STATUSES,
+    final_statuses=CODEX_FINAL_STATUSES,
+    allowed_blockers=SUPERVISOR_ALLOWED_BLOCKERS,
+    supervisor_text_max_chars=SUPERVISOR_TEXT_MAX_CHARS,
+)
+workspace_summary = HEALTH_BRIDGE_BINDINGS.workspace_summary
+handle_codex_workspaces = HEALTH_BRIDGE_BINDINGS.handle_codex_workspaces
+handle_codex_capabilities = HEALTH_BRIDGE_BINDINGS.handle_codex_capabilities
+read_recent_task_summaries = HEALTH_BRIDGE_BINDINGS.read_recent_task_summaries
+safe_control_text = HEALTH_BRIDGE_BINDINGS.safe_control_text
+compact_control_text = HEALTH_BRIDGE_BINDINGS.compact_control_text
+read_limited_text = HEALTH_BRIDGE_BINDINGS.read_limited_text
+read_limited_json = HEALTH_BRIDGE_BINDINGS.read_limited_json
+safe_blocker_type = HEALTH_BRIDGE_BINDINGS.safe_blocker_type
+safe_count_text = HEALTH_BRIDGE_BINDINGS.safe_count_text
+workspace_supervisor_signal = HEALTH_BRIDGE_BINDINGS.workspace_supervisor_signal
+workspace_supervisor_signals = HEALTH_BRIDGE_BINDINGS.workspace_supervisor_signals
+handle_health_summary = HEALTH_BRIDGE_BINDINGS.handle_health_summary
+safe_codex_status_text = HEALTH_BRIDGE_BINDINGS.safe_codex_status_text
 
 
 def safe_adapter_source(value: str) -> str:
