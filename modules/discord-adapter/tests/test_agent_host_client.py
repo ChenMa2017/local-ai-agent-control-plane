@@ -1460,6 +1460,80 @@ class DiscordBotRuntimeTests(unittest.TestCase):
                 "completion",
             )
 
+    def test_agent_prepare_infers_thread_followup_context(self):
+        class FakeAgent:
+            def __init__(self):
+                self.prepare_calls = []
+
+            def workspaces(self):
+                return {"workspaces": [{"id": "main_codex", "default_mode": "workspace-write"}]}
+
+            def prepare(self, **kwargs):
+                self.prepare_calls.append(kwargs)
+                return {
+                    "intake_id": "intake_20260618_000001_followup01",
+                    "workspace": "main_codex",
+                    "status": "prepared",
+                    "followup_task_id": "task_parent",
+                    "contract": {
+                        "objective": "report_only",
+                        "risk_class": "low",
+                    },
+                    "preflight": {
+                        "ok": True,
+                        "required_action": "run",
+                        "reasons": ["Evidence is already scoped to the referenced task."],
+                    },
+                    "ready_to_run": True,
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = FakeAgent()
+            runtime = self.make_runtime(Path(tmp), agent)
+            guild = runtime.FakeGuild(7)
+            thread = runtime.FakeThread(
+                thread_id=2001,
+                parent_id=1001,
+                guild=guild,
+                bot_author=runtime.adapter.user,
+            )
+            runtime.adapter.channels[thread.id] = thread
+            runtime.adapter.thread_store.upsert_thread(
+                task_id="task_parent",
+                guild_id="7",
+                channel_id="1001",
+                thread_id="2001",
+                created_by="42",
+                workspace="main_codex",
+                status="done",
+            )
+
+            interaction = runtime.FakeInteraction(
+                interaction_id=7101,
+                user=runtime.FakeAuthor(42, bot=False),
+                channel=thread,
+                guild=guild,
+            )
+
+            command = runtime.adapter.tree.commands[bot.slash_command_name(runtime.config.command_prefix, "prepare")]
+            asyncio.run(command(interaction))
+
+            self.assertEqual(interaction.response.deferred, [{"ephemeral": True, "thinking": True}])
+            self.assertEqual(len(interaction.followup.sent_messages), 1)
+            self.assertIn("intake_id: intake_20260618_000001_followup01", interaction.followup.sent_messages[0]["content"])
+            self.assertIn("followup_from_task: task_parent", interaction.followup.sent_messages[0]["content"])
+            self.assertIn("workspace: main_codex", interaction.followup.sent_messages[0]["content"])
+
+            self.assertEqual(len(agent.prepare_calls), 1)
+            self.assertEqual(agent.prepare_calls[0]["workspace"], "main_codex")
+            self.assertEqual(agent.prepare_calls[0]["prompt"], "")
+            self.assertEqual(agent.prepare_calls[0]["mode"], "workspace-write")
+            self.assertEqual(agent.prepare_calls[0]["source_channel_id"], "2001")
+            self.assertEqual(agent.prepare_calls[0]["source_message_id"], "7101")
+            self.assertEqual(agent.prepare_calls[0]["reference_task_id"], "task_parent")
+            self.assertEqual(agent.prepare_calls[0]["followup_task_id"], "task_parent")
+            self.assertEqual(agent.prepare_calls[0]["command_name"], "/agent_prepare")
+
 
 if __name__ == "__main__":
     unittest.main()
