@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import re
 import shlex
-import subprocess
 import sys
 import threading
 import time
@@ -93,6 +91,14 @@ from codex_runtime import (
     paginate_text as paginate_codex_text,
     parse_positive_int as parse_codex_positive_int,
     principal_from_stream_token as resolve_stream_session_principal,
+)
+from codex_bridge_runtime import (
+    bool_from_payload as parse_truthy_payload,
+    parse_queued_task_id as parse_codex_bridge_queued_task_id,
+    reconcile_codex_tasks as reconcile_bridge_tasks,
+    require_success as require_codex_bridge_success,
+    run_codex_bridge as execute_codex_bridge,
+    write_codex_bridge_config as write_codex_bridge_runtime_config,
 )
 from health_summary import (
     HealthSummaryDependencies,
@@ -418,93 +424,42 @@ def handle_watchdog(payload: dict[str, str], config: BridgeConfig) -> dict[str, 
 
 
 def bool_from_payload(value: str) -> bool:
-    return str(value).lower() in {"1", "true", "yes", "on"}
+    return parse_truthy_payload(value)
 
 
-def run_codex_bridge(config: BridgeConfig, args: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
-    script = config.codex_bridge_root / "scripts" / "codex-bridge.js"
-    if not script.exists():
-        raise BridgeError(f"codex-bridge script not found: {script}", 500)
-    bridge_config = write_codex_bridge_config(config)
-    bridged_args = [args[0], "--config", str(bridge_config), *args[1:]]
-
-    env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = ""
-    return subprocess.run(
-        [config.codex_bridge_node_bin, str(script), *bridged_args],
-        cwd=str(config.codex_bridge_root),
-        env=env,
-        text=True,
-        capture_output=True,
+def run_codex_bridge(config: BridgeConfig, args: list[str], timeout: int = 20) -> Any:
+    return execute_codex_bridge(
+        config,
+        args,
         timeout=timeout,
-        check=False,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
     )
 
 
 def write_codex_bridge_config(config: BridgeConfig) -> Path:
-    """Mirror the web adapter allowlists into the standalone codex-bridge config."""
-    state_dir = config.codex_bridge_root / ".codex-bridge"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    out = state_dir / "web-adapter.config.json"
-    tmp = state_dir / f".web-adapter.{os.getpid()}.tmp"
-
-    projects = {
-        name: {
-            "path": str(project.root),
-            "mode": project.default_mode,
-            "allowedModes": list(project.allowed_modes),
-        }
-        for name, project in sorted(config.projects.items())
-    }
-    data = {
-        "version": 1,
-        "users": list(config.allowed_users),
-        "projects": projects,
-        "stateDir": str(state_dir),
-        "codexBin": "codex",
-        "maxConcurrent": 1,
-        "timeoutSeconds": 900,
-        "cancelGraceMs": 5000,
-        "watchdogIntervalMs": 1000,
-        "dryRunStepMs": 450,
-        "redaction": {
-            "enabled": True,
-            "redactHomePath": True,
-            "redactProjectPaths": True,
-            "redactTokens": True,
-            "maxLogChars": 20000,
-            "maxResultChars": 80000,
-        },
-        "generated_by": "mattermpst_chat web adapter",
-    }
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-    os.replace(tmp, out)
-    return out
+    return write_codex_bridge_runtime_config(config)
 
 
-def require_success(result: subprocess.CompletedProcess[str]) -> str:
-    output = (result.stdout or "").strip()
-    if result.returncode == 0:
-        return output
-    error = (result.stderr or result.stdout or "codex-bridge command failed").strip()
-    raise BridgeError(error, 500)
+def require_success(result: Any) -> str:
+    return require_codex_bridge_success(
+        result,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def reconcile_codex_tasks(config: BridgeConfig) -> None:
-    script = config.codex_bridge_root / "scripts" / "codex-bridge.js"
-    if not script.exists():
-        return
-    result = run_codex_bridge(config, ["reconcile"], timeout=10)
-    if result.returncode != 0:
-        raise BridgeError((result.stderr or result.stdout or "codex-bridge reconcile failed").strip(), 500)
+    reconcile_bridge_tasks(
+        config,
+        run_bridge=lambda current_config, args, timeout: run_codex_bridge(current_config, args, timeout=timeout),
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def parse_queued_task_id(output: str) -> str:
-    for line in output.splitlines():
-        match = re.match(r"^queued\s+(task_[A-Za-z0-9_.-]+)$", line.strip())
-        if match:
-            return match.group(1)
-    raise BridgeError("codex-bridge did not return a task id", 500)
+    return parse_codex_bridge_queued_task_id(
+        output,
+        error_factory=lambda message, status, code: BridgeError(message, status, code),
+    )
 
 
 def validate_task_id(task_id: str) -> str:
