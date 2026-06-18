@@ -1534,6 +1534,193 @@ class DiscordBotRuntimeTests(unittest.TestCase):
             self.assertEqual(agent.prepare_calls[0]["followup_task_id"], "task_parent")
             self.assertEqual(agent.prepare_calls[0]["command_name"], "/agent_prepare")
 
+    def test_contract_lifecycle_prepare_answers_intake_and_run(self):
+        class FakeAgent:
+            def __init__(self):
+                self.prepare_calls = []
+                self.intake_calls = []
+                self.run_calls = []
+
+            def workspaces(self):
+                return {"workspaces": [{"id": "main_codex", "default_mode": "workspace-write"}]}
+
+            def prepare(self, **kwargs):
+                self.prepare_calls.append(kwargs)
+                if kwargs.get("intake_id"):
+                    return {
+                        "intake_id": "intake_20260618_000003_contract01",
+                        "workspace": "main_codex",
+                        "status": "prepared",
+                        "questions": [],
+                        "contract": {
+                            "objective": "report_only",
+                            "risk_class": "low",
+                        },
+                        "preflight": {
+                            "ok": True,
+                            "required_action": "run",
+                            "reasons": ["Clarifications captured."],
+                        },
+                        "ready_to_run": True,
+                    }
+                return {
+                    "intake_id": "intake_20260618_000003_contract01",
+                    "workspace": "main_codex",
+                    "status": "need_user_reply",
+                    "questions": ["Please confirm the exact file scope for the bounded review."],
+                    "contract": {
+                        "objective": "local_workspace_copy",
+                        "risk_class": "medium",
+                    },
+                    "preflight": {
+                        "ok": False,
+                        "required_action": "reply_to_questions",
+                        "reasons": ["Task intent still needs one clarification."],
+                    },
+                    "ready_to_run": False,
+                }
+
+            def intake(self, intake_id):
+                self.intake_calls.append(intake_id)
+                return {
+                    "intake_id": intake_id,
+                    "intent": {
+                        "workspace": "main_codex",
+                        "status": "prepared",
+                    },
+                    "contract": {
+                        "objective": "report_only",
+                        "risk_class": "low",
+                    },
+                    "preflight": {
+                        "ok": True,
+                        "reasons": ["Clarifications captured."],
+                    },
+                    "ready_to_run": True,
+                    "questions": [],
+                }
+
+            def run(self, **kwargs):
+                self.run_calls.append(kwargs)
+                return {
+                    "task_id": "task_from_intake",
+                    "status": "queued",
+                    "mode": "workspace-write",
+                    "intake_id": "intake_20260618_000003_contract01",
+                    "prepare_context": {
+                        "used": True,
+                        "objective": "report_only",
+                        "evidence_retrieval_decision": "stale_conclusion",
+                    },
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = FakeAgent()
+            runtime = self.make_runtime(Path(tmp), agent)
+            guild = runtime.FakeGuild(7)
+            channel = runtime.FakeChannel(
+                channel_id=1001,
+                guild=guild,
+                bot_author=runtime.adapter.user,
+                client=runtime.adapter,
+            )
+
+            prepare_command = runtime.adapter.tree.commands[bot.slash_command_name(runtime.config.command_prefix, "prepare")]
+            intake_command = runtime.adapter.tree.commands[bot.slash_command_name(runtime.config.command_prefix, "intake")]
+            run_command = runtime.adapter.tree.commands[bot.slash_command_name(runtime.config.command_prefix, "run")]
+
+            first_prepare = runtime.FakeInteraction(
+                interaction_id=7201,
+                user=runtime.FakeAuthor(42, bot=False),
+                channel=channel,
+                guild=guild,
+            )
+            asyncio.run(prepare_command(first_prepare, prompt="Review the bounded claim", workspace="main_codex"))
+
+            self.assertEqual(first_prepare.response.deferred, [{"ephemeral": True, "thinking": True}])
+            self.assertEqual(len(first_prepare.followup.sent_messages), 1)
+            self.assertIn("intake_id: intake_20260618_000003_contract01", first_prepare.followup.sent_messages[0]["content"])
+            self.assertIn("Please confirm the exact file scope", first_prepare.followup.sent_messages[0]["content"])
+            self.assertEqual(len(channel.created_threads), 0)
+
+            self.assertEqual(len(agent.prepare_calls), 1)
+            self.assertEqual(agent.prepare_calls[0]["workspace"], "main_codex")
+            self.assertEqual(agent.prepare_calls[0]["prompt"], "Review the bounded claim")
+            self.assertEqual(agent.prepare_calls[0]["mode"], "workspace-write")
+            self.assertEqual(agent.prepare_calls[0]["intake_id"], None)
+            self.assertEqual(agent.prepare_calls[0]["answers"], None)
+            self.assertEqual(agent.prepare_calls[0]["command_name"], "/agent_prepare")
+
+            second_prepare = runtime.FakeInteraction(
+                interaction_id=7202,
+                user=runtime.FakeAuthor(42, bot=False),
+                channel=channel,
+                guild=guild,
+            )
+            asyncio.run(prepare_command(
+                second_prepare,
+                intake_id="intake_20260618_000003_contract01",
+                answers="Only compare the prepared evidence set with the current claim.",
+            ))
+
+            self.assertEqual(second_prepare.response.deferred, [{"ephemeral": True, "thinking": True}])
+            self.assertEqual(len(second_prepare.followup.sent_messages), 1)
+            self.assertIn("下一步：run", second_prepare.followup.sent_messages[0]["content"])
+            self.assertIn("这份 contract 已可执行", second_prepare.followup.sent_messages[0]["content"])
+
+            self.assertEqual(len(agent.prepare_calls), 2)
+            self.assertEqual(agent.prepare_calls[1]["workspace"], "")
+            self.assertEqual(agent.prepare_calls[1]["prompt"], "")
+            self.assertEqual(agent.prepare_calls[1]["intake_id"], "intake_20260618_000003_contract01")
+            self.assertEqual(
+                agent.prepare_calls[1]["answers"],
+                "Only compare the prepared evidence set with the current claim.",
+            )
+
+            intake_interaction = runtime.FakeInteraction(
+                interaction_id=7203,
+                user=runtime.FakeAuthor(42, bot=False),
+                channel=channel,
+                guild=guild,
+            )
+            asyncio.run(intake_command(intake_interaction, intake_id="intake_20260618_000003_contract01"))
+
+            self.assertEqual(agent.intake_calls, ["intake_20260618_000003_contract01"])
+            self.assertEqual(intake_interaction.response.deferred, [{"ephemeral": True, "thinking": True}])
+            self.assertEqual(len(intake_interaction.followup.sent_messages), 1)
+            self.assertIn("ready_to_run: yes", intake_interaction.followup.sent_messages[0]["content"])
+            self.assertIn("objective: report_only", intake_interaction.followup.sent_messages[0]["content"])
+
+            run_interaction = runtime.FakeInteraction(
+                interaction_id=7204,
+                user=runtime.FakeAuthor(42, bot=False),
+                channel=channel,
+                guild=guild,
+            )
+            asyncio.run(run_command(run_interaction, intake_id="intake_20260618_000003_contract01"))
+
+            self.assertEqual(run_interaction.response.deferred, [{"ephemeral": True, "thinking": True}])
+            self.assertEqual(len(run_interaction.followup.sent_messages), 1)
+            self.assertIn("任务：task_from_intake", run_interaction.followup.sent_messages[0]["content"])
+            self.assertIn("intake_id: intake_20260618_000003_contract01", run_interaction.followup.sent_messages[0]["content"])
+            self.assertIn("prepare: report_only", run_interaction.followup.sent_messages[0]["content"])
+            self.assertIn("evidence: stale_conclusion", run_interaction.followup.sent_messages[0]["content"])
+
+            self.assertEqual(len(agent.run_calls), 1)
+            self.assertEqual(agent.run_calls[0]["workspace"], "main_codex")
+            self.assertEqual(agent.run_calls[0]["prompt"], "")
+            self.assertEqual(agent.run_calls[0]["mode"], "workspace-write")
+            self.assertEqual(agent.run_calls[0]["intake_id"], "intake_20260618_000003_contract01")
+            self.assertEqual(agent.run_calls[0]["reference_task_id"], None)
+            self.assertEqual(agent.run_calls[0]["command_name"], "/agent_run")
+
+            self.assertEqual(len(channel.created_threads), 1)
+            created = channel.created_threads[0]
+            thread = created["thread"]
+            self.assertEqual(runtime.adapter.thread_store.task_id_for_thread(str(thread.id)), "task_from_intake")
+            self.assertIn("task_id: task_from_intake", thread.sent_messages[0].content)
+            self.assertIn("(empty)", thread.sent_messages[0].content)
+
 
 if __name__ == "__main__":
     unittest.main()
