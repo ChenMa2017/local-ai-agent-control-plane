@@ -175,10 +175,13 @@ def build_watchdog_bridge_handler(deps: HandlerDependencies) -> type[BaseHTTPReq
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            route = parsed.path.rstrip("/")
+            route = parsed.path.rstrip("/") or "/"
             length = int(self.headers.get("Content-Length", "0") or "0")
             if length > deps.max_body_bytes:
-                self.send_json(413, deps.mattermost_response("request body too large"))
+                if route.startswith("/codex"):
+                    self.send_api_error(deps.bridge_error_type("request body too large", 413, "payload_too_large"))
+                else:
+                    self.send_json(413, deps.mattermost_response("request body too large"))
                 return
             raw = self.rfile.read(length)
             dispatch_post(

@@ -92,6 +92,19 @@ class BridgeHandlerTests(unittest.TestCase):
         self.assertEqual(handler.response_status, 413)
         self.assertIn('"request body too large"', handler.wfile.getvalue().decode("utf-8"))
 
+    def test_do_post_rejects_oversized_codex_body_with_api_error(self):
+        handler_class = bridge_handler.build_watchdog_bridge_handler(make_handler_dependencies(max_body_bytes=8))
+        handler = make_handler_instance(
+            handler_class,
+            path="/codex/run/",
+            headers={"Content-Length": "9", "Content-Type": "application/json"},
+        )
+
+        handler.do_POST()
+
+        self.assertEqual(handler.response_status, 413)
+        self.assertIn('"error": "request body too large"', handler.wfile.getvalue().decode("utf-8"))
+
     def test_handle_codex_events_emits_bridge_error_event(self):
         handler_class = bridge_handler.build_watchdog_bridge_handler(
             make_handler_dependencies(
