@@ -13,18 +13,20 @@ import datetime as dt
 import json
 import re
 import shlex
-import sys
 import threading
-import time
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from config_loader import (
     load_auth_tokens as parse_auth_tokens_from_config,
     load_config as parse_bridge_config_from_file,
+)
+from bridge_handler import (
+    HandlerDependencies,
+    build_http_route_dependencies,
+    build_stream_loop_dependencies,
+    build_watchdog_bridge_handler,
 )
 from auth_policy import (
     authenticate_bearer as authenticate_bearer_principal,
@@ -38,7 +40,6 @@ from execution_evaluation import (
     ExecutionEvaluationDependencies,
     maybe_attach_execution_evaluation,
 )
-from http_routes import HttpRouteDependencies, dispatch_get, dispatch_post
 from request_contracts import (
     api_error_payload as build_api_error_payload,
     compact_adapter_metadata as compact_adapter_metadata_text,
@@ -52,7 +53,6 @@ from request_contracts import (
     safe_idempotency_key as validate_idempotency_key,
 )
 from result_streaming import (
-    StreamLoopDependencies,
     cleanup_stream_tokens as cleanup_stream_token_records,
     issue_stream_token,
     redact_url_secrets,
@@ -1065,45 +1065,6 @@ def cleanup_stream_tokens() -> None:
     cleanup_stream_token_records(STREAM_TOKENS, STREAM_TOKEN_LOCK, utc_now)
 
 
-def stream_loop_dependencies(handler: Any) -> StreamLoopDependencies:
-    return StreamLoopDependencies(
-        authorize_task=authorize_codex_task,
-        safe_log_snapshot=safe_log_snapshot,
-        has_safe_result=has_safe_result,
-        send_sse_event=handler.send_sse_event,
-        task_snapshot=task_snapshot,
-        remaining_seconds=remaining_seconds,
-        utc_now=utc_now,
-        monotonic=time.monotonic,
-        sleep=time.sleep,
-        final_statuses=CODEX_FINAL_STATUSES,
-        heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
-        poll_seconds=SSE_POLL_SECONDS,
-        log_event_max_chars=SSE_LOG_EVENT_MAX_CHARS,
-    )
-
-
-def http_route_dependencies() -> HttpRouteDependencies:
-    return HttpRouteDependencies(
-        authenticate_bearer=authenticate_bearer,
-        handle_health_summary=handle_health_summary,
-        handle_codex_workspaces=handle_codex_workspaces,
-        handle_codex_capabilities=handle_codex_capabilities,
-        handle_codex_tasks=handle_codex_tasks,
-        handle_codex_intake=handle_codex_intake,
-        handle_codex_result_page=handle_codex_result_page,
-        handle_codex_query=handle_codex_query,
-        handle_watchdog=handle_watchdog,
-        handle_codex_prepare=handle_codex_prepare,
-        handle_codex_run=handle_codex_run,
-        handle_stream_token=handle_stream_token,
-        index_html=index_html,
-        parse_body=parse_body,
-        mattermost_response=mattermost_response,
-        bridge_error_type=BridgeError,
-    )
-
-
 def handle_stream_token(payload: dict[str, str], config: BridgeConfig, principal: AuthPrincipal) -> dict[str, Any]:
     return issue_codex_stream_token(
         payload,
@@ -1180,91 +1141,52 @@ def index_html(config: BridgeConfig) -> str:
     return render_index_html(list(config.projects))
 
 
-class WatchdogBridgeHandler(BaseHTTPRequestHandler):
-    config: BridgeConfig
+def build_handler_dependencies() -> HandlerDependencies:
+    return HandlerDependencies(
+        bridge_error_type=BridgeError,
+        api_error_payload=api_error_payload,
+        mattermost_response=mattermost_response,
+        max_body_bytes=MAX_BODY_BYTES,
+        redact_log_text=redact_url_secrets,
+        validate_task_id=validate_task_id,
+        principal_from_stream_token=principal_from_stream_token,
+        authorize_task=authorize_codex_task,
+        stream_task_events=stream_task_events,
+        stream_loop_dependencies=lambda handler: build_stream_loop_dependencies(
+            handler,
+            authorize_task=authorize_codex_task,
+            safe_log_snapshot=safe_log_snapshot,
+            has_safe_result=has_safe_result,
+            task_snapshot=task_snapshot,
+            remaining_seconds=remaining_seconds,
+            utc_now=utc_now,
+            final_statuses=CODEX_FINAL_STATUSES,
+            heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
+            poll_seconds=SSE_POLL_SECONDS,
+            log_event_max_chars=SSE_LOG_EVENT_MAX_CHARS,
+        ),
+        http_route_dependencies=lambda: build_http_route_dependencies(
+            authenticate_bearer=authenticate_bearer,
+            handle_health_summary=handle_health_summary,
+            handle_codex_workspaces=handle_codex_workspaces,
+            handle_codex_capabilities=handle_codex_capabilities,
+            handle_codex_tasks=handle_codex_tasks,
+            handle_codex_intake=handle_codex_intake,
+            handle_codex_result_page=handle_codex_result_page,
+            handle_codex_query=handle_codex_query,
+            handle_watchdog=handle_watchdog,
+            handle_codex_prepare=handle_codex_prepare,
+            handle_codex_run=handle_codex_run,
+            handle_stream_token=handle_stream_token,
+            index_html=index_html,
+            parse_body=parse_body,
+            mattermost_response=mattermost_response,
+            bridge_error_type=BridgeError,
+        ),
+    )
 
-    def log_message(self, fmt: str, *args: Any) -> None:
-        sys.stderr.write("%s - %s\n" % (self.log_date_time_string(), redact_url_secrets(fmt % args)))
 
-    def send_json(self, status: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def send_api_error(self, exc: BridgeError | Exception, status: int | None = None) -> None:
-        if isinstance(exc, BridgeError):
-            self.send_json(status or exc.status, api_error_payload(exc))
-        else:
-            self.send_json(status or 500, api_error_payload(exc))
-
-    def send_html(self, status: int, text: str) -> None:
-        body = text.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def send_sse_event(self, event: str, payload: dict[str, Any]) -> None:
-        data = json.dumps(payload, ensure_ascii=False)
-        self.wfile.write(f"event: {event}\n".encode("utf-8"))
-        for line in data.splitlines() or [""]:
-            self.wfile.write(f"data: {line}\n".encode("utf-8"))
-        self.wfile.write(b"\n")
-        self.wfile.flush()
-
-    def handle_codex_events(self, payload: dict[str, str]) -> None:
-        task_id = validate_task_id(payload.get("task_id", ""))
-        principal = principal_from_stream_token(task_id, payload.get("stream_token", ""))
-        authorize_codex_task(self.config, principal, task_id)
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.send_header("X-Accel-Buffering", "no")
-        self.end_headers()
-
-        try:
-            stream_task_events(self.config, task_id, principal, stream_loop_dependencies(self))
-        except (BrokenPipeError, ConnectionResetError):
-            return
-        except BridgeError as exc:
-            self.send_sse_event("error", {"message": str(exc), "status": exc.status})
-        except Exception as exc:
-            self.send_sse_event("error", {"message": f"bridge error: {exc}", "status": 500})
-
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        dispatch_get(
-            self,
-            path=parsed.path,
-            query=parsed.query,
-            authorization=self.headers.get("Authorization", ""),
-            config=self.config,
-            deps=http_route_dependencies(),
-        )
-
-    def do_POST(self) -> None:
-        parsed = urlparse(self.path)
-        route = parsed.path.rstrip("/")
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        if length > MAX_BODY_BYTES:
-            self.send_json(413, mattermost_response("request body too large"))
-            return
-        raw = self.rfile.read(length)
-        dispatch_post(
-            self,
-            route=route,
-            content_type=self.headers.get("Content-Type", ""),
-            raw=raw,
-            authorization=self.headers.get("Authorization", ""),
-            config=self.config,
-            deps=http_route_dependencies(),
-        )
+WatchdogBridgeHandler = build_watchdog_bridge_handler(build_handler_dependencies())
 
 
 def main(argv: list[str] | None = None) -> int:
