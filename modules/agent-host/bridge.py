@@ -12,7 +12,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
-import shlex
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +37,7 @@ from auth_policy import (
 )
 from codex_execution_handlers import build_codex_execution_handlers
 from intake_bridge_bindings import build_intake_bridge_bindings
+from watchdog_bridge_bindings import build_watchdog_bridge_bindings
 from execution_evaluation import (
     maybe_attach_execution_evaluation,
 )
@@ -105,17 +105,6 @@ from health_summary import (
     workspace_supervisor_signals as build_workspace_supervisor_signals,
 )
 from web_ui import render_index_html
-from watchdog_commands import (
-    brief_text as build_watchdog_brief_text,
-    get_project as resolve_watchdog_project,
-    help_text as build_watchdog_help_text,
-    inbox_text as build_watchdog_inbox_text,
-    latest_report_path as resolve_watchdog_latest_report_path,
-    parse_project_token as parse_watchdog_project_token,
-    safe_snippet as read_watchdog_snippet,
-    status_text as build_watchdog_status_text,
-    write_task as persist_watchdog_task,
-)
 from prepared_context import (
     prepared_run_prompt,
     prepared_run_summary,
@@ -277,110 +266,23 @@ def reject_frontend_identity(payload: dict[str, str]) -> None:
     )
 
 
-def get_project(config: BridgeConfig, name: str | None) -> Project:
-    return resolve_watchdog_project(
-        name,
-        projects=config.projects,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def parse_project_token(parts: list[str], start: int = 1) -> tuple[str | None, list[str]]:
-    return parse_watchdog_project_token(parts, start=start)
-
-
-def safe_snippet(path: Path, max_chars: int = 1800) -> str:
-    return read_watchdog_snippet(path, max_chars=max_chars)
-
-
-def latest_report_path(project: Project) -> Path:
-    return resolve_watchdog_latest_report_path(project)
-
-
-def status_text(project: Project) -> str:
-    return build_watchdog_status_text(project)
-
-
-def brief_text(project: Project) -> str:
-    return build_watchdog_brief_text(project)
-
-
-def inbox_text(project: Project) -> str:
-    return build_watchdog_inbox_text(project)
-
-
-def write_task(
-    project: Project,
-    payload: dict[str, str],
-    request: str,
-    mode: str,
-    now: dt.datetime | None = None,
-) -> tuple[str, Path]:
-    return persist_watchdog_task(
-        project,
-        payload,
-        request,
-        mode,
-        now=now,
-        now_factory=utc_now,
-        max_task_chars=MAX_TASK_CHARS,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def help_text(config: BridgeConfig) -> str:
-    return build_watchdog_help_text(config.projects)
-
-
-def handle_watchdog(payload: dict[str, str], config: BridgeConfig) -> dict[str, str]:
-    validate_auth(payload, config)
-
-    text = payload.get("text", "").strip()
-    if not text:
-        return mattermost_response(help_text(config))
-
-    try:
-        parts = shlex.split(text)
-    except ValueError as exc:
-        raise BridgeError(f"could not parse command text: {exc}")
-
-    if not parts:
-        return mattermost_response(help_text(config))
-
-    subcommand = parts[0].lower()
-    if subcommand in {"help", "-h", "--help"}:
-        return mattermost_response(help_text(config))
-
-    if subcommand in {"status", "brief", "inbox"}:
-        project_name, rest = parse_project_token(parts)
-        if rest:
-            raise BridgeError(f"`{subcommand}` does not accept extra arguments")
-        project = get_project(config, project_name)
-        if subcommand == "status":
-            return mattermost_response(status_text(project))
-        if subcommand == "brief":
-            return mattermost_response(brief_text(project))
-        return mattermost_response(inbox_text(project))
-
-    if subcommand in {"task", "run-once", "run_once"}:
-        project_name, rest = parse_project_token(parts)
-        project = get_project(config, project_name)
-        request = " ".join(rest).strip()
-        if subcommand in {"run-once", "run_once"}:
-            request = request or "Run one watchdog cycle when safe, then report results."
-            mode = "run_once_request"
-        else:
-            mode = "task_request"
-        task_id, out = write_task(project, payload, request, mode)
-        rel = out.relative_to(project.root)
-        return mattermost_response(
-            f"Queued `{mode}` for `{project.name}`.\n"
-            f"Task id: `{task_id}`\n"
-            f"File: `{rel}`\n\n"
-            "The bridge did not execute shell commands. The project watchdog will judge this task on its next cycle."
-        )
-
-    raise BridgeError(f"unknown subcommand: {subcommand}")
+WATCHDOG_BRIDGE_BINDINGS = build_watchdog_bridge_bindings(
+    validate_auth=validate_auth,
+    mattermost_response=mattermost_response,
+    utc_now=utc_now,
+    max_task_chars=MAX_TASK_CHARS,
+    error_factory=lambda message, status, code: BridgeError(message, status, code),
+)
+get_project = WATCHDOG_BRIDGE_BINDINGS.get_project
+parse_project_token = WATCHDOG_BRIDGE_BINDINGS.parse_project_token
+safe_snippet = WATCHDOG_BRIDGE_BINDINGS.safe_snippet
+latest_report_path = WATCHDOG_BRIDGE_BINDINGS.latest_report_path
+status_text = WATCHDOG_BRIDGE_BINDINGS.status_text
+brief_text = WATCHDOG_BRIDGE_BINDINGS.brief_text
+inbox_text = WATCHDOG_BRIDGE_BINDINGS.inbox_text
+write_task = WATCHDOG_BRIDGE_BINDINGS.write_task
+help_text = WATCHDOG_BRIDGE_BINDINGS.help_text
+handle_watchdog = WATCHDOG_BRIDGE_BINDINGS.handle_watchdog
 
 
 def bool_from_payload(value: str) -> bool:
