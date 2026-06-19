@@ -1964,7 +1964,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(len(experiment_records), 1)
             self.assertEqual(experiment_records[0]["status"], "archived")
 
-    def test_validate_hypothesis_registry_transition_accepts_legacy_active_to_inconclusive(self):
+    def test_validate_hypothesis_registry_transition_requires_review_for_legacy_active_to_inconclusive(self):
         transition = research_objects.validate_hypothesis_registry_transition(
             {
                 "hypothesis_id": "hypothesis_latency_probe",
@@ -1976,9 +1976,27 @@ class ExecutionEvaluationTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(transition["status"], "valid")
+        self.assertEqual(transition["status"], "review_required")
+        self.assertEqual(transition["reason"], "transition_not_allowed")
         self.assertEqual(transition["current_status"], "active")
         self.assertEqual(transition["proposed_status"], "inconclusive")
+
+    def test_validate_hypothesis_registry_transition_accepts_legacy_active_to_testing(self):
+        transition = research_objects.validate_hypothesis_registry_transition(
+            {
+                "hypothesis_id": "hypothesis_latency_probe",
+                "status": "active",
+            },
+            {
+                "hypothesis_id": "hypothesis_latency_probe",
+                "status": "testing",
+            },
+        )
+
+        self.assertEqual(transition["status"], "valid")
+        self.assertEqual(transition["reason"], "ok")
+        self.assertEqual(transition["current_status"], "active")
+        self.assertEqual(transition["proposed_status"], "testing")
 
     def test_validate_hypothesis_registry_transition_requires_review_for_new_inconclusive_record(self):
         transition = research_objects.validate_hypothesis_registry_transition(

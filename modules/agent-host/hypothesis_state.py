@@ -29,9 +29,10 @@ HYPOTHESIS_ALLOWED_TRANSITIONS = {
     "__new__": {"proposed", "testing"},
     "proposed": {"proposed", "testing", "superseded", "archived"},
     "testing": {"testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
-    # Keep `active` readable for older project registries, but route new evidence
-    # back through testing before writing another final-like status.
-    "active": {"active", "testing", "inconclusive", "superseded", "archived"},
+    # Keep `active` readable for older project registries, but force the next
+    # machine-authored revision back through testing before any newer outcome is
+    # published.
+    "active": {"testing", "superseded", "archived"},
     "supported": {"supported", "testing", "superseded", "archived"},
     "refuted": {"refuted", "testing", "superseded", "archived"},
     "inconclusive": {"testing", "inconclusive", "superseded", "archived"},
