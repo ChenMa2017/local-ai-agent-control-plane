@@ -1879,15 +1879,18 @@ def validate_hypothesis_registry_transition(
         "archived",
     }
     allowed_transitions = {
-        "__new__": set(known_statuses),
-        "proposed": {"proposed", "testing", "active", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
+        # New hypotheses must enter the registry as open candidates first; final-like
+        # states require either an existing testing record or a review bundle.
+        "__new__": {"proposed", "testing"},
+        "proposed": {"proposed", "testing", "superseded", "archived"},
         "testing": {"testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
-        # Keep `active` as a legacy-compatible state for older project registries.
-        "active": {"active", "testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
-        "supported": {"supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
-        "refuted": {"refuted", "supported", "inconclusive", "invalid", "superseded", "archived"},
-        "inconclusive": {"testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
-        "invalid": {"testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
+        # Keep `active` readable for older project registries, but route new evidence
+        # back through testing before writing another final-like status.
+        "active": {"active", "testing", "inconclusive", "superseded", "archived"},
+        "supported": {"supported", "testing", "superseded", "archived"},
+        "refuted": {"refuted", "testing", "superseded", "archived"},
+        "inconclusive": {"testing", "inconclusive", "superseded", "archived"},
+        "invalid": {"testing", "invalid", "superseded", "archived"},
         "superseded": {"superseded", "archived"},
         "archived": {"archived"},
     }

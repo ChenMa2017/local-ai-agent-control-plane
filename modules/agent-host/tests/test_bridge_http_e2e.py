@@ -486,11 +486,19 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 self.assertEqual(page["experiment_promotion"]["promotion_state"], "candidate_ready")
                 self.assertEqual(page["experiment_promotion"]["project_sync"]["status"], "applied")
                 self.assertEqual(page["hypothesis_promotion"]["promotion_state"], "candidate_ready")
-                self.assertEqual(page["hypothesis_promotion"]["project_sync"]["status"], "applied")
+                self.assertEqual(page["hypothesis_promotion"]["project_sync"]["status"], "transition_review_required")
+                self.assertEqual(
+                    page["hypothesis_promotion"]["project_sync"]["transition_validation"]["reason"],
+                    "transition_not_allowed",
+                )
                 self.assertEqual(page["evaluation_report"]["assessment_basis"], "runner_metrics")
                 self.assertEqual(page["evaluation_report"]["validity"]["status"], "valid_metric_backed")
                 self.assertEqual(page["evaluation_report"]["experiment_assessment"]["result"], "inconclusive")
-                self.assertEqual(page["operator_summary"]["overall_status"], "promotion_ready")
+                self.assertEqual(page["operator_summary"]["overall_status"], "review_required")
+                self.assertEqual(
+                    page["operator_summary"]["next_safe_action"]["kind"],
+                    "review_hypothesis_transition_bundle",
+                )
 
                 intake = self.request_json(base_url, f"/codex/intake?intake_id={intake_id}")
                 self.assertTrue(intake["ok"])
@@ -499,6 +507,7 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 self.assertEqual(intake["experiment_result"]["metrics"][1]["value"], 0.031)
                 self.assertEqual(intake["experiment_promotion"]["promotion_state"], "candidate_ready")
                 self.assertEqual(intake["hypothesis_promotion"]["promotion_state"], "candidate_ready")
+                self.assertEqual(intake["hypothesis_promotion"]["project_sync"]["status"], "transition_review_required")
                 self.assertGreaterEqual(intake["event_count"], 11)
             finally:
                 server.shutdown()

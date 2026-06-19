@@ -437,8 +437,11 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(hypothesis_update["evaluation_result"], "inconclusive")
             self.assertEqual(hypothesis_update["evaluation_validity"], "valid")
             self.assertEqual(hypothesis_promotion["promotion_state"], "candidate_ready")
-            self.assertEqual(hypothesis_promotion["project_sync"]["status"], "applied")
-            self.assertEqual(hypothesis_promotion["project_sync"]["transition_validation"]["status"], "valid")
+            self.assertEqual(hypothesis_promotion["project_sync"]["status"], "transition_review_required")
+            self.assertEqual(hypothesis_promotion["project_sync"]["transition_validation"]["status"], "review_required")
+            self.assertEqual(hypothesis_promotion["project_sync"]["transition_validation"]["reason"], "transition_not_allowed")
+            self.assertIsNone(hypothesis_promotion["project_sync"]["transition_validation"]["current_status"])
+            self.assertEqual(hypothesis_promotion["project_sync"]["transition_validation"]["proposed_status"], "inconclusive")
             self.assertEqual(experiment_result["experiment_id"], "experiment_latency_probe")
             self.assertEqual(experiment_result["assessment_basis"], "structural_only")
             self.assertEqual(experiment_result["validity"], "valid")
@@ -466,21 +469,18 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["result"], "inconclusive")
             self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["validity"], "valid")
             self.assertEqual(attachments["evaluation_report"]["conclusion_assessment"]["assessment"], "candidate_ready")
-            self.assertEqual(attachments["operator_summary"]["overall_status"], "promotion_ready")
-            self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "review_result")
+            self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
+            self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "review_hypothesis_transition_bundle")
             self.assertIn("experiment_latency_probe", attachments["current_conclusion_update"]["supporting_experiments"])
             self.assertTrue((intake_root / "EXPERIMENT_RESULT.json").exists())
 
             hypothesis_registry_path = root / "research" / "HYPOTHESIS_REGISTRY.jsonl"
-            self.assertTrue(hypothesis_registry_path.exists())
-            hypothesis_records = [
-                json.loads(line)
-                for line in hypothesis_registry_path.read_text().strip().splitlines()
-                if line.strip()
-            ]
-            self.assertEqual(hypothesis_records[0]["hypothesis_id"], "hypothesis_latency_probe")
-            self.assertEqual(hypothesis_records[0]["revision"], 1)
-            self.assertEqual(hypothesis_records[0]["status"], "inconclusive")
+            self.assertFalse(hypothesis_registry_path.exists())
+            hypothesis_bundle_path = root / "research" / "proposals" / "hypotheses" / "hypothesis_latency_probe.json"
+            self.assertTrue(hypothesis_bundle_path.exists())
+            hypothesis_bundle = json.loads(hypothesis_bundle_path.read_text())
+            self.assertEqual(hypothesis_bundle["transition_validation"]["reason"], "transition_not_allowed")
+            self.assertEqual(hypothesis_bundle["hypothesis_update"]["status"], "inconclusive")
 
             experiment_index_path = root / "project_index" / "experiment_index.jsonl"
             self.assertTrue(experiment_index_path.exists())
@@ -700,8 +700,19 @@ class ExecutionEvaluationTests(unittest.TestCase):
             )
             self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["result"], "supported")
             self.assertEqual(attachments["experiment_promotion"]["project_sync"]["status"], "applied")
-            self.assertEqual(attachments["hypothesis_promotion"]["project_sync"]["status"], "applied")
-            self.assertEqual(attachments["operator_summary"]["overall_status"], "promotion_ready")
+            self.assertEqual(attachments["hypothesis_promotion"]["project_sync"]["status"], "transition_review_required")
+            self.assertEqual(
+                attachments["hypothesis_promotion"]["project_sync"]["transition_validation"]["reason"],
+                "transition_not_allowed",
+            )
+            self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
+            self.assertEqual(
+                attachments["operator_summary"]["next_safe_action"]["kind"],
+                "review_hypothesis_transition_bundle",
+            )
+            self.assertTrue(
+                (root / "research" / "proposals" / "hypotheses" / "hypothesis_metric_probe.json").exists()
+            )
             self.assertTrue((intake_root / "EXPERIMENT_RESULT.json").exists())
 
     def test_maybe_attach_execution_evaluation_rejects_mismatched_runner_metrics_artifact(self):
@@ -1198,6 +1209,37 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(transition["status"], "valid")
         self.assertEqual(transition["current_status"], "active")
         self.assertEqual(transition["proposed_status"], "inconclusive")
+
+    def test_validate_hypothesis_registry_transition_requires_review_for_new_inconclusive_record(self):
+        transition = research_objects.validate_hypothesis_registry_transition(
+            None,
+            {
+                "hypothesis_id": "hypothesis_latency_probe",
+                "status": "inconclusive",
+            },
+        )
+
+        self.assertEqual(transition["status"], "review_required")
+        self.assertEqual(transition["reason"], "transition_not_allowed")
+        self.assertIsNone(transition["current_status"])
+        self.assertEqual(transition["proposed_status"], "inconclusive")
+
+    def test_validate_hypothesis_registry_transition_requires_testing_before_supported_to_refuted(self):
+        transition = research_objects.validate_hypothesis_registry_transition(
+            {
+                "hypothesis_id": "hypothesis_latency_probe",
+                "status": "supported",
+            },
+            {
+                "hypothesis_id": "hypothesis_latency_probe",
+                "status": "refuted",
+            },
+        )
+
+        self.assertEqual(transition["status"], "review_required")
+        self.assertEqual(transition["reason"], "transition_not_allowed")
+        self.assertEqual(transition["current_status"], "supported")
+        self.assertEqual(transition["proposed_status"], "refuted")
 
     def test_maybe_attach_execution_evaluation_writes_review_bundle_when_publication_requires_review(self):
         with tempfile.TemporaryDirectory() as tmp:
