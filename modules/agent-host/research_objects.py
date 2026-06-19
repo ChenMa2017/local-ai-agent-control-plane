@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from post_run_artifacts import claim_boundary_for_evaluation
+from research_store import write_json_atomic
 
 JsonObject = dict[str, Any]
 
@@ -23,11 +24,6 @@ def read_json_object_if_exists(path: Path) -> JsonObject:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def write_json_atomic(path: Path, data: JsonObject) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
 def safe_excerpt(text: Any, max_chars: int = 220) -> str:

@@ -169,6 +169,15 @@ class ExecutionEvaluationTests(unittest.TestCase):
                 attachments["review_proposal_draft"]["provenance"]["generated_by"],
                 "agent_host_post_run_artifacts",
             )
+            self.assertEqual(
+                attachments["followup_task_draft"]["provenance"]["source"],
+                "system_derived",
+            )
+            self.assertEqual(
+                attachments["followup_task_draft"]["provenance"]["derivation_kind"],
+                "post_run_evaluation",
+            )
+            self.assertFalse(attachments["followup_task_draft"]["provenance"]["fallback_synthesized"])
             self.assertEqual(attachments["hypothesis_promotion"]["promotion_state"], "not_required")
             self.assertEqual(attachments["hypothesis_promotion"]["project_sync"]["status"], "workspace_unavailable")
             self.assertEqual(attachments["experiment_promotion"]["promotion_state"], "not_required")
@@ -223,7 +232,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             followup_events = [item for item in events if item["event"] == "followup_task_drafted"]
             ledger_events = [item for item in events if item["event"] == "ledger_note_drafted"]
             review_events = [item for item in events if item["event"] == "review_proposal_drafted"]
-            self.assertEqual(followup_events[0]["artifact_provenance_source"], "fallback_synthesized")
+            self.assertEqual(followup_events[0]["artifact_provenance_source"], "system_derived")
             self.assertEqual(followup_events[0]["artifact_generated_by"], "agent_host_post_run_artifacts")
             self.assertEqual(ledger_events[0]["artifact_repair_origin"], "execution_evaluation.ledger_note_draft")
             self.assertEqual(review_events[0]["artifact_repair_origin"], "execution_evaluation.review_proposal_draft")

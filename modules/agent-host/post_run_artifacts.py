@@ -126,7 +126,8 @@ def build_post_run_artifact_provenance(
     report_timestamp = str(evaluation.get("updated_at") or "").strip() or None
     return {
         "artifact_role": artifact_role,
-        "source": "fallback_synthesized",
+        "source": "system_derived",
+        "derivation_kind": "post_run_evaluation",
         "repair_origin": repair_origin,
         "generated_by": "agent_host_post_run_artifacts",
         "derived_from_report": {
@@ -140,7 +141,7 @@ def build_post_run_artifact_provenance(
         "generated_at_utc": report_timestamp or utc_now().isoformat().replace("+00:00", "Z"),
         "model_authored": False,
         "route_repair_authored": False,
-        "fallback_synthesized": True,
+        "fallback_synthesized": False,
     }
 
 
