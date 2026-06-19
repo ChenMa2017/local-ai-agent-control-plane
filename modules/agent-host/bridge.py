@@ -17,25 +17,17 @@ from pathlib import Path
 from typing import Any
 
 from api_bridge_bindings import build_api_bridge_bindings
-from bridge_handler import (
-    HandlerDependencies,
-    build_http_route_dependencies,
-    build_stream_loop_dependencies,
-    build_watchdog_bridge_handler,
-)
+from bridge_runtime_bindings import build_bridge_runtime_bindings
 from codex_execution_handlers import build_codex_execution_handlers
 from codex_task_runtime_bindings import build_codex_task_runtime_bindings
+from execution_evaluation import (
+    maybe_attach_execution_evaluation,
+)
 from health_bridge_bindings import build_health_bridge_bindings
 from intake_bridge_bindings import build_intake_bridge_bindings
 from stream_bridge_bindings import build_stream_bridge_bindings
 from watchdog_bridge_bindings import build_watchdog_bridge_bindings
-from execution_evaluation import (
-    maybe_attach_execution_evaluation,
-)
-from result_streaming import (
-    redact_url_secrets,
-    stream_task_events,
-)
+from result_streaming import redact_url_secrets
 from codex_tasking import (
     read_visible_task_summaries,
 )
@@ -361,52 +353,40 @@ handle_codex_result_page = CODEX_EXECUTION_HANDLERS.handle_codex_result_page
 handle_stream_token = CODEX_EXECUTION_HANDLERS.handle_stream_token
 
 
-def build_handler_dependencies() -> HandlerDependencies:
-    return HandlerDependencies(
-        bridge_error_type=BridgeError,
-        api_error_payload=api_error_payload,
-        mattermost_response=mattermost_response,
-        max_body_bytes=MAX_BODY_BYTES,
-        redact_log_text=redact_url_secrets,
-        validate_task_id=validate_task_id,
-        principal_from_stream_token=principal_from_stream_token,
-        authorize_task=authorize_codex_task,
-        stream_task_events=stream_task_events,
-        stream_loop_dependencies=lambda handler: build_stream_loop_dependencies(
-            handler,
-            authorize_task=authorize_codex_task,
-            safe_log_snapshot=safe_log_snapshot,
-            has_safe_result=has_safe_result,
-            task_snapshot=task_snapshot,
-            remaining_seconds=remaining_seconds,
-            utc_now=utc_now,
-            final_statuses=CODEX_FINAL_STATUSES,
-            heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
-            poll_seconds=SSE_POLL_SECONDS,
-            log_event_max_chars=SSE_LOG_EVENT_MAX_CHARS,
-        ),
-        http_route_dependencies=lambda: build_http_route_dependencies(
-            authenticate_bearer=authenticate_bearer,
-            handle_health_summary=handle_health_summary,
-            handle_codex_workspaces=handle_codex_workspaces,
-            handle_codex_capabilities=handle_codex_capabilities,
-            handle_codex_tasks=handle_codex_tasks,
-            handle_codex_intake=handle_codex_intake,
-            handle_codex_result_page=handle_codex_result_page,
-            handle_codex_query=handle_codex_query,
-            handle_watchdog=handle_watchdog,
-            handle_codex_prepare=handle_codex_prepare,
-            handle_codex_run=handle_codex_run,
-            handle_stream_token=handle_stream_token,
-            index_html=index_html,
-            parse_body=parse_body,
-            mattermost_response=mattermost_response,
-            bridge_error_type=BridgeError,
-        ),
-    )
-
-
-WatchdogBridgeHandler = build_watchdog_bridge_handler(build_handler_dependencies())
+BRIDGE_RUNTIME_BINDINGS = build_bridge_runtime_bindings(
+    bridge_error_type=BridgeError,
+    api_error_payload=api_error_payload,
+    mattermost_response=mattermost_response,
+    max_body_bytes=MAX_BODY_BYTES,
+    validate_task_id=validate_task_id,
+    principal_from_stream_token=principal_from_stream_token,
+    authorize_task=authorize_codex_task,
+    safe_log_snapshot=safe_log_snapshot,
+    has_safe_result=has_safe_result,
+    task_snapshot=task_snapshot,
+    remaining_seconds=remaining_seconds,
+    utc_now=utc_now,
+    final_statuses=CODEX_FINAL_STATUSES,
+    heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
+    poll_seconds=SSE_POLL_SECONDS,
+    log_event_max_chars=SSE_LOG_EVENT_MAX_CHARS,
+    authenticate_bearer=authenticate_bearer,
+    handle_health_summary=handle_health_summary,
+    handle_codex_workspaces=handle_codex_workspaces,
+    handle_codex_capabilities=handle_codex_capabilities,
+    handle_codex_tasks=handle_codex_tasks,
+    handle_codex_intake=handle_codex_intake,
+    handle_codex_result_page=handle_codex_result_page,
+    handle_codex_query=handle_codex_query,
+    handle_watchdog=handle_watchdog,
+    handle_codex_prepare=handle_codex_prepare,
+    handle_codex_run=handle_codex_run,
+    handle_stream_token=handle_stream_token,
+    index_html=index_html,
+    parse_body=parse_body,
+)
+build_handler_dependencies = BRIDGE_RUNTIME_BINDINGS.build_handler_dependencies
+WatchdogBridgeHandler = BRIDGE_RUNTIME_BINDINGS.watchdog_bridge_handler
 
 
 def main(argv: list[str] | None = None) -> int:
