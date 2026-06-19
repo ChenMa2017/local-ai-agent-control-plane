@@ -10,7 +10,6 @@ judge later.
 from __future__ import annotations
 
 import datetime as dt
-import json
 import re
 import threading
 from dataclasses import dataclass
@@ -29,13 +28,11 @@ from bridge_handler import (
 )
 from auth_policy import (
     authenticate_bearer as authenticate_bearer_principal,
-    can_access_intake as can_access_intake_payload,
-    can_access_task as can_access_task_payload,
-    is_admin as principal_is_admin,
     reject_frontend_identity as reject_frontend_payload_identity,
     validate_auth as validate_mattermost_auth,
 )
 from codex_execution_handlers import build_codex_execution_handlers
+from codex_task_runtime_bindings import build_codex_task_runtime_bindings
 from health_bridge_bindings import build_health_bridge_bindings
 from intake_bridge_bindings import build_intake_bridge_bindings
 from watchdog_bridge_bindings import build_watchdog_bridge_bindings
@@ -65,29 +62,10 @@ from result_streaming import (
     task_snapshot as build_task_snapshot,
 )
 from codex_tasking import (
-    authorize_codex_task as authorize_codex_task_record,
-    codex_task_summary as build_codex_task_summary,
-    codex_tasks_root as resolve_codex_tasks_root,
-    load_codex_task as load_codex_task_record,
-    parse_iso_datetime as parse_codex_iso_datetime,
-    prompt_preview as build_prompt_preview,
     read_visible_task_summaries,
-    task_adapter_metadata as parse_task_adapter_metadata,
-    task_duration_sec as compute_task_duration_sec,
-    task_intake_id as resolve_task_intake_id,
-    task_sort_value as codex_task_sort_value,
-    validate_task_id as validate_codex_task_id,
 )
 from codex_runtime import (
     principal_from_stream_token as resolve_stream_session_principal,
-)
-from codex_bridge_runtime import (
-    bool_from_payload as parse_truthy_payload,
-    parse_queued_task_id as parse_codex_bridge_queued_task_id,
-    reconcile_codex_tasks as reconcile_bridge_tasks,
-    require_success as require_codex_bridge_success,
-    run_codex_bridge as execute_codex_bridge,
-    write_codex_bridge_config as write_codex_bridge_runtime_config,
 )
 from web_ui import render_index_html
 from prepared_context import (
@@ -270,124 +248,33 @@ help_text = WATCHDOG_BRIDGE_BINDINGS.help_text
 handle_watchdog = WATCHDOG_BRIDGE_BINDINGS.handle_watchdog
 
 
-def bool_from_payload(value: str) -> bool:
-    return parse_truthy_payload(value)
-
-
-def run_codex_bridge(config: BridgeConfig, args: list[str], timeout: int = 20) -> Any:
-    return execute_codex_bridge(
-        config,
-        args,
-        timeout=timeout,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def write_codex_bridge_config(config: BridgeConfig) -> Path:
-    return write_codex_bridge_runtime_config(config)
-
-
-def require_success(result: Any) -> str:
-    return require_codex_bridge_success(
-        result,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def reconcile_codex_tasks(config: BridgeConfig) -> None:
-    reconcile_bridge_tasks(
-        config,
-        run_bridge=lambda current_config, args, timeout: run_codex_bridge(current_config, args, timeout=timeout),
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def parse_queued_task_id(output: str) -> str:
-    return parse_codex_bridge_queued_task_id(
-        output,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def validate_task_id(task_id: str) -> str:
-    return validate_codex_task_id(
-        task_id,
-        task_id_re=CODEX_TASK_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def codex_tasks_root(config: BridgeConfig) -> Path:
-    return resolve_codex_tasks_root(config)
-
-
-def load_codex_task(config: BridgeConfig, task_id: str) -> tuple[Path, dict[str, Any]]:
-    return load_codex_task_record(
-        config,
-        task_id,
-        task_id_re=CODEX_TASK_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def task_adapter_metadata(task: dict[str, Any]) -> dict[str, Any]:
-    return parse_task_adapter_metadata(task)
-
-
-def task_intake_id(task: dict[str, Any]) -> str:
-    return resolve_task_intake_id(task, intake_id_re=INTAKE_ID_RE)
-
-
-def is_admin(principal: AuthPrincipal) -> bool:
-    return principal_is_admin(principal)
-
-
-def can_access_task(task: dict[str, Any], principal: AuthPrincipal) -> bool:
-    return can_access_task_payload(task, principal)
-
-
-def can_access_intake(intent: dict[str, Any], principal: AuthPrincipal) -> bool:
-    return can_access_intake_payload(intent, principal)
-
-
-def authorize_codex_task(
-    config: BridgeConfig,
-    principal: AuthPrincipal,
-    task_id: str,
-) -> tuple[Path, dict[str, Any]]:
-    return authorize_codex_task_record(
-        config,
-        principal,
-        task_id,
-        can_access_task=can_access_task,
-        task_id_re=CODEX_TASK_ID_RE,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def parse_iso_datetime(value: Any) -> dt.datetime | None:
-    return parse_codex_iso_datetime(value)
-
-
-def task_duration_sec(task: dict[str, Any]) -> int | None:
-    return compute_task_duration_sec(task, utc_now=utc_now)
-
-
-def prompt_preview(prompt: Any) -> str:
-    return build_prompt_preview(prompt, max_chars=PROMPT_PREVIEW_CHARS)
-
-
-def task_sort_value(task: dict[str, Any]) -> str:
-    return codex_task_sort_value(task)
-
-
-def codex_task_summary(task_dir: Path, task: dict[str, Any]) -> dict[str, Any]:
-    return build_codex_task_summary(
-        task_dir,
-        task,
-        utc_now=utc_now,
-        prompt_preview_chars=PROMPT_PREVIEW_CHARS,
-    )
+CODEX_TASK_RUNTIME_BINDINGS = build_codex_task_runtime_bindings(
+    utc_now=utc_now,
+    task_id_re=CODEX_TASK_ID_RE,
+    intake_id_re=INTAKE_ID_RE,
+    prompt_preview_chars=PROMPT_PREVIEW_CHARS,
+    error_factory=lambda message, status, code: BridgeError(message, status, code),
+)
+bool_from_payload = CODEX_TASK_RUNTIME_BINDINGS.bool_from_payload
+run_codex_bridge = CODEX_TASK_RUNTIME_BINDINGS.run_codex_bridge
+write_codex_bridge_config = CODEX_TASK_RUNTIME_BINDINGS.write_codex_bridge_config
+require_success = CODEX_TASK_RUNTIME_BINDINGS.require_success
+reconcile_codex_tasks = CODEX_TASK_RUNTIME_BINDINGS.reconcile_codex_tasks
+parse_queued_task_id = CODEX_TASK_RUNTIME_BINDINGS.parse_queued_task_id
+validate_task_id = CODEX_TASK_RUNTIME_BINDINGS.validate_task_id
+codex_tasks_root = CODEX_TASK_RUNTIME_BINDINGS.codex_tasks_root
+load_codex_task = CODEX_TASK_RUNTIME_BINDINGS.load_codex_task
+task_adapter_metadata = CODEX_TASK_RUNTIME_BINDINGS.task_adapter_metadata
+task_intake_id = CODEX_TASK_RUNTIME_BINDINGS.task_intake_id
+is_admin = CODEX_TASK_RUNTIME_BINDINGS.is_admin
+can_access_task = CODEX_TASK_RUNTIME_BINDINGS.can_access_task
+can_access_intake = CODEX_TASK_RUNTIME_BINDINGS.can_access_intake
+authorize_codex_task = CODEX_TASK_RUNTIME_BINDINGS.authorize_codex_task
+parse_iso_datetime = CODEX_TASK_RUNTIME_BINDINGS.parse_iso_datetime
+task_duration_sec = CODEX_TASK_RUNTIME_BINDINGS.task_duration_sec
+prompt_preview = CODEX_TASK_RUNTIME_BINDINGS.prompt_preview
+task_sort_value = CODEX_TASK_RUNTIME_BINDINGS.task_sort_value
+codex_task_summary = CODEX_TASK_RUNTIME_BINDINGS.codex_task_summary
 
 
 HEALTH_BRIDGE_BINDINGS = build_health_bridge_bindings(
