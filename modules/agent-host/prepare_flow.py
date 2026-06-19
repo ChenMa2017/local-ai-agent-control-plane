@@ -38,6 +38,7 @@ FOLLOWUP_RESPONSE_FIELDS = (
     "review_proposal_draft",
     "hypothesis_update",
     "hypothesis_promotion",
+    "experiment_result",
     "experiment_index_update",
     "experiment_promotion",
     "current_conclusion_update",

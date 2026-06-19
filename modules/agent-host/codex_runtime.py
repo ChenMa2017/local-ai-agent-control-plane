@@ -277,6 +277,9 @@ def handle_codex_result_page(
         "hypothesis_promotion": result.get("hypothesis_promotion")
         if isinstance(result.get("hypothesis_promotion"), dict)
         else None,
+        "experiment_result": result.get("experiment_result")
+        if isinstance(result.get("experiment_result"), dict)
+        else None,
         "experiment_index_update": result.get("experiment_index_update")
         if isinstance(result.get("experiment_index_update"), dict)
         else None,

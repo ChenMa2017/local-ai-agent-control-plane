@@ -26,23 +26,23 @@ class BridgeHttpE2ETests(unittest.TestCase):
             },
         )
 
-    def write_watchdog_doc_search(self, workspace_root: Path) -> None:
+    def write_watchdog_doc_search(self, workspace_root: Path, payload: dict[str, object]) -> None:
         script = workspace_root / "agent" / "bin" / "watchdog_doc_search.py"
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text(
             "#!/usr/bin/env python3\n"
             "import json\n"
-            "print(json.dumps({"
-            "\"query\": \"What is the current best candidate?\", "
-            "\"decision\": \"stale_conclusion\", "
-            "\"warnings\": [\"matching current conclusion is stale and should be rechecked before citation\"], "
-            "\"read_plan\": [{\"path\": \"formal/current_best.md\", \"reason\": \"supports current conclusion: current best candidate\"}], "
-            "\"hits\": [{\"kind\": \"current_conclusion\", \"id\": \"current_best_candidate\", \"score\": 6.0}]"
-            "}))\n"
+            f"print(json.dumps({json.dumps(payload, ensure_ascii=False)}))\n"
         )
         script.chmod(0o755)
 
-    def write_codex_bridge_script(self, codex_root: Path) -> None:
+    def write_codex_bridge_script(
+        self,
+        codex_root: Path,
+        *,
+        task_id: str,
+        result_text: str,
+    ) -> None:
         script = codex_root / "scripts" / "codex-bridge.js"
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text(
@@ -57,7 +57,7 @@ class BridgeHttpE2ETests(unittest.TestCase):
             "function readJsonFlag(flag) {\n"
             "  try { return JSON.parse(readFlag(flag, '{}') || '{}'); } catch (_err) { return {}; }\n"
             "}\n"
-            "const taskId = 'task_20260618_120000_e2e01';\n"
+            f"const taskId = {json.dumps(task_id)};\n"
             "if (args[0] === 'run') {\n"
             "  const taskDir = path.join(root, '.codex-bridge', 'tasks', taskId);\n"
             "  fs.mkdirSync(taskDir, { recursive: true });\n"
@@ -79,7 +79,7 @@ class BridgeHttpE2ETests(unittest.TestCase):
             "    adapter_metadata: readJsonFlag('--metadata'),\n"
             "  };\n"
             "  fs.writeFileSync(path.join(taskDir, 'task.json'), JSON.stringify(task, null, 2));\n"
-            "  fs.writeFileSync(path.join(taskDir, 'result.md'), 'safe result summary for e2e validation');\n"
+            f"  fs.writeFileSync(path.join(taskDir, 'result.md'), {json.dumps(result_text)});\n"
             "  fs.writeFileSync(path.join(taskDir, 'bridge.log'), 'log line\\n');\n"
             "  console.log(`queued ${taskId}`);\n"
             "  process.exit(0);\n"
@@ -87,7 +87,7 @@ class BridgeHttpE2ETests(unittest.TestCase):
             "if (args[0] === 'result') {\n"
             "  console.log(JSON.stringify({\n"
             "    task_id: taskId,\n"
-            "    text: 'safe result summary for e2e validation',\n"
+            f"    text: {json.dumps(result_text)},\n"
             "    raw: false,\n"
             "    redacted: true,\n"
             "    truncated: false\n"
@@ -156,8 +156,21 @@ class BridgeHttpE2ETests(unittest.TestCase):
             workspace_root.mkdir(parents=True)
             (workspace_root / "project_index").mkdir(parents=True)
             codex_root = root / "codex-bridge"
-            self.write_watchdog_doc_search(workspace_root)
-            self.write_codex_bridge_script(codex_root)
+            self.write_watchdog_doc_search(
+                workspace_root,
+                {
+                    "query": "What is the current best candidate?",
+                    "decision": "stale_conclusion",
+                    "warnings": ["matching current conclusion is stale and should be rechecked before citation"],
+                    "read_plan": [{"path": "formal/current_best.md", "reason": "supports current conclusion: current best candidate"}],
+                    "hits": [{"kind": "current_conclusion", "id": "current_best_candidate", "score": 6.0}],
+                },
+            )
+            self.write_codex_bridge_script(
+                codex_root,
+                task_id="task_20260618_120000_e2e01",
+                result_text="safe result summary for e2e validation",
+            )
             config = self.make_config(workspace_root, codex_root)
 
             handler_class = type(
@@ -247,6 +260,104 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 self.assertEqual(intake["current_conclusion_promotion"]["decision"], "bounded_only_do_not_publish")
                 self.assertEqual(intake["current_conclusion_promotion"]["project_sync"]["status"], "bounded_only")
                 self.assertGreaterEqual(intake["event_count"], 10)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        bridge.STREAM_TOKENS.clear()
+
+    def test_http_e2e_bounded_cpu_eval_persists_experiment_result(self):
+        bridge.STREAM_TOKENS.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir(parents=True)
+            (workspace_root / "project_index").mkdir(parents=True)
+            codex_root = root / "codex-bridge"
+            self.write_watchdog_doc_search(
+                workspace_root,
+                {
+                    "query": "bounded cpu latency probe status",
+                    "decision": "safe_to_answer",
+                    "warnings": [],
+                    "read_plan": [{"path": "formal/latency_probe.md", "reason": "primary source"}],
+                    "hits": [{"kind": "current_conclusion", "id": "latency_probe_status", "score": 6.0}],
+                },
+            )
+            self.write_codex_bridge_script(
+                codex_root,
+                task_id="task_20260619_120000_e2eexp01",
+                result_text="Latency stayed within the bounded target during the CPU probe.",
+            )
+            config = self.make_config(workspace_root, codex_root)
+
+            handler_class = type(
+                "ConfiguredWatchdogBridgeHandler",
+                (bridge.WatchdogBridgeHandler,),
+                {"config": config},
+            )
+            server = ThreadingHTTPServer((config.host, 0), handler_class)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://{config.host}:{server.server_port}"
+                self.wait_for_server(base_url)
+
+                prepared = self.request_json(
+                    base_url,
+                    "/codex/prepare",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "prompt": "Run a bounded CPU experiment to compare baseline vs variant with same data and same budget; success criterion accuracy.",
+                        "source": "web",
+                    },
+                )
+                self.assertTrue(prepared["ok"])
+                self.assertEqual(prepared["contract"]["objective"], "bounded_cpu_eval")
+                self.assertTrue(prepared["decision_gate"]["required"])
+                self.assertTrue(prepared["ready_to_run"])
+                intake_id = prepared["intake_id"]
+
+                queued = self.request_json(
+                    base_url,
+                    "/codex/run",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "intake_id": intake_id,
+                    },
+                )
+                self.assertTrue(queued["ok"])
+                self.assertEqual(queued["task_id"], "task_20260619_120000_e2eexp01")
+                self.assertEqual(queued["prepare_context"]["objective"], "bounded_cpu_eval")
+
+                page = self.request_json(
+                    base_url,
+                    "/codex/result-page?task_id=task_20260619_120000_e2eexp01&page=1&page_size=80",
+                )
+                self.assertTrue(page["ok"])
+                self.assertIsNone(page["review_proposal_draft"])
+                self.assertEqual(page["experiment_result"]["assessment_basis"], "structural_only")
+                self.assertEqual(page["experiment_result"]["validity"], "valid")
+                self.assertEqual(page["experiment_result"]["result"], "inconclusive")
+                self.assertEqual(page["experiment_result"]["metrics"][0]["name"], "safe_result_available")
+                self.assertEqual(page["experiment_result"]["metrics"][0]["value"], 1)
+                self.assertIn("reproducibility_contract_incomplete", page["experiment_result"]["limitations"])
+                self.assertEqual(page["experiment_promotion"]["promotion_state"], "candidate_ready")
+                self.assertEqual(page["experiment_promotion"]["project_sync"]["status"], "applied")
+                self.assertEqual(page["evaluation_report"]["experiment_result"]["result"], "inconclusive")
+                self.assertEqual(page["evaluation_report"]["experiment_assessment"]["result"], "inconclusive")
+                self.assertEqual(page["evaluation_report"]["experiment_assessment"]["validity"], "valid")
+                self.assertEqual(page["evaluation_report"]["validity"]["status"], "valid_structural_only")
+                self.assertEqual(page["current_conclusion_promotion"]["promotion_state"], "candidate_ready")
+                self.assertEqual(page["current_conclusion_promotion"]["project_sync"]["status"], "applied")
+
+                intake = self.request_json(base_url, f"/codex/intake?intake_id={intake_id}")
+                self.assertTrue(intake["ok"])
+                self.assertEqual(intake["experiment_result"]["result"], "inconclusive")
+                self.assertEqual(intake["experiment_promotion"]["promotion_state"], "candidate_ready")
+                self.assertGreaterEqual(intake["event_count"], 11)
             finally:
                 server.shutdown()
                 server.server_close()

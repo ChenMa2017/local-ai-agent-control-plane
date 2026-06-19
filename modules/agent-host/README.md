@@ -159,6 +159,7 @@ POST /codex/cancel
 - persist FOLLOWUP_TASK_DRAFT.json / FOLLOWUP_TASK_DRAFT.md so a later client can turn the latest result into a new /codex/prepare prompt without guessing from scratch
 - persist LEDGER_NOTE_DRAFT.json / LEDGER_NOTE_DRAFT.md as an intake-local proposed fragment for `research/LEDGER_NOTES.md` without touching the real project ledger
 - persist REVIEW_PROPOSAL_DRAFT.json / REVIEW_PROPOSAL_DRAFT.md when the result still needs a bounded claim review or human policy review
+- persist EXPERIMENT_RESULT.json as a structured post-run experiment evaluation object, even before a real domain metric evaluator exists
 - persist CURRENT_CONCLUSION_UPDATE.json / CURRENT_CONCLUSION_PROMOTION.json as watchdog-compatible draft objects for conclusion publication/review handoff
 - persist EVALUATION_REPORT.json / CURRENT_CONCLUSIONS.json as intake-local research-object outputs, so result review and conclusion-promotion state become queryable objects instead of only prose drafts
 - block direct execution until missing experiment decisions are clarified
@@ -208,7 +209,7 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
   -d '{"intake_id":"intake_20260616_000001_ab12cd"}'
 ```
 
-返回会包含 `intent / questions / contract / taskbox / preflight / evidence_retrieval`，以及在可用时附带 `execution_evaluation / followup_task_draft / ledger_note_draft / review_proposal_draft / current_conclusion_update / current_conclusion_promotion`。
+返回会包含 `intent / questions / contract / taskbox / preflight / evidence_retrieval`，以及在可用时附带 `execution_evaluation / followup_task_draft / ledger_note_draft / review_proposal_draft / experiment_result / current_conclusion_update / current_conclusion_promotion`。
 
 如果 workspace 自身有 `research/RESEARCH_PROGRAM.json`，这条 intake 路径还会把它快照成 intake-local `RESEARCH_PROGRAM.json`，并额外返回：
 
@@ -283,6 +284,12 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
   Agent Host 会把结果整理成一份尽量贴近 watchdog `experiment_index_update` 契约的草稿，
   包含 experiment_id / experiment_type / evidence_scope / primary_metrics / run_id
 
+- EXPERIMENT_RESULT
+  当 prepare 阶段已经判定“这次工作对应一个 experiment object”时，
+  Agent Host 还会生成一份独立的 experiment result contract，
+  包含 assessment_basis / validity / result / metrics / baseline_comparison / reproducibility
+  当前默认是 `structural_only` evaluator，用来明确区分“流程结构有效”与“真实指标已经证明假设成立”
+
 - EXPERIMENT_PROMOTION
   把 experiment_index_update 包成一个 promotion bundle，
   明确它现在是 not_required / not_ready / review_required / candidate_ready / human_review_required 中的哪一种，
@@ -332,7 +339,7 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
 
 当 promotion state 是 `review_required` 或 `human_review_required` 时，Agent Host 不会自动发布；它只会把一份 reviewer bundle 写到 `research/proposals/current_conclusions/`，把 project-level 发布动作继续留给人或 watchdog review 流程。
 
-如果客户端改用 `POST /codex/result-page` 分页读取长结果，第 1 页也会复用同一批 post-run metadata：`EXECUTION_EVALUATION`、`FOLLOWUP_TASK_DRAFT`、`LEDGER_NOTE_DRAFT`、`REVIEW_PROPOSAL_DRAFT`、`HYPOTHESIS_UPDATE`、`HYPOTHESIS_PROMOTION`、`EXPERIMENT_INDEX_UPDATE`、`EXPERIMENT_PROMOTION`、`CURRENT_CONCLUSION_UPDATE`、`CURRENT_CONCLUSION_PROMOTION`、`EVALUATION_REPORT`、`CURRENT_CONCLUSIONS` 会和第一页 safe result slice 一起返回，不会因为结果过长而丢掉下一步建议。
+如果客户端改用 `POST /codex/result-page` 分页读取长结果，第 1 页也会复用同一批 post-run metadata：`EXECUTION_EVALUATION`、`FOLLOWUP_TASK_DRAFT`、`LEDGER_NOTE_DRAFT`、`REVIEW_PROPOSAL_DRAFT`、`HYPOTHESIS_UPDATE`、`HYPOTHESIS_PROMOTION`、`EXPERIMENT_RESULT`、`EXPERIMENT_INDEX_UPDATE`、`EXPERIMENT_PROMOTION`、`CURRENT_CONCLUSION_UPDATE`、`CURRENT_CONCLUSION_PROMOTION`、`EVALUATION_REPORT`、`CURRENT_CONCLUSIONS` 会和第一页 safe result slice 一起返回，不会因为结果过长而丢掉下一步建议。
 
 如果客户端拿到了上一轮任务的 `task_id`，现在也可以直接这样发起下一轮 prepare：
 
@@ -370,7 +377,7 @@ curl -X POST http://127.0.0.1:8787/codex/prepare \
 
 它的目标不是替代原始 artifact，而是让操作者不用手工比对 `PRELIGHT / EVIDENCE_RETRIEVAL / REVIEW_PROPOSAL / CURRENT_CONCLUSION_PROMOTION` 才能知道现在到底卡在哪一层。
 
-如果上一轮任务已经产出了 `EXECUTION_EVALUATION / LEDGER_NOTE_DRAFT / REVIEW_PROPOSAL_DRAFT / HYPOTHESIS_UPDATE / HYPOTHESIS_PROMOTION / EXPERIMENT_INDEX_UPDATE / EXPERIMENT_PROMOTION / CURRENT_CONCLUSION_UPDATE / CURRENT_CONCLUSION_PROMOTION / EVALUATION_REPORT / CURRENT_CONCLUSIONS`，这条 follow-up prepare 响应也会把这些 post-run context 一并带回客户端，方便 UI 直接展示“这次 follow-up 是基于怎样的结果评估继续的”，以及“hypothesis / experiment / conclusion promotion state 现在处在哪一层”。
+如果上一轮任务已经产出了 `EXECUTION_EVALUATION / LEDGER_NOTE_DRAFT / REVIEW_PROPOSAL_DRAFT / HYPOTHESIS_UPDATE / HYPOTHESIS_PROMOTION / EXPERIMENT_RESULT / EXPERIMENT_INDEX_UPDATE / EXPERIMENT_PROMOTION / CURRENT_CONCLUSION_UPDATE / CURRENT_CONCLUSION_PROMOTION / EVALUATION_REPORT / CURRENT_CONCLUSIONS`，这条 follow-up prepare 响应也会把这些 post-run context 一并带回客户端，方便 UI 直接展示“这次 follow-up 是基于怎样的结果评估继续的”，以及“hypothesis / experiment / conclusion promotion state 现在处在哪一层”。
 
 确认当前 token 身份：
 

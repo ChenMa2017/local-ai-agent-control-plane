@@ -503,6 +503,95 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(seeded_intent["followup_task_id"], "task_20260616_120000_follow01")
             self.assertEqual(seeded_intent["followup_source_intake_id"], intake_id)
 
+    def test_codex_prepare_followup_context_includes_experiment_result_when_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "codex-bridge.js"
+            script.parent.mkdir()
+            script.write_text(
+                "console.log(JSON.stringify({task_id:'task_20260619_120000_followexp01', text:'Latency stayed within the bounded target during the CPU probe.', raw:false, redacted:true, truncated:false}));\n"
+            )
+            (root / "project_index").mkdir(parents=True)
+            self.write_watchdog_doc_search(
+                root,
+                {
+                    "query": "bounded cpu latency probe status",
+                    "decision": "safe_to_answer",
+                    "warnings": [],
+                    "read_plan": [
+                        {"path": "formal/latency_probe.md", "reason": "primary source"}
+                    ],
+                    "hits": [
+                        {"kind": "current_conclusion", "id": "latency_probe_status", "score": 6.0}
+                    ],
+                },
+            )
+            config = self.make_config(root)
+            principal = bridge.AuthPrincipal(user="chenma", role="admin")
+            prepared = bridge.handle_codex_prepare(
+                {
+                    "workspace": "demo",
+                    "prompt": "Run a bounded CPU experiment to compare baseline vs variant with same data and same budget; success criterion accuracy.",
+                    "source": "web",
+                },
+                config,
+                principal,
+            )
+
+            intake_id = prepared["intake_id"]
+            self.assertEqual(prepared["contract"]["objective"], "bounded_cpu_eval")
+            self.assertTrue(prepared["ready_to_run"])
+            self.write_codex_task(
+                root,
+                "task_20260619_120000_followexp01",
+                user="chenma",
+                status="done",
+                extra={
+                    "adapter_metadata": {
+                        "intake_id": intake_id,
+                        "prepared_objective": "bounded_cpu_eval",
+                        "evidence_retrieval_decision": "safe_to_answer",
+                    }
+                },
+            )
+            bridge.handle_codex_query(
+                {"task_id": "task_20260619_120000_followexp01"},
+                config,
+                "result",
+                principal,
+            )
+
+            response = bridge.handle_codex_prepare(
+                {
+                    "followup_task_id": "task_20260619_120000_followexp01",
+                    "source": "discord",
+                },
+                config,
+                principal,
+            )
+
+            self.assertEqual(response["status"], "prepared")
+            self.assertEqual(
+                response["followup_context"]["experiment_result"]["result"],
+                "inconclusive",
+            )
+            self.assertEqual(
+                response["followup_context"]["experiment_result"]["assessment_basis"],
+                "structural_only",
+            )
+            self.assertEqual(
+                response["followup_context"]["experiment_result"]["metrics"][0]["name"],
+                "safe_result_available",
+            )
+            self.assertEqual(
+                response["followup_context"]["evaluation_report"]["experiment_result"]["result"],
+                "inconclusive",
+            )
+            self.assertEqual(
+                response["followup_context"]["experiment_promotion"]["promotion_state"],
+                "candidate_ready",
+            )
+
     def test_codex_intake_returns_prepare_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
