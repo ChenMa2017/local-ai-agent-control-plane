@@ -4,6 +4,8 @@ import datetime as dt
 import json
 from typing import Any
 
+from operator_summary import remediation_payload
+
 
 def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
@@ -213,6 +215,7 @@ def build_followup_task_draft(
     next_action = str(evaluation.get("recommended_next_action") or "")
     requires_prepare = next_action in {"review_result", "inspect_logs", "prepare_followup", "human_review"}
     objective = str(contract.get("objective") or evaluation.get("objective") or "")
+    reason = str(evaluation.get("summary") or "").strip()
     title_map = {
         "review_result": "Review the result against prepared evidence",
         "inspect_logs": "Inspect failure logs and scope a bounded retry",
@@ -236,6 +239,9 @@ def build_followup_task_draft(
         "source_objective": objective,
         "source_execution_decision": evaluation.get("execution_decision"),
         "recommended_next_action": next_action,
+        "reason": reason or summary_map.get(next_action, "Review the latest task outcome and prepare the next safe bounded step."),
+        "remediation": remediation_payload(next_action),
+        "evidence_retrieval_decision": evaluation.get("evidence_retrieval_decision"),
         "title": title_map.get(next_action, "Prepare the next bounded step"),
         "summary": summary_map.get(next_action, "Review the latest task outcome and prepare the next safe bounded step."),
         "requires_prepare": requires_prepare,
@@ -259,6 +265,9 @@ def followup_task_draft_fingerprint(draft: dict[str, Any]) -> str:
         "intake_id": draft.get("intake_id"),
         "source_task_id": draft.get("source_task_id"),
         "recommended_next_action": draft.get("recommended_next_action"),
+        "reason": draft.get("reason"),
+        "remediation": draft.get("remediation"),
+        "evidence_retrieval_decision": draft.get("evidence_retrieval_decision"),
         "title": draft.get("title"),
         "summary": draft.get("summary"),
         "prompt": draft.get("prompt"),
@@ -278,11 +287,16 @@ def followup_task_draft_markdown(draft: dict[str, Any]) -> str:
         f"- workspace: {draft.get('workspace') or 'none'}",
         f"- source_objective: {draft.get('source_objective') or 'unknown'}",
         f"- recommended_next_action: {draft.get('recommended_next_action') or 'unknown'}",
+        f"- evidence_retrieval_decision: {draft.get('evidence_retrieval_decision') or 'none'}",
         f"- requires_prepare: {'true' if draft.get('requires_prepare') else 'false'}",
         "",
         "## Title",
         "",
         str(draft.get("title") or "Prepare the next bounded step."),
+        "",
+        "## Reason",
+        "",
+        str(draft.get("reason") or ""),
         "",
         "## Summary",
         "",
@@ -297,6 +311,15 @@ def followup_task_draft_markdown(draft: dict[str, Any]) -> str:
         str(draft.get("claim_boundary") or ""),
         "",
     ]
+    remediation = draft.get("remediation") if isinstance(draft.get("remediation"), dict) else {}
+    if remediation:
+        lines.extend([
+            "## Remediation",
+            "",
+            f"- category: {remediation.get('category') or 'other'}",
+            f"- subject: {remediation.get('subject') or 'task'}",
+            "",
+        ])
     provenance = draft.get("provenance") if isinstance(draft.get("provenance"), dict) else {}
     if provenance:
         lines.extend([

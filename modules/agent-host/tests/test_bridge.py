@@ -1438,6 +1438,12 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(evaluation["evidence_retrieval_decision"], "stale_conclusion")
             self.assertIn("bounded", evaluation["warnings"][0])
             self.assertEqual(followup["recommended_next_action"], "review_result")
+            self.assertIn("Task completed successfully", followup["reason"])
+            self.assertEqual(
+                followup["remediation"],
+                {"category": "result_review", "subject": "task_result"},
+            )
+            self.assertEqual(followup["evidence_retrieval_decision"], "stale_conclusion")
             self.assertTrue(followup["requires_prepare"])
             self.assertEqual(followup["reference_task_id"], "task_20260616_120000_eval01")
             self.assertIn("Review the safe result", followup["prompt"])
@@ -1692,6 +1698,10 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(evaluation["recommended_next_action"], "human_review")
             self.assertTrue(evaluation["write_audit"]["protected_path_violation"])
             self.assertEqual(followup["recommended_next_action"], "human_review")
+            self.assertEqual(
+                followup["remediation"],
+                {"category": "human_review", "subject": "task"},
+            )
             self.assertIn("human reviews the policy boundary", followup["claim_boundary"])
             self.assertIn("Write Summary", ledger_note["note_markdown"])
             self.assertTrue(review_proposal["requires_human_review"])

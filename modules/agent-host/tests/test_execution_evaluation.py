@@ -150,6 +150,15 @@ class ExecutionEvaluationTests(unittest.TestCase):
             )
             self.assertEqual(attachments["execution_evaluation"]["execution_decision"], "result_ready_for_review")
             self.assertEqual(attachments["followup_task_draft"]["recommended_next_action"], "review_result")
+            self.assertIn("Task completed successfully", attachments["followup_task_draft"]["reason"])
+            self.assertEqual(
+                attachments["followup_task_draft"]["remediation"],
+                {"category": "result_review", "subject": "task_result"},
+            )
+            self.assertEqual(
+                attachments["followup_task_draft"]["evidence_retrieval_decision"],
+                "stale_conclusion",
+            )
             self.assertEqual(attachments["ledger_note_draft"]["source_task_id"], "task_20260617_120000_eval")
             self.assertEqual(attachments["review_proposal_draft"]["review_scope"], "report_only")
             self.assertEqual(
@@ -1442,6 +1451,35 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(
             summary["next_safe_action"]["remediation"],
             {"category": "transition_review", "subject": "hypothesis"},
+        )
+
+    def test_build_post_run_operator_summary_sets_result_review_remediation(self):
+        summary = operator_summary.build_post_run_operator_summary(
+            {
+                "intake_id": "intake_operator_summary_followup",
+                "workspace": "demo",
+                "task_id": "task_20260619_151500_followup",
+                "task_status": "done",
+                "result_available": True,
+                "evidence_retrieval_decision": "safe_to_answer",
+            },
+            {
+                "recommended_next_action": "review_result",
+                "title": "Review the result against prepared evidence",
+                "summary": "Use /prepare to review the completed task against the original read plan before making a new claim.",
+            },
+            None,
+            None,
+            None,
+            None,
+            {"validity": {}},
+            None,
+        )
+
+        self.assertEqual(summary["next_safe_action"]["kind"], "review_result")
+        self.assertEqual(
+            summary["next_safe_action"]["remediation"],
+            {"category": "result_review", "subject": "task_result"},
         )
 
     def test_maybe_attach_execution_evaluation_writes_experiment_review_bundle_when_required(self):

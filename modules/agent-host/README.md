@@ -234,6 +234,8 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
 
 ```text
 - recommended_next_action
+- reason / remediation
+- evidence_retrieval_decision
 - title / summary
 - reference_task_id
 - prompt

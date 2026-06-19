@@ -25,6 +25,9 @@ def remediation_payload(kind: str) -> JsonObject:
     subject = "task"
     if normalized == "queue_run":
         category = "execution"
+    elif normalized == "review_result":
+        category = "result_review"
+        subject = "task_result"
     elif normalized in {"reply_to_questions", "clarification_required"}:
         category = "clarification"
     elif normalized in {"human_review", "human_review_required"}:
@@ -50,7 +53,7 @@ def remediation_payload(kind: str) -> JsonObject:
     elif normalized in {"review_bounded_conclusion", "bounded_claim_review"}:
         category = "bounded_claim_review"
         subject = "current_conclusion"
-    elif normalized == "execution_failed":
+    elif normalized in {"execution_failed", "inspect_logs"}:
         category = "investigation"
         subject = "execution"
     elif normalized == "experiment_decision_gate_required":

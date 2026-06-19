@@ -233,6 +233,10 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 self.assertEqual(page["text"], "safe result summary for e2e validation")
                 self.assertEqual(page["execution_evaluation"]["execution_decision"], "result_ready_for_review")
                 self.assertEqual(page["followup_task_draft"]["recommended_next_action"], "review_result")
+                self.assertEqual(
+                    page["followup_task_draft"]["remediation"],
+                    {"category": "result_review", "subject": "task_result"},
+                )
                 self.assertEqual(page["review_proposal_draft"]["review_scope"], "report_only")
                 self.assertEqual(page["followup_task_draft"]["provenance"]["artifact_role"], "followup_task_draft")
                 self.assertEqual(page["review_proposal_draft"]["provenance"]["generated_by"], "agent_host_post_run_artifacts")
@@ -257,6 +261,10 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 self.assertEqual(intake["intake_id"], intake_id)
                 self.assertEqual(intake["execution_evaluation"]["execution_decision"], "result_ready_for_review")
                 self.assertEqual(intake["followup_task_draft"]["source_task_id"], "task_20260618_120000_e2e01")
+                self.assertEqual(
+                    intake["followup_task_draft"]["remediation"],
+                    {"category": "result_review", "subject": "task_result"},
+                )
                 self.assertEqual(intake["ledger_note_draft"]["target_path_hint"], "research/LEDGER_NOTES.md")
                 self.assertEqual(intake["review_proposal_draft"]["review_scope"], "report_only")
                 self.assertEqual(intake["ledger_note_draft"]["provenance"]["artifact_role"], "ledger_note_draft")
