@@ -1369,6 +1369,10 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(summary["next_safe_action"]["kind"], "review_hypothesis_promotion")
         self.assertIn("runner_metrics_rejected", summary["next_safe_action"]["reason"])
         self.assertIn("runner_metrics_rejected", summary["blockers"][0]["reason"])
+        self.assertEqual(
+            summary["next_safe_action"]["remediation"],
+            {"category": "promotion_review", "subject": "hypothesis"},
+        )
 
     def test_build_post_run_operator_summary_uses_experiment_failure_criteria(self):
         summary = operator_summary.build_post_run_operator_summary(
@@ -1404,6 +1408,41 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(summary["next_safe_action"]["kind"], "review_experiment_promotion")
         self.assertIn("accuracy_gain_exceeds_guardrail", summary["next_safe_action"]["reason"])
         self.assertIn("accuracy_gain_exceeds_guardrail", summary["blockers"][0]["reason"])
+        self.assertEqual(
+            summary["next_safe_action"]["remediation"],
+            {"category": "promotion_review", "subject": "experiment"},
+        )
+
+    def test_build_post_run_operator_summary_sets_transition_review_remediation(self):
+        summary = operator_summary.build_post_run_operator_summary(
+            {
+                "intake_id": "intake_operator_summary_transition",
+                "workspace": "demo",
+                "task_id": "task_20260619_151000_transition",
+                "task_status": "done",
+                "result_available": True,
+                "evidence_retrieval_decision": "safe_to_answer",
+            },
+            None,
+            None,
+            {
+                "project_sync": {
+                    "status": "transition_review_required",
+                    "target_path": "research/proposals/hypotheses/hypothesis_latency_probe.json",
+                    "transition_validation": {"reason": "transition_not_allowed"},
+                },
+            },
+            None,
+            None,
+            {"validity": {}},
+            None,
+        )
+
+        self.assertEqual(summary["next_safe_action"]["kind"], "review_hypothesis_transition_bundle")
+        self.assertEqual(
+            summary["next_safe_action"]["remediation"],
+            {"category": "transition_review", "subject": "hypothesis"},
+        )
 
     def test_maybe_attach_execution_evaluation_writes_experiment_review_bundle_when_required(self):
         with tempfile.TemporaryDirectory() as tmp:

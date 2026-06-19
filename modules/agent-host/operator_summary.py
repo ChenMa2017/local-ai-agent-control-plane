@@ -19,6 +19,56 @@ def summary_timestamp(*candidates: Any) -> str:
     return utc_now().isoformat().replace("+00:00", "Z")
 
 
+def remediation_payload(kind: str) -> JsonObject:
+    normalized = str(kind or "").strip()
+    category = "other"
+    subject = "task"
+    if normalized == "queue_run":
+        category = "execution"
+    elif normalized in {"reply_to_questions", "clarification_required"}:
+        category = "clarification"
+    elif normalized in {"human_review", "human_review_required"}:
+        category = "human_review"
+    elif normalized in {"resolve_review_proposal", "review_proposal_required"}:
+        category = "proposal_review"
+        subject = "review_proposal"
+    elif normalized in {"review_hypothesis_transition_bundle", "hypothesis_transition_review"}:
+        category = "transition_review"
+        subject = "hypothesis"
+    elif normalized in {"review_experiment_transition_bundle", "experiment_transition_review"}:
+        category = "transition_review"
+        subject = "experiment"
+    elif normalized in {"review_hypothesis_bundle", "review_hypothesis_promotion", "hypothesis_promotion_gate"}:
+        category = "promotion_review"
+        subject = "hypothesis"
+    elif normalized in {"review_experiment_bundle", "review_experiment_promotion", "experiment_promotion_gate"}:
+        category = "promotion_review"
+        subject = "experiment"
+    elif normalized in {"review_current_conclusion_bundle", "current_conclusion_gate"}:
+        category = "promotion_review"
+        subject = "current_conclusion"
+    elif normalized in {"review_bounded_conclusion", "bounded_claim_review"}:
+        category = "bounded_claim_review"
+        subject = "current_conclusion"
+    elif normalized == "execution_failed":
+        category = "investigation"
+        subject = "execution"
+    elif normalized == "experiment_decision_gate_required":
+        category = "decision_gate"
+        subject = "experiment"
+    elif normalized == "evidence_retrieval_unavailable":
+        category = "evidence_retrieval"
+    elif normalized == "wait":
+        category = "wait"
+    elif normalized == "prepare_followup":
+        category = "followup"
+        subject = "task"
+    return {
+        "category": category,
+        "subject": subject,
+    }
+
+
 def action_payload(
     *,
     kind: str,
@@ -33,6 +83,7 @@ def action_payload(
         "reason": reason,
         "can_execute_automatically": can_execute_automatically,
         "target_path": target_path,
+        "remediation": remediation_payload(kind),
     }
 
 
@@ -48,6 +99,7 @@ def blocker_payload(
         "description": description,
         "reason": reason,
         "can_execute_automatically": can_execute_automatically,
+        "remediation": remediation_payload(kind),
     }
 
 
