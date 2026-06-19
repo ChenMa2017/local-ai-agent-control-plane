@@ -644,6 +644,15 @@ class ExecutionEvaluationTests(unittest.TestCase):
                         "target": {"operator": ">", "value": 0.0},
                     },
                 ],
+                "failure_criteria": [
+                    {
+                        "criterion_id": "FC-D1",
+                        "name": "accuracy_gain_exceeds_guardrail",
+                        "kind": "metric_guardrail",
+                        "metric_name": "accuracy_gain",
+                        "target": {"operator": ">", "value": 0.05},
+                    }
+                ],
             }
             (intake_root / "EXPERIMENT_SPEC.json").write_text(
                 json.dumps(
@@ -718,6 +727,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(experiment_result["metrics"][1]["name"], "accuracy_gain")
             self.assertEqual(experiment_result["metrics"][1]["value"], 0.031)
             self.assertEqual(experiment_result["success_criteria"][1]["status"], "pass")
+            self.assertEqual(experiment_result["failure_criteria"][0]["status"], "clear")
             self.assertTrue(experiment_result["runner_metrics_artifact"]["present"])
             self.assertTrue(experiment_result["runner_metrics_artifact"]["trusted"])
             self.assertFalse(experiment_result["limitations"])
@@ -820,6 +830,106 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(experiment_result["adjudication_status"], "accepted")
         self.assertTrue(experiment_result["promotion_eligible"])
         self.assertEqual(experiment_result["success_criteria"][0]["status"], "pass")
+
+    def test_build_experiment_result_blocks_promotion_when_metric_failure_criterion_triggers(self):
+        experiment_result = research_objects.build_experiment_result(
+            {
+                "task_status": "done",
+                "result_available": True,
+                "write_audit": {},
+                "task_id": "task_20260619_121250_failure_guardrail",
+                "intake_id": "intake_failure_guardrail",
+                "workspace": "demo",
+                "updated_at": "2026-06-19T12:12:50Z",
+            },
+            {
+                "required": True,
+                "experiment_id": "experiment_failure_guardrail",
+                "hypothesis_ids": ["hypothesis_failure_guardrail"],
+                "baseline_spec": {"required": True, "entities": ["baseline_v1"]},
+                "dataset_refs": ["eval://demo/validation"],
+                "random_seeds": [13],
+                "code_reference": {"commit": "deadbeef"},
+                "config_reference": {"path": "configs/failure_guardrail.yaml"},
+                "repeat_count": 3,
+                "metric_definitions": [
+                    {
+                        "metric_id": "M-01",
+                        "name": "safe_result_available",
+                        "kind": "binary",
+                        "source": "execution_safe_result_excerpt",
+                        "higher_is_better": True,
+                    },
+                    {
+                        "metric_id": "M-02",
+                        "name": "accuracy_gain",
+                        "kind": "delta",
+                        "source": "runner_metrics",
+                        "higher_is_better": True,
+                    },
+                ],
+                "success_criteria": [
+                    {
+                        "criterion_id": "SC-D1",
+                        "name": "accuracy_gain_positive",
+                        "kind": "metric",
+                        "metric_name": "accuracy_gain",
+                        "target": {"operator": ">", "value": 0.0},
+                    }
+                ],
+                "failure_criteria": [
+                    {
+                        "criterion_id": "FC-D1",
+                        "name": "accuracy_gain_exceeds_guardrail",
+                        "kind": "metric_guardrail",
+                        "metric_name": "accuracy_gain",
+                        "target": {"operator": ">", "value": 0.02},
+                    }
+                ],
+            },
+            {},
+            {},
+            runner_metrics={
+                "schema_version": "runner_metrics.v0.2",
+                "metrics": [
+                    {
+                        "metric_id": "M-02",
+                        "name": "accuracy_gain",
+                        "value": 0.031,
+                        "baseline_value": 0.0,
+                    }
+                ],
+            },
+            runner_metrics_status={
+                "present": True,
+                "trusted": True,
+            },
+        )
+
+        self.assertEqual(experiment_result["assessment_basis"], "runner_metrics")
+        self.assertEqual(experiment_result["provisional_result"], "supported")
+        self.assertEqual(experiment_result["result"], "inconclusive")
+        self.assertIsNone(experiment_result["final_result"])
+        self.assertEqual(experiment_result["adjudication_status"], "pending_review")
+        self.assertFalse(experiment_result["promotion_eligible"])
+        self.assertEqual(experiment_result["failure_criteria"][0]["status"], "triggered")
+        self.assertEqual(experiment_result["failure_criteria"][0]["triggered"], True)
+        self.assertIn("failure_criteria_triggered", experiment_result["limitations"])
+        self.assertEqual(
+            research_objects.experiment_promotion_state(
+                {
+                    "task_status": "done",
+                    "result_available": True,
+                },
+                {
+                    "required": True,
+                },
+                {},
+                {},
+                experiment_result,
+            ),
+            "review_required",
+        )
 
     def test_build_experiment_result_evaluates_failure_criteria_statuses(self):
         experiment_result = research_objects.build_experiment_result(

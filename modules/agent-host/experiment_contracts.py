@@ -390,20 +390,47 @@ def _merge_failure_criteria(
     task_status: str,
     result_available: bool,
     protected_path_violation: bool,
+    metrics: list[JsonObject],
 ) -> list[JsonObject]:
+    metric_index = {
+        _metric_key(item): item
+        for item in metrics
+        if isinstance(item, dict) and _metric_key(item)
+    }
     merged_criteria: list[JsonObject] = []
     for item in failure_criteria:
         if not isinstance(item, dict):
             continue
         merged = dict(item)
         name = str(merged.get("name") or "").strip()
+        normalized_status = _normalized_outcome_status(merged.get("status"))
         triggered: bool | None = None
-        if name == "task_not_terminal":
+        if normalized_status == "pass":
+            triggered = True
+        elif normalized_status == "fail":
+            triggered = False
+        elif name == "task_not_terminal":
             triggered = task_status not in TERMINAL_TASK_STATUSES
         elif name == "protected_path_violation":
             triggered = protected_path_violation
         elif name == "missing_safe_result_excerpt":
             triggered = not result_available
+        else:
+            metric_name = str(merged.get("metric_name") or "").strip().lower()
+            metric = metric_index.get(metric_name) if metric_name else None
+            if isinstance(metric, dict):
+                if isinstance(merged.get("target"), dict):
+                    evaluated = _evaluate_target(metric.get("value"), merged.get("target"))
+                    if evaluated is True:
+                        triggered = True
+                    elif evaluated is False:
+                        triggered = False
+                else:
+                    metric_status = _normalized_outcome_status(metric.get("status"))
+                    if metric_status == "pass":
+                        triggered = True
+                    elif metric_status == "fail":
+                        triggered = False
         merged["status"] = (
             "triggered"
             if triggered is True
@@ -671,6 +698,7 @@ def build_structural_experiment_result(
         task_status=task_status,
         result_available=result_available,
         protected_path_violation=protected_path_violation,
+        metrics=metrics,
     )
     unresolved_success_criteria = [
         str(item.get("name") or item.get("criterion_id") or "")
@@ -733,6 +761,13 @@ def build_structural_experiment_result(
             limitations.append("mixed_success_criteria")
     if conflicting_success_criteria:
         limitations.append("conflicting_success_criteria")
+    triggered_failure_criteria = [
+        str(item.get("name") or item.get("criterion_id") or "").strip()
+        for item in failure_criteria
+        if str(item.get("status") or "").strip() == "triggered"
+    ]
+    if triggered_failure_criteria:
+        limitations.append("failure_criteria_triggered")
     runner_metrics_rejection_reason = str(runner_metrics_metadata.get("rejection_reason") or "").strip()
     if runner_metrics_rejection_reason:
         limitations.append("runner_metrics_rejected")
@@ -741,6 +776,7 @@ def build_structural_experiment_result(
         validity == "valid"
         and not runner_metrics_rejection_reason
         and not conflicting_success_criteria
+        and not triggered_failure_criteria
     )
     adjudication_status = "accepted"
     if validity == "invalid":
