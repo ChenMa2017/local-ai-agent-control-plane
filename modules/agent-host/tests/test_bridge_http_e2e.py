@@ -656,6 +656,127 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 thread.join(timeout=5)
         bridge.STREAM_TOKENS.clear()
 
+    def test_http_e2e_bounded_cpu_eval_rejects_runner_metric_name_mismatch(self):
+        bridge.STREAM_TOKENS.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir(parents=True)
+            (workspace_root / "project_index").mkdir(parents=True)
+            codex_root = root / "codex-bridge"
+            self.write_watchdog_doc_search(
+                workspace_root,
+                {
+                    "query": "bounded cpu latency probe status",
+                    "decision": "safe_to_answer",
+                    "warnings": [],
+                    "read_plan": [{"path": "formal/latency_probe.md", "reason": "primary source"}],
+                    "hits": [{"kind": "current_conclusion", "id": "latency_probe_status", "score": 6.0}],
+                },
+            )
+            config = self.make_config(workspace_root, codex_root)
+
+            handler_class = type(
+                "ConfiguredWatchdogBridgeHandler",
+                (bridge.WatchdogBridgeHandler,),
+                {"config": config},
+            )
+            server = ThreadingHTTPServer((config.host, 0), handler_class)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://{config.host}:{server.server_port}"
+                self.wait_for_server(base_url)
+
+                prepared = self.request_json(
+                    base_url,
+                    "/codex/prepare",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "prompt": "Run a bounded CPU experiment to compare baseline vs variant with same data and same budget; success criterion accuracy.",
+                        "source": "web",
+                    },
+                )
+                self.assertTrue(prepared["ok"])
+                self.assertEqual(prepared["contract"]["objective"], "bounded_cpu_eval")
+                self.assertTrue(prepared["ready_to_run"])
+                intake_id = prepared["intake_id"]
+                experiment_spec = prepared["experiment_spec"]
+                task_id = "task_20260619_120300_e2ename"
+
+                self.write_codex_bridge_script(
+                    codex_root,
+                    task_id=task_id,
+                    result_text="The bounded CPU probe completed, but the runner metrics artifact declared the wrong metric name.",
+                    runner_metrics={
+                        "schema_version": "runner_metrics.v0.2",
+                        "task_id": task_id,
+                        "intake_id": intake_id,
+                        "experiment_id": experiment_spec["experiment_id"],
+                        "experiment_spec_digest": experiment_contracts.experiment_spec_digest(experiment_spec),
+                        "producer": {
+                            "kind": "experiment_runner",
+                            "id": "local-runner",
+                            "version": "0.2",
+                        },
+                        "generated_at": "2026-06-19T12:03:00Z",
+                        "metrics": [
+                            {
+                                "metric_id": "M-02",
+                                "name": "wrong_metric_name",
+                                "value": 0.031,
+                                "unit": "fraction",
+                                "sample_count": 3,
+                            }
+                        ],
+                    },
+                )
+
+                queued = self.request_json(
+                    base_url,
+                    "/codex/run",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "intake_id": intake_id,
+                    },
+                )
+                self.assertTrue(queued["ok"])
+                self.assertEqual(queued["task_id"], task_id)
+
+                page = self.request_json(
+                    base_url,
+                    f"/codex/result-page?task_id={task_id}&page=1&page_size=80",
+                )
+                self.assertTrue(page["ok"])
+                self.assertEqual(page["experiment_result"]["assessment_basis"], "structural_only")
+                self.assertFalse(page["experiment_result"]["runner_metrics_artifact"]["trusted"])
+                self.assertIn(
+                    "name does not match ExperimentSpec",
+                    page["experiment_result"]["runner_metrics_artifact"]["rejection_reason"],
+                )
+                self.assertIn("runner_metrics_rejected", page["experiment_result"]["limitations"])
+                self.assertEqual(page["experiment_promotion"]["promotion_state"], "review_required")
+                self.assertEqual(page["hypothesis_promotion"]["promotion_state"], "review_required")
+                self.assertIn(
+                    "runner_metrics_rejected",
+                    page["operator_summary"]["next_safe_action"]["reason"],
+                )
+
+                intake = self.request_json(base_url, f"/codex/intake?intake_id={intake_id}")
+                self.assertTrue(intake["ok"])
+                self.assertFalse(intake["experiment_result"]["runner_metrics_artifact"]["trusted"])
+                self.assertIn(
+                    "name does not match ExperimentSpec",
+                    intake["experiment_result"]["runner_metrics_artifact"]["rejection_reason"],
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        bridge.STREAM_TOKENS.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

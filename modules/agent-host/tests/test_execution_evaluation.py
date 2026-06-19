@@ -1347,6 +1347,59 @@ class ExecutionEvaluationTests(unittest.TestCase):
                 attachments["operator_summary"]["next_safe_action"]["reason"],
             )
 
+    def test_validate_runner_metrics_payload_rejects_metric_unit_mismatch(self):
+        experiment_spec = {
+            "experiment_id": "experiment_metric_probe_unit",
+            "objective": "bounded_cpu_eval",
+            "task_type": "bounded_execution",
+            "metric_definitions": [
+                {
+                    "metric_id": "M-02",
+                    "name": "accuracy_gain",
+                    "kind": "delta",
+                    "source": "runner_metrics",
+                    "higher_is_better": True,
+                    "unit": "fraction",
+                }
+            ],
+            "success_criteria": [],
+            "failure_criteria": [],
+        }
+        payload = {
+            "schema_version": "runner_metrics.v0.2",
+            "task_id": "task_20260619_160000_unitmismatch",
+            "intake_id": "intake_unitmismatch",
+            "experiment_id": "experiment_metric_probe_unit",
+            "experiment_spec_digest": experiment_contracts.experiment_spec_digest(experiment_spec),
+            "producer": {
+                "kind": "experiment_runner",
+                "id": "local-runner",
+                "version": "0.2",
+            },
+            "generated_at": "2026-06-19T16:00:00Z",
+            "metrics": [
+                {
+                    "metric_id": "M-02",
+                    "name": "accuracy_gain",
+                    "value": 0.031,
+                    "unit": "percentage",
+                    "sample_count": 3,
+                }
+            ],
+        }
+
+        validated, rejection_reason = experiment_contracts.validate_runner_metrics_payload(
+            payload,
+            evaluation={
+                "task_id": "task_20260619_160000_unitmismatch",
+                "intake_id": "intake_unitmismatch",
+            },
+            experiment_spec=experiment_spec,
+        )
+
+        self.assertEqual(validated, {})
+        self.assertIn("unit does not match ExperimentSpec", rejection_reason)
+
     def test_build_post_run_operator_summary_uses_hypothesis_status_blockers(self):
         summary = operator_summary.build_post_run_operator_summary(
             {

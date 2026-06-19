@@ -196,6 +196,14 @@ def validate_runner_metrics_payload(
         if canonical_key in seen_metric_keys:
             return {}, f"duplicate metric {canonical_key}"
         seen_metric_keys.add(canonical_key)
+        definition_metric_id = str(definition.get("metric_id") or "").strip()
+        provided_metric_id = str(item.get("metric_id") or "").strip()
+        if provided_metric_id and definition_metric_id and provided_metric_id != definition_metric_id:
+            return {}, f"metric {canonical_key} metric_id does not match ExperimentSpec"
+        definition_name = str(definition.get("name") or "").strip()
+        provided_name = str(item.get("name") or "").strip()
+        if provided_name and definition_name and provided_name != definition_name:
+            return {}, f"metric {canonical_key} name does not match ExperimentSpec"
         value = item.get("value")
         if not _is_finite_number(value):
             return {}, f"metric {canonical_key} has non-finite numeric value"
@@ -205,6 +213,9 @@ def validate_runner_metrics_payload(
         unit = item.get("unit")
         if unit is not None and not str(unit).strip():
             return {}, f"metric {canonical_key} has empty unit"
+        definition_unit = str(definition.get("unit") or "").strip()
+        if unit is not None and definition_unit and str(unit).strip() != definition_unit:
+            return {}, f"metric {canonical_key} unit does not match ExperimentSpec"
         baseline_value = item.get("baseline_value")
         if baseline_value is not None and not _is_finite_number(baseline_value):
             return {}, f"metric {canonical_key} has non-finite baseline_value"
