@@ -16,20 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from config_loader import (
-    load_auth_tokens as parse_auth_tokens_from_config,
-    load_config as parse_bridge_config_from_file,
-)
+from api_bridge_bindings import build_api_bridge_bindings
 from bridge_handler import (
     HandlerDependencies,
     build_http_route_dependencies,
     build_stream_loop_dependencies,
     build_watchdog_bridge_handler,
-)
-from auth_policy import (
-    authenticate_bearer as authenticate_bearer_principal,
-    reject_frontend_identity as reject_frontend_payload_identity,
-    validate_auth as validate_mattermost_auth,
 )
 from codex_execution_handlers import build_codex_execution_handlers
 from codex_task_runtime_bindings import build_codex_task_runtime_bindings
@@ -38,18 +30,6 @@ from intake_bridge_bindings import build_intake_bridge_bindings
 from watchdog_bridge_bindings import build_watchdog_bridge_bindings
 from execution_evaluation import (
     maybe_attach_execution_evaluation,
-)
-from request_contracts import (
-    api_error_payload as build_api_error_payload,
-    compact_adapter_metadata as compact_adapter_metadata_text,
-    compact_adapter_metadata_object as compact_adapter_metadata_mapping,
-    error_code_for as resolve_api_error_code,
-    mattermost_response as build_mattermost_response,
-    parse_adapter_metadata as parse_adapter_metadata_text,
-    parse_body as parse_request_body,
-    parse_run_receipt as parse_bridge_run_receipt,
-    safe_adapter_source as validate_adapter_source,
-    safe_idempotency_key as validate_idempotency_key,
 )
 from result_streaming import (
     cleanup_stream_tokens as cleanup_stream_token_records,
@@ -158,75 +138,32 @@ def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-def load_config(path: Path) -> BridgeConfig:
-    default_codex_bridge_root = Path(__file__).resolve().parents[1] / "codex-bridge"
-    return parse_bridge_config_from_file(
-        path,
-        default_codex_bridge_root=default_codex_bridge_root,
-        project_name_re=PROJECT_NAME_RE,
-        supported_modes=SUPPORTED_CODEX_MODES,
-        project_factory=Project,
-        bridge_config_factory=BridgeConfig,
-        auth_principal_factory=AuthPrincipal,
-        error_factory=lambda message, status: BridgeError(message, status),
-    )
-
-
-def load_auth_tokens(data: dict[str, Any]) -> dict[str, AuthPrincipal]:
-    return parse_auth_tokens_from_config(
-        data,
-        auth_principal_factory=AuthPrincipal,
-        error_factory=lambda message, status: BridgeError(message, status),
-    )
-
-
-def parse_body(content_type: str, raw: bytes) -> dict[str, str]:
-    return parse_request_body(
-        content_type,
-        raw,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def mattermost_response(text: str, response_type: str = "ephemeral") -> dict[str, str]:
-    return build_mattermost_response(
-        text,
-        max_response_chars=MAX_RESPONSE_CHARS,
-        response_type=response_type,
-    )
-
-
-def error_code_for(exc: BridgeError) -> str:
-    return resolve_api_error_code(exc)
-
-
-def api_error_payload(exc: BridgeError | Exception) -> dict[str, Any]:
-    return build_api_error_payload(exc)
-
-
-def validate_auth(payload: dict[str, str], config: BridgeConfig) -> None:
-    validate_mattermost_auth(
-        payload,
-        mattermost_tokens=config.mattermost_tokens,
-        allowed_users=config.allowed_users,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def authenticate_bearer(authorization: str, config: BridgeConfig) -> AuthPrincipal:
-    return authenticate_bearer_principal(
-        authorization,
-        auth_tokens=config.auth_tokens,
-        allowed_users=config.allowed_users,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def reject_frontend_identity(payload: dict[str, str]) -> None:
-    reject_frontend_payload_identity(
-        payload,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
+API_BRIDGE_BINDINGS = build_api_bridge_bindings(
+    default_codex_bridge_root=Path(__file__).resolve().parents[1] / "codex-bridge",
+    project_name_re=PROJECT_NAME_RE,
+    supported_modes=SUPPORTED_CODEX_MODES,
+    project_factory=Project,
+    bridge_config_factory=BridgeConfig,
+    auth_principal_factory=AuthPrincipal,
+    max_response_chars=MAX_RESPONSE_CHARS,
+    config_error_factory=lambda message, status: BridgeError(message, status),
+    error_factory=lambda message, status, code: BridgeError(message, status, code),
+)
+load_config = API_BRIDGE_BINDINGS.load_config
+load_auth_tokens = API_BRIDGE_BINDINGS.load_auth_tokens
+parse_body = API_BRIDGE_BINDINGS.parse_body
+mattermost_response = API_BRIDGE_BINDINGS.mattermost_response
+error_code_for = API_BRIDGE_BINDINGS.error_code_for
+api_error_payload = API_BRIDGE_BINDINGS.api_error_payload
+validate_auth = API_BRIDGE_BINDINGS.validate_auth
+authenticate_bearer = API_BRIDGE_BINDINGS.authenticate_bearer
+reject_frontend_identity = API_BRIDGE_BINDINGS.reject_frontend_identity
+safe_adapter_source = API_BRIDGE_BINDINGS.safe_adapter_source
+safe_idempotency_key = API_BRIDGE_BINDINGS.safe_idempotency_key
+parse_adapter_metadata = API_BRIDGE_BINDINGS.parse_adapter_metadata
+compact_adapter_metadata = API_BRIDGE_BINDINGS.compact_adapter_metadata
+compact_adapter_metadata_object = API_BRIDGE_BINDINGS.compact_adapter_metadata_object
+parse_run_receipt = API_BRIDGE_BINDINGS.parse_run_receipt
 
 
 WATCHDOG_BRIDGE_BINDINGS = build_watchdog_bridge_bindings(
@@ -305,41 +242,6 @@ handle_health_summary = HEALTH_BRIDGE_BINDINGS.handle_health_summary
 safe_codex_status_text = HEALTH_BRIDGE_BINDINGS.safe_codex_status_text
 
 
-def safe_adapter_source(value: str) -> str:
-    return validate_adapter_source(
-        value,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def safe_idempotency_key(value: str) -> str:
-    return validate_idempotency_key(
-        value,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def parse_adapter_metadata(value: str) -> dict[str, Any]:
-    return parse_adapter_metadata_text(
-        value,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def compact_adapter_metadata(value: str) -> str:
-    return compact_adapter_metadata_text(
-        value,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
-def compact_adapter_metadata_object(data: dict[str, Any]) -> str:
-    return compact_adapter_metadata_mapping(
-        data,
-        error_factory=lambda message, status, code: BridgeError(message, status, code),
-    )
-
-
 INTAKE_BRIDGE_BINDINGS = build_intake_bridge_bindings(
     utc_now=utc_now,
     reject_frontend_identity=reject_frontend_identity,
@@ -379,10 +281,6 @@ make_policy_preflight = INTAKE_BRIDGE_BINDINGS.make_policy_preflight
 intake_summary_markdown = INTAKE_BRIDGE_BINDINGS.intake_summary_markdown
 persist_intake_artifacts = INTAKE_BRIDGE_BINDINGS.persist_intake_artifacts
 handle_codex_prepare = INTAKE_BRIDGE_BINDINGS.handle_codex_prepare
-
-
-def parse_run_receipt(output: str) -> dict[str, Any]:
-    return parse_bridge_run_receipt(output)
 
 
 def attach_execution_evaluation(
