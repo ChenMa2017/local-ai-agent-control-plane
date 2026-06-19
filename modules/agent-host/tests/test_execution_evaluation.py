@@ -1241,6 +1241,52 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(transition["current_status"], "supported")
         self.assertEqual(transition["proposed_status"], "refuted")
 
+    def test_experiment_promotion_state_requires_review_when_result_is_not_promotion_eligible(self):
+        promotion_state = research_objects.experiment_promotion_state(
+            {
+                "task_status": "done",
+                "result_available": True,
+            },
+            {
+                "required": True,
+            },
+            {},
+            {},
+            {
+                "promotion_eligible": False,
+            },
+        )
+
+        self.assertEqual(promotion_state, "review_required")
+
+    def test_hypothesis_promotion_state_returns_not_required_for_analysis_only_registry(self):
+        promotion_state = research_objects.hypothesis_promotion_state(
+            {
+                "task_status": "done",
+                "result_available": True,
+            },
+            {
+                "registry_status": "analysis_only",
+                "hypotheses": [{"hypothesis_id": "hypothesis_latency_probe"}],
+            },
+            {},
+        )
+
+        self.assertEqual(promotion_state, "not_required")
+
+    def test_current_conclusions_promotion_state_returns_bounded_only_for_auxiliary_evidence(self):
+        promotion_state = research_objects.current_conclusions_promotion_state(
+            {
+                "task_status": "done",
+                "result_available": True,
+                "evidence_retrieval_decision": "stale_conclusion",
+            },
+            {},
+            {},
+        )
+
+        self.assertEqual(promotion_state, "bounded_only")
+
     def test_maybe_attach_execution_evaluation_writes_review_bundle_when_publication_requires_review(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
