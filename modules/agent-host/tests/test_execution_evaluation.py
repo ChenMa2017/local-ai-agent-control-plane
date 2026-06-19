@@ -484,12 +484,21 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(attachments["evaluation_report"]["experiment_promotion_state"], "candidate_ready")
             self.assertEqual(attachments["evaluation_report"]["validity"]["status"], "valid_with_limitations")
             self.assertIn("success_criteria_not_resolved", attachments["evaluation_report"]["validity"]["limitations"])
+            self.assertFalse(attachments["evaluation_report"]["machine_checks"]["experiment_failure_criteria_triggered"])
+            self.assertEqual(
+                attachments["evaluation_report"]["machine_checks"]["experiment_failure_criteria_triggered_names"],
+                [],
+            )
             self.assertEqual(attachments["evaluation_report"]["experiment_result"]["result"], "inconclusive")
             self.assertEqual(attachments["evaluation_report"]["hypothesis_assessment"]["assessment"], "active_candidate")
             self.assertEqual(attachments["evaluation_report"]["hypothesis_assessment"]["evaluation_result"], "inconclusive")
             self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["assessment"], "candidate_recorded")
             self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["result"], "inconclusive")
             self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["validity"], "valid")
+            self.assertEqual(
+                attachments["evaluation_report"]["experiment_assessment"]["failure_criteria_summary"]["triggered"],
+                0,
+            )
             self.assertEqual(attachments["evaluation_report"]["conclusion_assessment"]["assessment"], "candidate_ready")
             self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
             self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "review_hypothesis_transition_bundle")
@@ -858,6 +867,63 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(
             [item["triggered"] for item in experiment_result["failure_criteria"]],
             [True, True, True],
+        )
+
+    def test_build_evaluation_report_surfaces_triggered_failure_criteria(self):
+        report = research_objects.build_evaluation_report(
+            {
+                "intake_id": "intake_failurecriteria_report",
+                "task_id": "task_20260619_122500_failurecriteria_report",
+                "workspace": "demo",
+                "task_status": "running",
+                "result_available": False,
+                "write_audit": {"protected_path_violation": True},
+                "evidence_retrieval_decision": "safe_to_answer",
+                "summary": "bounded run stalled before producing a safe excerpt",
+            },
+            {
+                "objective": "bounded_cpu_eval",
+            },
+            {
+                "read_plan": [{"path": "formal/failure_probe.md", "reason": "primary source"}],
+            },
+            {},
+            {
+                "hypotheses": [{"hypothesis_id": "hypothesis_failure_probe"}],
+            },
+            {
+                "required": True,
+                "experiment_id": "experiment_failure_probe",
+                "hypothesis_ids": ["hypothesis_failure_probe"],
+            },
+            {
+                "assessment_basis": "structural_only",
+                "validity": "invalid",
+                "result": "invalid",
+                "promotion_eligible": False,
+                "runner_metrics_artifact": {"present": False, "trusted": False},
+                "failure_criteria": [
+                    {"name": "task_not_terminal", "status": "triggered", "triggered": True},
+                    {"name": "protected_path_violation", "status": "triggered", "triggered": True},
+                    {"name": "missing_safe_result_excerpt", "status": "triggered", "triggered": True},
+                ],
+            },
+            {},
+        )
+
+        self.assertTrue(report["machine_checks"]["experiment_failure_criteria_triggered"])
+        self.assertEqual(
+            report["machine_checks"]["experiment_failure_criteria_triggered_names"],
+            ["task_not_terminal", "protected_path_violation", "missing_safe_result_excerpt"],
+        )
+        self.assertIn("failure_criteria_triggered", report["validity"]["limitations"])
+        self.assertEqual(
+            report["experiment_assessment"]["failure_criteria_summary"],
+            {"total": 3, "triggered": 3, "clear": 0, "not_evaluated": 0},
+        )
+        self.assertEqual(
+            report["experiment_assessment"]["failure_criteria_triggered"],
+            ["task_not_terminal", "protected_path_violation", "missing_safe_result_excerpt"],
         )
 
     def test_build_experiment_result_requires_review_for_conflicting_success_criteria(self):

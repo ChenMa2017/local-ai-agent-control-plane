@@ -17,6 +17,33 @@ def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def _experiment_failure_criteria(experiment_result: JsonObject | None) -> list[JsonObject]:
+    if not isinstance(experiment_result, dict):
+        return []
+    failure_criteria = experiment_result.get("failure_criteria")
+    if not isinstance(failure_criteria, list):
+        return []
+    return [item for item in failure_criteria if isinstance(item, dict)]
+
+
+def _failure_criteria_summary(failure_criteria: list[JsonObject]) -> JsonObject:
+    summary = {
+        "total": len(failure_criteria),
+        "triggered": 0,
+        "clear": 0,
+        "not_evaluated": 0,
+    }
+    for item in failure_criteria:
+        status = str(item.get("status") or "").strip()
+        if status == "triggered":
+            summary["triggered"] += 1
+        elif status == "clear":
+            summary["clear"] += 1
+        else:
+            summary["not_evaluated"] += 1
+    return summary
+
+
 def build_research_machine_checks(
     evaluation: JsonObject,
     evidence_retrieval: JsonObject,
@@ -38,6 +65,12 @@ def build_research_machine_checks(
         if str(item or "").strip()
     ]
     success_criteria = experiment_spec.get("success_criteria") if isinstance(experiment_spec.get("success_criteria"), list) else []
+    failure_criteria = _experiment_failure_criteria(experiment_result)
+    triggered_failure_criteria = [
+        str(item.get("name") or item.get("criterion_id") or "").strip()
+        for item in failure_criteria
+        if str(item.get("status") or "").strip() == "triggered"
+    ]
     experiment_success_criteria_resolved = True
     if bool(experiment_spec.get("required")):
         experiment_success_criteria_resolved = not any(
@@ -76,6 +109,9 @@ def build_research_machine_checks(
             if isinstance(experiment_result, dict)
             else False
         ),
+        "experiment_failure_criteria_present": bool(failure_criteria),
+        "experiment_failure_criteria_triggered": bool(triggered_failure_criteria),
+        "experiment_failure_criteria_triggered_names": triggered_failure_criteria,
         "experiment_success_criteria_resolved": experiment_success_criteria_resolved,
         "experiment_has_hypothesis_binding": (not bool(experiment_spec.get("required"))) or bool(experiment_hypothesis_ids),
         "generated_supporting_experiments_present": (not bool(experiment_spec.get("required"))) or bool(generated_supporting_experiments),
@@ -114,6 +150,8 @@ def build_research_validity(
         limitations.append("runner_metrics_rejected")
     if machine_checks.get("experiment_required") and not machine_checks.get("experiment_success_criteria_resolved"):
         limitations.append("success_criteria_not_resolved")
+    if machine_checks.get("experiment_failure_criteria_triggered"):
+        limitations.append("failure_criteria_triggered")
     if hypothesis_promotion_state_value == "review_required":
         limitations.append("hypothesis_review_required")
     if experiment_promotion_state_value == "review_required":
@@ -189,6 +227,12 @@ def build_experiment_assessment(
         "candidate_ready": "candidate_recorded",
         "human_review_required": "human_review_required",
     }.get(experiment_promotion_state_value, "not_applicable")
+    failure_criteria = _experiment_failure_criteria(experiment_result)
+    triggered_failure_criteria = [
+        str(item.get("name") or item.get("criterion_id") or "").strip()
+        for item in failure_criteria
+        if str(item.get("status") or "").strip() == "triggered"
+    ]
     return {
         "experiment_id": experiment_id,
         "assessment": assessment,
@@ -212,6 +256,8 @@ def build_experiment_assessment(
             if isinstance(experiment_index_update, dict)
             else None
         ),
+        "failure_criteria_triggered": triggered_failure_criteria,
+        "failure_criteria_summary": _failure_criteria_summary(failure_criteria),
     }
 
 
