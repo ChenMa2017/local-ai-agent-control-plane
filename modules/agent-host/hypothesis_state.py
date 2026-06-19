@@ -16,6 +16,13 @@ KNOWN_HYPOTHESIS_STATUSES = {
     "archived",
 }
 
+HYPOTHESIS_FINAL_STATUSES = {
+    "supported",
+    "refuted",
+    "inconclusive",
+    "invalid",
+}
+
 HYPOTHESIS_ALLOWED_TRANSITIONS = {
     # New hypotheses must enter the registry as open candidates first; final-like
     # states require either an existing testing record or a review bundle.
@@ -32,6 +39,47 @@ HYPOTHESIS_ALLOWED_TRANSITIONS = {
     "superseded": {"superseded", "archived"},
     "archived": {"archived"},
 }
+
+
+def _historical_import_transition_validation(update: JsonObject, proposed_status: str) -> JsonObject | None:
+    if proposed_status not in HYPOTHESIS_FINAL_STATUSES:
+        return None
+    source = update.get("source") if isinstance(update.get("source"), dict) else {}
+    source_origin = str(source.get("origin") or "").strip()
+    import_review_id = str(update.get("import_review_id") or "").strip()
+    imported_from_history = bool(update.get("imported_from_history"))
+    historical_import_attempt = (
+        imported_from_history
+        or bool(import_review_id)
+        or source_origin == "historical_import"
+    )
+    if not historical_import_attempt:
+        return None
+    supporting_evidence = update.get("supporting_evidence")
+    missing_requirements: list[str] = []
+    if not imported_from_history:
+        missing_requirements.append("imported_from_history")
+    if not import_review_id:
+        missing_requirements.append("import_review_id")
+    if source_origin != "historical_import":
+        missing_requirements.append("source.origin=historical_import")
+    if not isinstance(supporting_evidence, list) or not supporting_evidence:
+        missing_requirements.append("supporting_evidence")
+    if missing_requirements:
+        return {
+            "status": "review_required",
+            "reason": "historical_import_metadata_required",
+            "current_status": None,
+            "proposed_status": proposed_status,
+            "missing_requirements": missing_requirements,
+        }
+    return {
+        "status": "valid",
+        "reason": "historical_import_ok",
+        "current_status": None,
+        "proposed_status": proposed_status,
+        "allowed_next_statuses": [proposed_status],
+    }
 
 
 def validate_status_transition(
@@ -97,16 +145,22 @@ def validate_hypothesis_registry_transition(
     existing_record: JsonObject | None,
     update: JsonObject,
 ) -> JsonObject:
+    existing_record_present = isinstance(existing_record, dict)
+    proposed_status = str(update.get("status") or "").strip()
+    if not existing_record_present:
+        historical_import_validation = _historical_import_transition_validation(update, proposed_status)
+        if historical_import_validation is not None:
+            return historical_import_validation
     return validate_status_transition(
         current_status=(
             existing_record.get("status")
-            if isinstance(existing_record, dict)
+            if existing_record_present
             else None
         ),
-        proposed_status=str(update.get("status") or ""),
+        proposed_status=proposed_status,
         allowed_transitions=HYPOTHESIS_ALLOWED_TRANSITIONS,
         known_statuses=KNOWN_HYPOTHESIS_STATUSES,
-        existing_record_present=isinstance(existing_record, dict),
+        existing_record_present=existing_record_present,
     )
 
 

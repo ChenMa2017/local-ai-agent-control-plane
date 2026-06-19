@@ -660,6 +660,8 @@ def build_hypothesis_update(
             if isinstance(experiment_result, dict)
             else None
         ),
+        "imported_from_history": bool(first.get("imported_from_history")),
+        "import_review_id": str(first.get("import_review_id") or "").strip() or None,
         "status": hypothesis_status,
         "supersedes": list(first.get("supersedes") or []) if isinstance(first.get("supersedes"), list) else [],
         "superseded_by": first.get("superseded_by"),
@@ -987,4 +989,3 @@ def build_current_conclusion_promotion(
         "notes": notes,
         "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
     }
-

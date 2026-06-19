@@ -1224,6 +1224,44 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertIsNone(transition["current_status"])
         self.assertEqual(transition["proposed_status"], "inconclusive")
 
+    def test_validate_hypothesis_registry_transition_allows_new_supported_historical_import(self):
+        transition = research_objects.validate_hypothesis_registry_transition(
+            None,
+            {
+                "hypothesis_id": "hypothesis_latency_probe",
+                "status": "supported",
+                "imported_from_history": True,
+                "import_review_id": "review_20260619_001",
+                "source": {"origin": "historical_import"},
+                "supporting_evidence": [{"kind": "document", "path": "research/history/latency_probe.md"}],
+            },
+        )
+
+        self.assertEqual(transition["status"], "valid")
+        self.assertEqual(transition["reason"], "historical_import_ok")
+        self.assertIsNone(transition["current_status"])
+        self.assertEqual(transition["proposed_status"], "supported")
+
+    def test_validate_hypothesis_registry_transition_requires_complete_historical_import_metadata(self):
+        transition = research_objects.validate_hypothesis_registry_transition(
+            None,
+            {
+                "hypothesis_id": "hypothesis_latency_probe",
+                "status": "supported",
+                "imported_from_history": True,
+                "source": {"origin": "historical_import"},
+            },
+        )
+
+        self.assertEqual(transition["status"], "review_required")
+        self.assertEqual(transition["reason"], "historical_import_metadata_required")
+        self.assertEqual(
+            transition["missing_requirements"],
+            ["import_review_id", "supporting_evidence"],
+        )
+        self.assertIsNone(transition["current_status"])
+        self.assertEqual(transition["proposed_status"], "supported")
+
     def test_validate_hypothesis_registry_transition_requires_testing_before_supported_to_refuted(self):
         transition = research_objects.validate_hypothesis_registry_transition(
             {
@@ -1240,6 +1278,49 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(transition["reason"], "transition_not_allowed")
         self.assertEqual(transition["current_status"], "supported")
         self.assertEqual(transition["proposed_status"], "refuted")
+
+    def test_sync_project_hypothesis_registry_applies_new_supported_historical_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sync = research_objects.sync_project_hypothesis_registry(
+                root,
+                {
+                    "source_task_id": "task_20260619_120000_import",
+                    "promotion_state": "candidate_ready",
+                    "updated_at": "2026-06-19T12:00:00Z",
+                    "hypothesis_update": {
+                        "hypothesis_id": "hypothesis_latency_probe",
+                        "program_id": "demo-program",
+                        "claim": "Latency can be reduced with a bounded cache strategy.",
+                        "mechanism": "Historical measurements showed fewer blocking lookups.",
+                        "prediction": [],
+                        "falsification_criteria": [],
+                        "required_experiments": [],
+                        "scope": {},
+                        "supporting_evidence": [
+                            {"kind": "document", "path": "research/history/latency_probe.md"}
+                        ],
+                        "contradicting_evidence": [],
+                        "confidence": {"value": 0.7},
+                        "source": {"origin": "historical_import"},
+                        "imported_from_history": True,
+                        "import_review_id": "review_20260619_001",
+                        "status": "supported",
+                    },
+                },
+            )
+
+            self.assertEqual(sync["status"], "applied")
+            self.assertEqual(sync["transition_validation"]["reason"], "historical_import_ok")
+            records = [
+                json.loads(line)
+                for line in (root / "research" / "HYPOTHESIS_REGISTRY.jsonl").read_text().strip().splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(len(records), 1)
+            self.assertTrue(records[0]["imported_from_history"])
+            self.assertEqual(records[0]["import_review_id"], "review_20260619_001")
+            self.assertEqual(records[0]["status"], "supported")
 
     def test_experiment_promotion_state_requires_review_when_result_is_not_promotion_eligible(self):
         promotion_state = research_objects.experiment_promotion_state(

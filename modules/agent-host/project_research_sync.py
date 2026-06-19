@@ -381,6 +381,8 @@ def normalize_hypothesis_record(update: JsonObject) -> JsonObject:
         "evaluation_result": update.get("evaluation_result"),
         "evaluation_validity": update.get("evaluation_validity"),
         "assessment_basis": update.get("assessment_basis"),
+        "imported_from_history": bool(update.get("imported_from_history")),
+        "import_review_id": str(update.get("import_review_id") or "").strip() or None,
         "status": str(update.get("status") or "").strip(),
         "supersedes": list(update.get("supersedes") or []),
         "superseded_by": update.get("superseded_by"),
