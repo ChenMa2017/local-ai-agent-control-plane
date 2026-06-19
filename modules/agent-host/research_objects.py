@@ -266,15 +266,21 @@ def build_experiment_result(
     evaluation: JsonObject,
     experiment_spec: JsonObject,
     review_proposal_draft: JsonObject,
+    research_program: JsonObject | None = None,
     runner_metrics: JsonObject | None = None,
+    runner_metrics_status: JsonObject | None = None,
 ) -> JsonObject | None:
     if not bool(experiment_spec.get("required")):
         return None
     return build_structural_experiment_result(
         evaluation=evaluation,
         experiment_spec=experiment_spec,
-        review_required=bool(review_proposal_draft.get("requires_human_review")),
+        review_required=bool(
+            review_proposal_draft.get("requires_human_review")
+            or bool((research_program or {}).get("publish_only_after_review"))
+        ),
         runner_metrics=runner_metrics,
+        runner_metrics_status=runner_metrics_status,
     )
 
 
@@ -294,6 +300,7 @@ def experiment_promotion_state(
     experiment_spec: JsonObject,
     research_program: JsonObject,
     review_proposal_draft: JsonObject,
+    experiment_result: JsonObject | None = None,
 ) -> str:
     if not bool(experiment_spec.get("required")):
         return "not_required"
@@ -302,6 +309,8 @@ def experiment_promotion_state(
         return "human_review_required"
     if not evaluation.get("result_available") or str(evaluation.get("task_status") or "") != "done":
         return "not_ready"
+    if isinstance(experiment_result, dict) and experiment_result and not bool(experiment_result.get("promotion_eligible")):
+        return "review_required"
     if bool(research_program.get("publish_only_after_review")) or review_proposal_draft:
         return "review_required"
     return "candidate_ready"
@@ -322,6 +331,7 @@ def build_experiment_index_update(
         experiment_spec,
         research_program,
         review_proposal_draft,
+        experiment_result,
     )
     if promotion_state == "not_required" or not evaluation.get("result_available"):
         return None
@@ -438,6 +448,7 @@ def build_experiment_promotion(
         experiment_spec,
         research_program,
         review_proposal_draft,
+        experiment_result,
     )
     experiment_index_update = build_experiment_index_update(
         evaluation,
@@ -502,6 +513,8 @@ def hypothesis_promotion_state(
     evaluation: JsonObject,
     hypothesis_registry: JsonObject,
     review_proposal_draft: JsonObject,
+    experiment_spec: JsonObject | None = None,
+    experiment_result: JsonObject | None = None,
 ) -> str:
     hypotheses = hypothesis_registry.get("hypotheses") if isinstance(hypothesis_registry.get("hypotheses"), list) else []
     if not hypotheses:
@@ -516,6 +529,9 @@ def hypothesis_promotion_state(
         return "review_required"
     if str(evaluation.get("task_status") or "") != "done":
         return "not_ready"
+    if bool((experiment_spec or {}).get("required")) and isinstance(experiment_result, dict) and experiment_result:
+        if not bool(experiment_result.get("promotion_eligible")):
+            return "review_required"
     return "candidate_ready"
 
 
@@ -540,6 +556,15 @@ def derive_hypothesis_record_status(
     )
     if evaluation_validity == "invalid" or evaluation_result == "invalid":
         return "invalid"
+    if isinstance(experiment_result, dict) and experiment_result and not bool(experiment_result.get("promotion_eligible")):
+        return "testing"
+    final_result = (
+        str((experiment_result or {}).get("final_result") or "").strip()
+        if isinstance(experiment_result, dict)
+        else ""
+    )
+    if final_result in {"supported", "refuted", "inconclusive"}:
+        return final_result
     if evaluation_result in {"supported", "refuted", "inconclusive"}:
         return evaluation_result
     return "testing"
@@ -561,6 +586,8 @@ def build_hypothesis_update(
         evaluation,
         hypothesis_registry,
         review_proposal_draft,
+        experiment_spec,
+        experiment_result,
     )
     hypotheses = hypothesis_registry.get("hypotheses") if isinstance(hypothesis_registry.get("hypotheses"), list) else []
     if promotion_state == "not_required" or not hypotheses:
@@ -706,6 +733,8 @@ def build_hypothesis_promotion(
         evaluation,
         hypothesis_registry,
         review_proposal_draft,
+        experiment_spec,
+        experiment_result,
     )
     hypothesis_update = build_hypothesis_update(
         evaluation,
@@ -801,6 +830,21 @@ def build_research_machine_checks(
             if isinstance(experiment_result, dict)
             else False
         ),
+        "experiment_promotion_eligible": (
+            bool((experiment_result or {}).get("promotion_eligible"))
+            if isinstance(experiment_result, dict)
+            else False
+        ),
+        "runner_metrics_artifact_present": (
+            bool(((experiment_result or {}).get("runner_metrics_artifact") or {}).get("present"))
+            if isinstance(experiment_result, dict)
+            else False
+        ),
+        "runner_metrics_artifact_trusted": (
+            bool(((experiment_result or {}).get("runner_metrics_artifact") or {}).get("trusted"))
+            if isinstance(experiment_result, dict)
+            else False
+        ),
         "experiment_success_criteria_resolved": experiment_success_criteria_resolved,
         "experiment_has_hypothesis_binding": (not bool(experiment_spec.get("required"))) or bool(experiment_hypothesis_ids),
         "generated_supporting_experiments_present": (not bool(experiment_spec.get("required"))) or bool(generated_supporting_experiments),
@@ -835,6 +879,8 @@ def build_research_validity(
         limitations.append("read_plan_missing")
     if not machine_checks.get("evidence_safe_to_answer"):
         limitations.append("safe_to_answer_not_confirmed")
+    if machine_checks.get("runner_metrics_artifact_present") and not machine_checks.get("runner_metrics_artifact_trusted"):
+        limitations.append("runner_metrics_rejected")
     if machine_checks.get("experiment_required") and not machine_checks.get("experiment_success_criteria_resolved"):
         limitations.append("success_criteria_not_resolved")
     if hypothesis_promotion_state_value == "review_required":
@@ -1127,6 +1173,8 @@ def build_evaluation_report(
             evaluation,
             hypothesis_registry,
             review_proposal_draft,
+            experiment_spec,
+            experiment_result,
         )
     experiment_promotion_state_value = str((experiment_promotion or {}).get("promotion_state") or "")
     if not experiment_promotion_state_value:
@@ -1135,6 +1183,7 @@ def build_evaluation_report(
             experiment_spec,
             research_program,
             review_proposal_draft,
+            experiment_result,
         )
     experiment_index_update = (
         experiment_promotion.get("experiment_index_update")
@@ -2058,12 +2107,17 @@ def experiment_result_fingerprint(result: JsonObject) -> str:
         "hypothesis_ids": result.get("hypothesis_ids"),
         "assessment_basis": result.get("assessment_basis"),
         "validity": result.get("validity"),
+        "provisional_result": result.get("provisional_result"),
         "result": result.get("result"),
+        "final_result": result.get("final_result"),
+        "adjudication_status": result.get("adjudication_status"),
+        "promotion_eligible": result.get("promotion_eligible"),
         "evidence_strength": result.get("evidence_strength"),
         "metrics": result.get("metrics"),
         "baseline_comparison": result.get("baseline_comparison"),
         "success_criteria": result.get("success_criteria"),
         "limitations": result.get("limitations"),
+        "runner_metrics_artifact": result.get("runner_metrics_artifact"),
         "reproducibility": result.get("reproducibility"),
     }
     return json.dumps(stable, ensure_ascii=False, sort_keys=True)

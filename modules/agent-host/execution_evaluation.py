@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from experiment_contracts import validate_runner_metrics_payload
 from post_run_artifacts import (
     build_followup_task_draft,
     build_ledger_note_draft,
@@ -51,6 +52,7 @@ from research_objects import (
 )
 
 JsonObject = dict[str, Any]
+MAX_RUNNER_METRICS_BYTES = 256 * 1024
 
 
 @dataclass(frozen=True)
@@ -306,15 +308,52 @@ def persist_experiment_result(
     return experiment_result
 
 
-def load_runner_metrics_artifact(task_dir: Path) -> JsonObject:
+def load_runner_metrics_artifact(
+    task_dir: Path,
+    *,
+    evaluation: JsonObject,
+    experiment_spec: JsonObject,
+) -> tuple[JsonObject, JsonObject]:
     artifact_path = task_dir / "RUNNER_METRICS.json"
+    status: JsonObject = {
+        "present": False,
+        "trusted": False,
+        "rejection_reason": None,
+    }
     if not artifact_path.exists():
-        return {}
+        return {}, status
+    status["present"] = True
+    try:
+        if artifact_path.is_symlink():
+            status["rejection_reason"] = "symlinks are not allowed"
+            return {}, status
+        if not artifact_path.is_file():
+            status["rejection_reason"] = "artifact is not a regular file"
+            return {}, status
+        if artifact_path.stat().st_size > MAX_RUNNER_METRICS_BYTES:
+            status["rejection_reason"] = f"artifact exceeds {MAX_RUNNER_METRICS_BYTES} bytes"
+            return {}, status
+    except OSError as exc:
+        status["rejection_reason"] = f"artifact metadata unreadable: {exc}"
+        return {}, status
     try:
         payload = json.loads(artifact_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        status["rejection_reason"] = f"invalid JSON: {exc}"
+        return {}, status
+    if not isinstance(payload, dict):
+        status["rejection_reason"] = "payload is not a JSON object"
+        return {}, status
+    validated_payload, rejection_reason = validate_runner_metrics_payload(
+        payload,
+        evaluation=evaluation,
+        experiment_spec=experiment_spec,
+    )
+    if rejection_reason:
+        status["rejection_reason"] = rejection_reason
+        return {}, status
+    status["trusted"] = True
+    return validated_payload, status
 
 
 def persist_hypothesis_update(
@@ -590,13 +629,21 @@ def maybe_attach_execution_evaluation(
         deps,
         prepare_bundle=prepare_bundle,
     )
-    evaluation = persist_execution_evaluation(config, evaluation, deps)
     contract = prepare_bundle.get("contract") if isinstance(prepare_bundle.get("contract"), dict) else {}
     evidence = prepare_bundle.get("evidence_retrieval") if isinstance(prepare_bundle.get("evidence_retrieval"), dict) else {}
     research_program = prepare_bundle.get("research_program") if isinstance(prepare_bundle.get("research_program"), dict) else {}
     hypothesis_registry = prepare_bundle.get("hypothesis_registry") if isinstance(prepare_bundle.get("hypothesis_registry"), dict) else {}
     experiment_spec = prepare_bundle.get("experiment_spec") if isinstance(prepare_bundle.get("experiment_spec"), dict) else {}
-    runner_metrics = load_runner_metrics_artifact(task_dir)
+    runner_metrics, runner_metrics_status = load_runner_metrics_artifact(
+        task_dir,
+        evaluation=evaluation,
+        experiment_spec=experiment_spec,
+    )
+    if runner_metrics_status.get("rejection_reason"):
+        evaluation["warnings"] = list(evaluation.get("warnings") or []) + [
+            f"Runner metrics artifact rejected: {runner_metrics_status.get('rejection_reason')}"
+        ]
+    evaluation = persist_execution_evaluation(config, evaluation, deps)
     followup_task_draft = persist_followup_task_draft(config, evaluation, contract, evidence, deps)
     ledger_note_draft = persist_ledger_note_draft(config, evaluation, contract, evidence, deps)
     review_proposal_draft = persist_review_proposal_draft(config, evaluation, contract, evidence, deps)
@@ -606,7 +653,9 @@ def maybe_attach_execution_evaluation(
             evaluation,
             experiment_spec,
             review_proposal_draft or {},
+            research_program,
             runner_metrics=runner_metrics,
+            runner_metrics_status=runner_metrics_status,
         ),
         deps,
     )

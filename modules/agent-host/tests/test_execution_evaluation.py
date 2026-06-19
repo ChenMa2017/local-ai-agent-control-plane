@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import execution_evaluation
+import experiment_contracts
 import research_objects
 
 
@@ -559,61 +560,62 @@ class ExecutionEvaluationTests(unittest.TestCase):
                 )
                 + "\n"
             )
+            experiment_spec = {
+                "required": True,
+                "objective": "bounded_cpu_eval",
+                "task_type": "bounded_execution",
+                "hypothesis_ids": ["hypothesis_metric_probe"],
+                "experiment_id": "experiment_metric_probe",
+                "baseline_spec": {"required": True, "entities": ["baseline_v1"]},
+                "dataset_refs": ["eval://demo/validation"],
+                "random_seeds": [42],
+                "code_reference": {
+                    "commit": "deadbeef",
+                    "paths": ["train.py"],
+                    "status": "resolved",
+                },
+                "config_reference": {
+                    "path": "configs/demo_probe.yaml",
+                    "hash": "cfg-001",
+                    "status": "resolved",
+                },
+                "repeat_count": 3,
+                "metric_definitions": [
+                    {
+                        "metric_id": "M-01",
+                        "name": "safe_result_available",
+                        "kind": "binary",
+                        "source": "execution_safe_result_excerpt",
+                        "higher_is_better": True,
+                    },
+                    {
+                        "metric_id": "M-02",
+                        "name": "accuracy_gain",
+                        "kind": "delta",
+                        "source": "runner_metrics",
+                        "higher_is_better": True,
+                    },
+                ],
+                "success_criteria": [
+                    {
+                        "criterion_id": "SC-02",
+                        "name": "user_success_criterion_defined",
+                        "kind": "contract",
+                        "status": "resolved",
+                    },
+                    {
+                        "criterion_id": "SC-D1",
+                        "name": "accuracy_gain_positive",
+                        "kind": "metric",
+                        "status": "ready",
+                        "metric_name": "accuracy_gain",
+                        "target": {"operator": ">", "value": 0.0},
+                    },
+                ],
+            }
             (intake_root / "EXPERIMENT_SPEC.json").write_text(
                 json.dumps(
-                    {
-                        "required": True,
-                        "objective": "bounded_cpu_eval",
-                        "task_type": "bounded_execution",
-                        "hypothesis_ids": ["hypothesis_metric_probe"],
-                        "experiment_id": "experiment_metric_probe",
-                        "baseline_spec": {"required": True, "entities": ["baseline_v1"]},
-                        "dataset_refs": ["eval://demo/validation"],
-                        "random_seeds": [42],
-                        "code_reference": {
-                            "commit": "deadbeef",
-                            "paths": ["train.py"],
-                            "status": "resolved",
-                        },
-                        "config_reference": {
-                            "path": "configs/demo_probe.yaml",
-                            "hash": "cfg-001",
-                            "status": "resolved",
-                        },
-                        "repeat_count": 3,
-                        "metric_definitions": [
-                            {
-                                "metric_id": "M-01",
-                                "name": "safe_result_available",
-                                "kind": "binary",
-                                "source": "execution_safe_result_excerpt",
-                                "higher_is_better": True,
-                            },
-                            {
-                                "metric_id": "M-02",
-                                "name": "accuracy_gain",
-                                "kind": "delta",
-                                "source": "runner_metrics",
-                                "higher_is_better": True,
-                            },
-                        ],
-                        "success_criteria": [
-                            {
-                                "criterion_id": "SC-02",
-                                "name": "user_success_criterion_defined",
-                                "kind": "contract",
-                                "status": "resolved",
-                            },
-                            {
-                                "criterion_id": "SC-D1",
-                                "name": "accuracy_gain_positive",
-                                "kind": "metric",
-                                "status": "ready",
-                                "metric_name": "accuracy_gain",
-                                "target": {"operator": ">", "value": 0.0},
-                            },
-                        ],
-                    },
+                    experiment_spec,
                     ensure_ascii=False,
                     indent=2,
                 )
@@ -631,22 +633,28 @@ class ExecutionEvaluationTests(unittest.TestCase):
             (task_dir / "RUNNER_METRICS.json").write_text(
                 json.dumps(
                     {
-                        "schema_version": "runner_metrics.v0.1",
+                        "schema_version": "runner_metrics.v0.2",
+                        "task_id": task["task_id"],
+                        "intake_id": intake_id,
+                        "experiment_id": experiment_spec["experiment_id"],
+                        "experiment_spec_digest": experiment_contracts.experiment_spec_digest(experiment_spec),
+                        "producer": {
+                            "kind": "experiment_runner",
+                            "id": "local-runner",
+                            "version": "0.2",
+                        },
+                        "generated_at": "2026-06-19T12:00:00Z",
                         "metrics": [
                             {
-                                "name": "accuracy_gain",
+                                "metric_id": "M-02",
                                 "value": 0.031,
                                 "unit": "fraction",
-                                "target": {"operator": ">", "value": 0.0},
+                                "sample_count": 3,
+                                "artifact_refs": ["artifacts/metric_probe.json"],
                                 "notes": "Variant outperformed baseline by 3.1 points.",
+                                "baseline_value": 0.0,
                             }
                         ],
-                        "baseline_comparison": {
-                            "status": "improved",
-                            "baseline_required": True,
-                            "baseline_entities": ["baseline_v1"],
-                            "summary": "Variant improved over baseline.",
-                        },
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -669,11 +677,17 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(experiment_result["assessment_basis"], "runner_metrics")
             self.assertEqual(experiment_result["evidence_strength"], "metric_backed")
             self.assertEqual(experiment_result["validity"], "valid")
+            self.assertEqual(experiment_result["provisional_result"], "supported")
             self.assertEqual(experiment_result["result"], "supported")
+            self.assertEqual(experiment_result["final_result"], "supported")
+            self.assertEqual(experiment_result["adjudication_status"], "accepted")
+            self.assertTrue(experiment_result["promotion_eligible"])
             self.assertEqual(experiment_result["baseline_comparison"]["status"], "improved")
             self.assertEqual(experiment_result["metrics"][1]["name"], "accuracy_gain")
             self.assertEqual(experiment_result["metrics"][1]["value"], 0.031)
-            self.assertEqual(experiment_result["metrics"][1]["status"], "pass")
+            self.assertEqual(experiment_result["success_criteria"][1]["status"], "pass")
+            self.assertTrue(experiment_result["runner_metrics_artifact"]["present"])
+            self.assertTrue(experiment_result["runner_metrics_artifact"]["trusted"])
             self.assertFalse(experiment_result["limitations"])
             self.assertEqual(experiment_update["primary_metric_name"], "accuracy_gain")
             self.assertEqual(experiment_update["experiment_result"], "supported")
@@ -689,6 +703,201 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(attachments["hypothesis_promotion"]["project_sync"]["status"], "applied")
             self.assertEqual(attachments["operator_summary"]["overall_status"], "promotion_ready")
             self.assertTrue((intake_root / "EXPERIMENT_RESULT.json").exists())
+
+    def test_maybe_attach_execution_evaluation_rejects_mismatched_runner_metrics_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            deps = self.make_deps(root)
+            config = self.Config(root)
+            intake_id = "intake_exp_metrics_rejected"
+            intake_root = root / ".codex-bridge" / "intake" / intake_id
+            intake_root.mkdir(parents=True, exist_ok=True)
+            (intake_root / "TASK_CONTRACT.json").write_text(
+                json.dumps(
+                    {
+                        "objective": "bounded_cpu_eval",
+                        "mode": "readonly",
+                        "prompt": "Run the bounded CPU probe and keep the variant only if the primary metric improves.",
+                        "summary": "Bounded CPU metric-backed probe",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "EVIDENCE_RETRIEVAL.json").write_text(
+                json.dumps(
+                    {
+                        "query": "bounded cpu metric-backed probe",
+                        "decision": "safe_to_answer",
+                        "read_plan": [{"path": "formal/metric_probe.md", "reason": "primary source"}],
+                        "hits": [{"kind": "current_conclusion", "id": "metric_probe_status", "score": 6.0}],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "RESEARCH_PROGRAM.json").write_text(
+                json.dumps(
+                    {
+                        "program_id": "demo-program",
+                        "available": True,
+                        "publish_only_after_review": False,
+                        "allowed_conclusion_statuses": ["confirmed", "tentative", "auxiliary_only"],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "HYPOTHESIS_REGISTRY.json").write_text(
+                json.dumps(
+                    {
+                        "registry_status": "active",
+                        "hypotheses": [
+                            {"hypothesis_id": "hypothesis_metric_probe_rejected", "summary": "The variant should outperform baseline"}
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            experiment_spec = {
+                "required": True,
+                "objective": "bounded_cpu_eval",
+                "task_type": "bounded_execution",
+                "hypothesis_ids": ["hypothesis_metric_probe_rejected"],
+                "experiment_id": "experiment_metric_probe_rejected",
+                "baseline_spec": {"required": True, "entities": ["baseline_v1"]},
+                "dataset_refs": ["eval://demo/validation"],
+                "random_seeds": [42],
+                "code_reference": {
+                    "commit": "deadbeef",
+                    "paths": ["train.py"],
+                    "status": "resolved",
+                },
+                "config_reference": {
+                    "path": "configs/demo_probe.yaml",
+                    "hash": "cfg-001",
+                    "status": "resolved",
+                },
+                "repeat_count": 3,
+                "metric_definitions": [
+                    {
+                        "metric_id": "M-01",
+                        "name": "safe_result_available",
+                        "kind": "binary",
+                        "source": "execution_safe_result_excerpt",
+                        "higher_is_better": True,
+                    },
+                    {
+                        "metric_id": "M-02",
+                        "name": "accuracy_gain",
+                        "kind": "delta",
+                        "source": "runner_metrics",
+                        "higher_is_better": True,
+                    },
+                ],
+                "success_criteria": [
+                    {
+                        "criterion_id": "SC-02",
+                        "name": "user_success_criterion_defined",
+                        "kind": "contract",
+                        "status": "resolved",
+                    },
+                    {
+                        "criterion_id": "SC-D1",
+                        "name": "accuracy_gain_positive",
+                        "kind": "metric",
+                        "status": "ready",
+                        "metric_name": "accuracy_gain",
+                        "target": {"operator": ">", "value": 0.0},
+                    },
+                ],
+            }
+            (intake_root / "EXPERIMENT_SPEC.json").write_text(
+                json.dumps(
+                    experiment_spec,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            task = {
+                "task_id": "task_20260619_120500_expmetrics",
+                "project": "demo",
+                "status": "done",
+                "mode": "readonly",
+                "adapter_metadata": {"intake_id": intake_id},
+            }
+            task_dir = root / "task_20260619_120500_expmetrics"
+            task_dir.mkdir(parents=True, exist_ok=True)
+            (task_dir / "RUNNER_METRICS.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "runner_metrics.v0.2",
+                        "task_id": task["task_id"],
+                        "intake_id": intake_id,
+                        "experiment_id": experiment_spec["experiment_id"],
+                        "experiment_spec_digest": "sha256:not-the-current-spec",
+                        "producer": {
+                            "kind": "experiment_runner",
+                            "id": "local-runner",
+                            "version": "0.2",
+                        },
+                        "generated_at": "2026-06-19T12:05:00Z",
+                        "metrics": [
+                            {
+                                "metric_id": "M-02",
+                                "value": 0.031,
+                                "unit": "fraction",
+                                "sample_count": 3,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            result_data = {"text": "The bounded probe completed and produced a safe excerpt, but the metrics artifact was stale."}
+
+            attachments = execution_evaluation.maybe_attach_execution_evaluation(
+                config,
+                task_dir,
+                task,
+                result_data,
+                deps,
+            )
+
+            experiment_result = attachments["experiment_result"]
+            self.assertEqual(experiment_result["assessment_basis"], "structural_only")
+            self.assertEqual(experiment_result["evidence_strength"], "structural_only")
+            self.assertEqual(experiment_result["validity"], "valid")
+            self.assertEqual(experiment_result["provisional_result"], "inconclusive")
+            self.assertEqual(experiment_result["result"], "inconclusive")
+            self.assertIsNone(experiment_result["final_result"])
+            self.assertEqual(experiment_result["adjudication_status"], "pending_review")
+            self.assertFalse(experiment_result["promotion_eligible"])
+            self.assertTrue(experiment_result["runner_metrics_artifact"]["present"])
+            self.assertFalse(experiment_result["runner_metrics_artifact"]["trusted"])
+            self.assertIn("experiment_spec_digest does not match", experiment_result["runner_metrics_artifact"]["rejection_reason"])
+            self.assertIn("runner_metrics_rejected", experiment_result["limitations"])
+            self.assertIn(
+                "Runner metrics artifact rejected: experiment_spec_digest does not match ExperimentSpec",
+                attachments["execution_evaluation"]["warnings"],
+            )
+            self.assertEqual(attachments["hypothesis_update"]["status"], "testing")
+            self.assertEqual(attachments["experiment_promotion"]["promotion_state"], "review_required")
+            self.assertNotEqual(attachments["experiment_promotion"]["project_sync"]["status"], "applied")
+            self.assertEqual(attachments["hypothesis_promotion"]["promotion_state"], "review_required")
+            self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
+            self.assertIn(
+                "runner_metrics_rejected",
+                attachments["evaluation_report"]["validity"]["limitations"],
+            )
 
     def test_maybe_attach_execution_evaluation_writes_experiment_review_bundle_when_required(self):
         with tempfile.TemporaryDirectory() as tmp:
