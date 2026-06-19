@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from experiment_contracts import build_experiment_contract_fields, build_structural_experiment_result
+from hypothesis_state import (
+    derive_hypothesis_record_status,
+    validate_hypothesis_registry_transition,
+    validate_status_transition,
+)
 from post_run_artifacts import claim_boundary_for_evaluation
 from research_store import write_json_atomic
 
@@ -533,41 +538,6 @@ def hypothesis_promotion_state(
         if not bool(experiment_result.get("promotion_eligible")):
             return "review_required"
     return "candidate_ready"
-
-
-def derive_hypothesis_record_status(
-    evaluation: JsonObject,
-    experiment_spec: JsonObject,
-    experiment_result: JsonObject | None,
-) -> str:
-    if not bool(experiment_spec.get("required")):
-        return "proposed"
-    if not evaluation.get("result_available") or str(evaluation.get("task_status") or "") != "done":
-        return "testing"
-    evaluation_result = (
-        str((experiment_result or {}).get("result") or "").strip()
-        if isinstance(experiment_result, dict)
-        else ""
-    )
-    evaluation_validity = (
-        str((experiment_result or {}).get("validity") or "").strip()
-        if isinstance(experiment_result, dict)
-        else ""
-    )
-    if evaluation_validity == "invalid" or evaluation_result == "invalid":
-        return "invalid"
-    if isinstance(experiment_result, dict) and experiment_result and not bool(experiment_result.get("promotion_eligible")):
-        return "testing"
-    final_result = (
-        str((experiment_result or {}).get("final_result") or "").strip()
-        if isinstance(experiment_result, dict)
-        else ""
-    )
-    if final_result in {"supported", "refuted", "inconclusive"}:
-        return final_result
-    if evaluation_result in {"supported", "refuted", "inconclusive"}:
-        return evaluation_result
-    return "testing"
 
 
 def build_hypothesis_update(
@@ -1604,65 +1574,6 @@ def upsert_experiment_index_records(
     return next_records
 
 
-def validate_status_transition(
-    *,
-    current_status: str | None,
-    proposed_status: str,
-    allowed_transitions: dict[str, set[str]],
-    known_statuses: set[str],
-    existing_record_present: bool,
-) -> JsonObject:
-    normalized_proposed = str(proposed_status or "").strip()
-    normalized_current = str(current_status or "").strip() or None
-    if not normalized_proposed:
-        return {
-            "status": "review_required",
-            "reason": "missing_proposed_status",
-            "current_status": normalized_current,
-            "proposed_status": None,
-        }
-    if normalized_proposed not in known_statuses:
-        return {
-            "status": "review_required",
-            "reason": "unknown_proposed_status",
-            "current_status": normalized_current,
-            "proposed_status": normalized_proposed,
-        }
-    transition_key = "__new__"
-    if existing_record_present:
-        if normalized_current is None:
-            return {
-                "status": "review_required",
-                "reason": "missing_current_status",
-                "current_status": None,
-                "proposed_status": normalized_proposed,
-            }
-        if normalized_current not in known_statuses:
-            return {
-                "status": "review_required",
-                "reason": "unknown_current_status",
-                "current_status": normalized_current,
-                "proposed_status": normalized_proposed,
-            }
-        transition_key = normalized_current
-    allowed_next = allowed_transitions.get(transition_key, set())
-    if normalized_proposed not in allowed_next:
-        return {
-            "status": "review_required",
-            "reason": "transition_not_allowed",
-            "current_status": normalized_current,
-            "proposed_status": normalized_proposed,
-            "allowed_next_statuses": sorted(allowed_next),
-        }
-    return {
-        "status": "valid",
-        "reason": "ok",
-        "current_status": normalized_current,
-        "proposed_status": normalized_proposed,
-        "allowed_next_statuses": sorted(allowed_next),
-    }
-
-
 def validate_experiment_index_transition(
     existing_record: JsonObject | None,
     update: JsonObject,
@@ -1861,50 +1772,6 @@ def upsert_hypothesis_registry_records(
     normalized_update["updated_at"] = updated_at
     next_records.append(normalized_update)
     return next_records
-
-
-def validate_hypothesis_registry_transition(
-    existing_record: JsonObject | None,
-    update: JsonObject,
-) -> JsonObject:
-    known_statuses = {
-        "proposed",
-        "testing",
-        "active",
-        "supported",
-        "refuted",
-        "inconclusive",
-        "invalid",
-        "superseded",
-        "archived",
-    }
-    allowed_transitions = {
-        # New hypotheses must enter the registry as open candidates first; final-like
-        # states require either an existing testing record or a review bundle.
-        "__new__": {"proposed", "testing"},
-        "proposed": {"proposed", "testing", "superseded", "archived"},
-        "testing": {"testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
-        # Keep `active` readable for older project registries, but route new evidence
-        # back through testing before writing another final-like status.
-        "active": {"active", "testing", "inconclusive", "superseded", "archived"},
-        "supported": {"supported", "testing", "superseded", "archived"},
-        "refuted": {"refuted", "testing", "superseded", "archived"},
-        "inconclusive": {"testing", "inconclusive", "superseded", "archived"},
-        "invalid": {"testing", "invalid", "superseded", "archived"},
-        "superseded": {"superseded", "archived"},
-        "archived": {"archived"},
-    }
-    return validate_status_transition(
-        current_status=(
-            existing_record.get("status")
-            if isinstance(existing_record, dict)
-            else None
-        ),
-        proposed_status=str(update.get("status") or ""),
-        allowed_transitions=allowed_transitions,
-        known_statuses=known_statuses,
-        existing_record_present=isinstance(existing_record, dict),
-    )
 
 
 def write_hypothesis_review_bundle(
