@@ -1400,6 +1400,106 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(validated, {})
         self.assertIn("unit does not match ExperimentSpec", rejection_reason)
 
+    def test_validate_runner_metrics_payload_rejects_invalid_generated_at(self):
+        experiment_spec = {
+            "experiment_id": "experiment_metric_probe_time",
+            "objective": "bounded_cpu_eval",
+            "task_type": "bounded_execution",
+            "metric_definitions": [
+                {
+                    "metric_id": "M-02",
+                    "name": "accuracy_gain",
+                    "kind": "delta",
+                    "source": "runner_metrics",
+                    "higher_is_better": True,
+                }
+            ],
+            "success_criteria": [],
+            "failure_criteria": [],
+        }
+        payload = {
+            "schema_version": "runner_metrics.v0.2",
+            "task_id": "task_20260619_160100_badtime",
+            "intake_id": "intake_badtime",
+            "experiment_id": "experiment_metric_probe_time",
+            "experiment_spec_digest": experiment_contracts.experiment_spec_digest(experiment_spec),
+            "producer": {
+                "kind": "experiment_runner",
+                "id": "local-runner",
+                "version": "0.2",
+            },
+            "generated_at": "2026-06-19 16:01:00",
+            "metrics": [
+                {
+                    "metric_id": "M-02",
+                    "name": "accuracy_gain",
+                    "value": 0.031,
+                }
+            ],
+        }
+
+        validated, rejection_reason = experiment_contracts.validate_runner_metrics_payload(
+            payload,
+            evaluation={
+                "task_id": "task_20260619_160100_badtime",
+                "intake_id": "intake_badtime",
+            },
+            experiment_spec=experiment_spec,
+        )
+
+        self.assertEqual(validated, {})
+        self.assertIn("generated_at must be a valid timezone-aware timestamp", rejection_reason)
+
+    def test_validate_runner_metrics_payload_rejects_non_binary_value_for_binary_metric(self):
+        experiment_spec = {
+            "experiment_id": "experiment_metric_probe_binary",
+            "objective": "bounded_cpu_eval",
+            "task_type": "bounded_execution",
+            "metric_definitions": [
+                {
+                    "metric_id": "M-01",
+                    "name": "safe_result_available",
+                    "kind": "binary",
+                    "source": "execution_safe_result_excerpt",
+                    "higher_is_better": True,
+                }
+            ],
+            "success_criteria": [],
+            "failure_criteria": [],
+        }
+        payload = {
+            "schema_version": "runner_metrics.v0.2",
+            "task_id": "task_20260619_160200_badbinary",
+            "intake_id": "intake_badbinary",
+            "experiment_id": "experiment_metric_probe_binary",
+            "experiment_spec_digest": experiment_contracts.experiment_spec_digest(experiment_spec),
+            "producer": {
+                "kind": "experiment_runner",
+                "id": "local-runner",
+                "version": "0.2",
+            },
+            "generated_at": "2026-06-19T16:02:00Z",
+            "metrics": [
+                {
+                    "metric_id": "M-01",
+                    "name": "safe_result_available",
+                    "value": 2,
+                }
+            ],
+        }
+
+        validated, rejection_reason = experiment_contracts.validate_runner_metrics_payload(
+            payload,
+            evaluation={
+                "task_id": "task_20260619_160200_badbinary",
+                "intake_id": "intake_badbinary",
+            },
+            experiment_spec=experiment_spec,
+        )
+
+        self.assertEqual(validated, {})
+        self.assertIn("must be 0 or 1 for binary kind", rejection_reason)
+
     def test_build_post_run_operator_summary_uses_hypothesis_status_blockers(self):
         summary = operator_summary.build_post_run_operator_summary(
             {

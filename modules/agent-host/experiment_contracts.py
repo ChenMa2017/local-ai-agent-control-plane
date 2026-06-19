@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import math
@@ -94,6 +95,17 @@ def _is_finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
+def _is_timezone_aware_timestamp(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
 def _stable_experiment_spec_for_digest(experiment_spec: JsonObject) -> JsonObject:
     return {
         "experiment_id": experiment_spec.get("experiment_id"),
@@ -162,8 +174,8 @@ def validate_runner_metrics_payload(
     for field in ("kind", "id", "version"):
         if not str(producer.get(field) or "").strip():
             return {}, f"producer.{field} is required"
-    if not str(payload.get("generated_at") or "").strip():
-        return {}, "generated_at is required"
+    if not _is_timezone_aware_timestamp(payload.get("generated_at")):
+        return {}, "generated_at must be a valid timezone-aware timestamp"
     metrics = payload.get("metrics")
     if not isinstance(metrics, list) or not metrics:
         return {}, "metrics must be a non-empty list"
@@ -207,6 +219,9 @@ def validate_runner_metrics_payload(
         value = item.get("value")
         if not _is_finite_number(value):
             return {}, f"metric {canonical_key} has non-finite numeric value"
+        definition_kind = str(definition.get("kind") or "").strip().lower()
+        if definition_kind == "binary" and float(value) not in {0.0, 1.0}:
+            return {}, f"metric {canonical_key} must be 0 or 1 for binary kind"
         sample_count = item.get("sample_count")
         if sample_count is not None and (not isinstance(sample_count, int) or sample_count <= 0):
             return {}, f"metric {canonical_key} has invalid sample_count"
@@ -219,6 +234,8 @@ def validate_runner_metrics_payload(
         baseline_value = item.get("baseline_value")
         if baseline_value is not None and not _is_finite_number(baseline_value):
             return {}, f"metric {canonical_key} has non-finite baseline_value"
+        if baseline_value is not None and definition_kind == "binary" and float(baseline_value) not in {0.0, 1.0}:
+            return {}, f"metric {canonical_key} baseline_value must be 0 or 1 for binary kind"
         artifact_refs = item.get("artifact_refs")
         if artifact_refs is not None:
             if not isinstance(artifact_refs, list) or any(not str(ref or "").strip() for ref in artifact_refs):
