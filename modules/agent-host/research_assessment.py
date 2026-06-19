@@ -203,6 +203,12 @@ def build_hypothesis_assessment(
         "confidence": confidence_value,
         "assessment_basis": str(first.get("assessment_basis") or "structural_only"),
         "status_candidate": str(first.get("status") or "") or None,
+        "status_reason": str(first.get("status_reason") or "") or None,
+        "status_blockers": [
+            str(item).strip()
+            for item in (first.get("status_blockers") or [])
+            if str(item or "").strip()
+        ],
         "evaluation_result": str(first.get("evaluation_result") or "") or None,
         "evaluation_validity": str(first.get("evaluation_validity") or "") or None,
     }

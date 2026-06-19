@@ -164,15 +164,23 @@ def validate_hypothesis_registry_transition(
     )
 
 
-def derive_hypothesis_record_status(
+def derive_hypothesis_status_resolution(
     evaluation: JsonObject,
     experiment_spec: JsonObject,
     experiment_result: JsonObject | None,
-) -> str:
+) -> JsonObject:
     if not bool(experiment_spec.get("required")):
-        return "proposed"
+        return {
+            "status": "proposed",
+            "reason": "analysis_only_hypothesis",
+            "blockers": [],
+        }
     if not evaluation.get("result_available") or str(evaluation.get("task_status") or "") != "done":
-        return "testing"
+        return {
+            "status": "testing",
+            "reason": "awaiting_experiment_completion",
+            "blockers": [],
+        }
     evaluation_result = (
         str((experiment_result or {}).get("result") or "").strip()
         if isinstance(experiment_result, dict)
@@ -184,16 +192,59 @@ def derive_hypothesis_record_status(
         else ""
     )
     if evaluation_validity == "invalid" or evaluation_result == "invalid":
-        return "invalid"
+        return {
+            "status": "invalid",
+            "reason": "experiment_invalid",
+            "blockers": [],
+        }
     if isinstance(experiment_result, dict) and experiment_result and not bool(experiment_result.get("promotion_eligible")):
-        return "testing"
+        blockers = [
+            str(item).strip()
+            for item in (experiment_result.get("limitations") or [])
+            if str(item or "").strip()
+        ]
+        adjudication_status = str(experiment_result.get("adjudication_status") or "").strip()
+        if not blockers and adjudication_status and adjudication_status != "accepted":
+            blockers.append(f"adjudication_status:{adjudication_status}")
+        return {
+            "status": "testing",
+            "reason": "experiment_not_promotion_eligible",
+            "blockers": blockers,
+        }
     final_result = (
         str((experiment_result or {}).get("final_result") or "").strip()
         if isinstance(experiment_result, dict)
         else ""
     )
     if final_result in {"supported", "refuted", "inconclusive"}:
-        return final_result
+        return {
+            "status": final_result,
+            "reason": "experiment_final_result",
+            "blockers": [],
+        }
     if evaluation_result in {"supported", "refuted", "inconclusive"}:
-        return evaluation_result
-    return "testing"
+        return {
+            "status": evaluation_result,
+            "reason": "experiment_evaluation_result",
+            "blockers": [],
+        }
+    return {
+        "status": "testing",
+        "reason": "no_conclusive_experiment_result",
+        "blockers": [],
+    }
+
+
+def derive_hypothesis_record_status(
+    evaluation: JsonObject,
+    experiment_spec: JsonObject,
+    experiment_result: JsonObject | None,
+) -> str:
+    return str(
+        derive_hypothesis_status_resolution(
+            evaluation,
+            experiment_spec,
+            experiment_result,
+        ).get("status")
+        or "testing"
+    )

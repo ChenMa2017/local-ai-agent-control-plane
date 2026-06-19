@@ -734,11 +734,17 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(experiment_update["primary_metric_name"], "accuracy_gain")
             self.assertEqual(experiment_update["experiment_result"], "supported")
             self.assertEqual(hypothesis_update["status"], "supported")
+            self.assertEqual(hypothesis_update["status_reason"], "experiment_final_result")
+            self.assertEqual(hypothesis_update["status_blockers"], [])
             self.assertEqual(attachments["evaluation_report"]["assessment_basis"], "runner_metrics")
             self.assertEqual(attachments["evaluation_report"]["validity"]["status"], "valid_metric_backed")
             self.assertEqual(
                 attachments["evaluation_report"]["hypothesis_assessment"]["assessment_basis"],
                 "runner_metrics",
+            )
+            self.assertEqual(
+                attachments["evaluation_report"]["hypothesis_assessment"]["status_reason"],
+                "experiment_final_result",
             )
             self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["result"], "supported")
             self.assertEqual(attachments["experiment_promotion"]["project_sync"]["status"], "applied")
@@ -1305,9 +1311,22 @@ class ExecutionEvaluationTests(unittest.TestCase):
                 attachments["execution_evaluation"]["warnings"],
             )
             self.assertEqual(attachments["hypothesis_update"]["status"], "testing")
+            self.assertEqual(
+                attachments["hypothesis_update"]["status_reason"],
+                "experiment_not_promotion_eligible",
+            )
+            self.assertIn("runner_metrics_rejected", attachments["hypothesis_update"]["status_blockers"])
             self.assertEqual(attachments["experiment_promotion"]["promotion_state"], "review_required")
             self.assertNotEqual(attachments["experiment_promotion"]["project_sync"]["status"], "applied")
             self.assertEqual(attachments["hypothesis_promotion"]["promotion_state"], "review_required")
+            self.assertEqual(
+                attachments["evaluation_report"]["hypothesis_assessment"]["status_reason"],
+                "experiment_not_promotion_eligible",
+            )
+            self.assertIn(
+                "runner_metrics_rejected",
+                attachments["evaluation_report"]["hypothesis_assessment"]["status_blockers"],
+            )
             self.assertEqual(attachments["operator_summary"]["overall_status"], "review_required")
             self.assertIn(
                 "runner_metrics_rejected",

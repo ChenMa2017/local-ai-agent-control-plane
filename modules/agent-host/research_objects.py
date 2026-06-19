@@ -8,7 +8,7 @@ from typing import Any
 
 from experiment_contracts import build_experiment_contract_fields, build_structural_experiment_result
 from hypothesis_state import (
-    derive_hypothesis_record_status,
+    derive_hypothesis_status_resolution,
     validate_hypothesis_registry_transition,
     validate_status_transition,
 )
@@ -616,11 +616,12 @@ def build_hypothesis_update(
     confidence_value = confidence.get("value")
     if not isinstance(confidence_value, (int, float)):
         confidence_value = 0.35 if promotion_state == "candidate_ready" else 0.2
-    hypothesis_status = derive_hypothesis_record_status(
+    hypothesis_status_resolution = derive_hypothesis_status_resolution(
         evaluation,
         experiment_spec,
         experiment_result,
     )
+    hypothesis_status = str(hypothesis_status_resolution.get("status") or "testing")
     return {
         "schema_version": "hypothesis_record.v0.1",
         "intake_id": evaluation.get("intake_id"),
@@ -665,6 +666,12 @@ def build_hypothesis_update(
             if isinstance(experiment_result, dict)
             else None
         ),
+        "status_reason": str(hypothesis_status_resolution.get("reason") or "").strip() or None,
+        "status_blockers": [
+            str(item).strip()
+            for item in (hypothesis_status_resolution.get("blockers") or [])
+            if str(item or "").strip()
+        ],
         "imported_from_history": bool(first.get("imported_from_history")),
         "import_review_id": str(first.get("import_review_id") or "").strip() or None,
         "status": hypothesis_status,

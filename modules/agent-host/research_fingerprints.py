@@ -114,6 +114,8 @@ def hypothesis_update_fingerprint(update: JsonObject) -> str:
         "evaluation_result": update.get("evaluation_result"),
         "evaluation_validity": update.get("evaluation_validity"),
         "assessment_basis": update.get("assessment_basis"),
+        "status_reason": update.get("status_reason"),
+        "status_blockers": update.get("status_blockers"),
         "imported_from_history": update.get("imported_from_history"),
         "import_review_id": update.get("import_review_id"),
         "status": update.get("status"),
