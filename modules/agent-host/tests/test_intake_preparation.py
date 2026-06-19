@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import intake_preparation
+import prepare_flow
 
 
 PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -43,6 +44,23 @@ class FakePrincipal:
 class IntakePreparationTests(unittest.TestCase):
     def error_factory(self, message: str, status: int, code: str | None) -> FakeBridgeError:
         return FakeBridgeError(message, status, code)
+
+    def test_followup_guidance_from_draft_normalizes_remediation_context(self):
+        guidance = prepare_flow.followup_guidance_from_draft(
+            {
+                "recommended_next_action": "review_result",
+                "reason": "Task completed successfully; review the safe result before any promotion.",
+                "remediation": {"category": "result_review", "subject": "task_result"},
+                "evidence_retrieval_decision": "stale_conclusion",
+                "requires_prepare": True,
+                "claim_boundary": "Keep conclusions bounded until the cited files are reviewed.",
+            }
+        )
+
+        self.assertEqual(guidance["recommended_next_action"], "review_result")
+        self.assertEqual(guidance["remediation"], {"category": "result_review", "subject": "task_result"})
+        self.assertEqual(guidance["evidence_retrieval_decision"], "stale_conclusion")
+        self.assertTrue(guidance["requires_prepare"])
 
     def test_validate_codex_project_and_new_intake_id(self):
         with tempfile.TemporaryDirectory() as tmp:

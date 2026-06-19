@@ -97,6 +97,27 @@ def _optional_dict(seed: JsonObject, key: str) -> JsonObject | None:
     return None
 
 
+def followup_guidance_from_draft(followup_draft: JsonObject) -> JsonObject | None:
+    if not isinstance(followup_draft, dict) or not followup_draft:
+        return None
+    remediation = followup_draft.get("remediation") if isinstance(followup_draft.get("remediation"), dict) else None
+    guidance: JsonObject = {
+        "recommended_next_action": str(followup_draft.get("recommended_next_action") or "").strip() or None,
+        "reason": str(followup_draft.get("reason") or followup_draft.get("summary") or "").strip() or None,
+        "remediation": remediation,
+        "evidence_retrieval_decision": str(followup_draft.get("evidence_retrieval_decision") or "").strip() or None,
+        "requires_prepare": bool(followup_draft.get("requires_prepare")),
+        "claim_boundary": str(followup_draft.get("claim_boundary") or "").strip() or None,
+    }
+    if not any(
+        value not in (None, "", False)
+        for key, value in guidance.items()
+        if key != "requires_prepare"
+    ) and not guidance["requires_prepare"]:
+        return None
+    return guidance
+
+
 def build_followup_context(
     followup_seed: JsonObject,
     followup_task_id: str,
@@ -107,6 +128,7 @@ def build_followup_context(
     context: JsonObject = {
         "source_task_id": followup_task_id or None,
         "source_intake_id": str(followup_seed.get("source_intake_id") or "") or None,
+        "followup_guidance": followup_guidance_from_draft(followup_draft),
         "followup_task_draft": followup_draft or None,
     }
     for field in FOLLOWUP_RESPONSE_FIELDS:
@@ -147,6 +169,7 @@ def handle_codex_prepare(
             error_factory=deps.error_factory,
         )
     followup_draft = followup_seed.get("draft") if isinstance(followup_seed.get("draft"), dict) else {}
+    followup_guidance = followup_guidance_from_draft(followup_draft) or {}
 
     project_name = (
         (payload.get("workspace") or payload.get("project", "")).strip()
@@ -234,6 +257,15 @@ def handle_codex_prepare(
         "reference_task_id": reference_task_id or "",
         "followup_task_id": followup_task_id or "",
         "followup_source_intake_id": str(followup_seed.get("source_intake_id") or ""),
+        "followup_recommended_next_action": str(followup_guidance.get("recommended_next_action") or ""),
+        "followup_reason": str(followup_guidance.get("reason") or ""),
+        "followup_remediation": (
+            followup_guidance.get("remediation")
+            if isinstance(followup_guidance.get("remediation"), dict)
+            else None
+        ),
+        "followup_evidence_retrieval_decision": str(followup_guidance.get("evidence_retrieval_decision") or ""),
+        "followup_requires_prepare": bool(followup_guidance.get("requires_prepare")),
         "prompt": prompt,
         "prompt_preview": deps.prompt_preview(prompt),
         "desired_mode": mode,
@@ -281,6 +313,7 @@ def handle_codex_prepare(
         "workspace": project.name,
         "followup_task_id": followup_task_id or None,
         "followup_source_intake_id": str(followup_seed.get("source_intake_id") or "") or None,
+        "followup_guidance": followup_guidance or None,
         "followup_context": build_followup_context(followup_seed, followup_task_id, followup_draft),
         "status": "blocked" if risk_class == "high" else ("need_user_reply" if questions else ("blocked" if not preflight.get("ok") else "prepared")),
         "questions": questions,

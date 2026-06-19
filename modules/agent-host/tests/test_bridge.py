@@ -463,8 +463,23 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(response["workspace"], "demo")
             self.assertEqual(response["followup_task_id"], "task_20260616_120000_follow01")
             self.assertEqual(response["followup_source_intake_id"], intake_id)
+            self.assertEqual(response["followup_guidance"]["recommended_next_action"], "review_result")
+            self.assertIn("Task completed successfully", response["followup_guidance"]["reason"])
+            self.assertEqual(
+                response["followup_guidance"]["remediation"],
+                {"category": "result_review", "subject": "task_result"},
+            )
+            self.assertEqual(
+                response["followup_guidance"]["evidence_retrieval_decision"],
+                "stale_conclusion",
+            )
+            self.assertTrue(response["followup_guidance"]["requires_prepare"])
             self.assertEqual(response["followup_context"]["source_task_id"], "task_20260616_120000_follow01")
             self.assertEqual(response["followup_context"]["source_intake_id"], intake_id)
+            self.assertEqual(
+                response["followup_context"]["followup_guidance"]["recommended_next_action"],
+                "review_result",
+            )
             self.assertEqual(
                 response["followup_context"]["execution_evaluation"]["execution_decision"],
                 "result_ready_for_review",
@@ -502,6 +517,14 @@ class BridgeTests(unittest.TestCase):
             seeded_intent = json.loads((Path(response["artifacts_dir"]) / "INTENT_DRAFT.json").read_text())
             self.assertEqual(seeded_intent["followup_task_id"], "task_20260616_120000_follow01")
             self.assertEqual(seeded_intent["followup_source_intake_id"], intake_id)
+            self.assertEqual(seeded_intent["followup_recommended_next_action"], "review_result")
+            self.assertIn("Task completed successfully", seeded_intent["followup_reason"])
+            self.assertEqual(
+                seeded_intent["followup_remediation"],
+                {"category": "result_review", "subject": "task_result"},
+            )
+            self.assertEqual(seeded_intent["followup_evidence_retrieval_decision"], "stale_conclusion")
+            self.assertTrue(seeded_intent["followup_requires_prepare"])
 
     def test_codex_prepare_followup_context_includes_experiment_result_when_available(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -571,6 +594,10 @@ class BridgeTests(unittest.TestCase):
             )
 
             self.assertEqual(response["status"], "prepared")
+            self.assertEqual(
+                response["followup_guidance"]["remediation"],
+                {"category": "result_review", "subject": "task_result"},
+            )
             self.assertEqual(
                 response["followup_context"]["experiment_result"]["result"],
                 "inconclusive",

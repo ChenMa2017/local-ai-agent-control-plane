@@ -358,6 +358,18 @@ curl -X POST http://127.0.0.1:8787/codex/prepare \
 
 这条路径会读取该任务关联 intake 下最新的 `FOLLOWUP_TASK_DRAFT.json`，并把其中的 `prompt / reference_task_id / suggested_mode / read_plan context` 重新带回新的 prepare 流程。
 
+同时它现在还会把 follow-up 的结构化 guidance 一并带回并写入新的 `INTENT_DRAFT`，例如：
+
+```text
+- followup_recommended_next_action
+- followup_reason
+- followup_remediation
+- followup_evidence_retrieval_decision
+- followup_requires_prepare
+```
+
+这样新一轮 intake 自己就会保留“为什么接这一步、它属于哪类 remediation、上轮 evidence decision 是什么”，客户端不需要每次都回头重新解析上一轮 intake。
+
 这些 post-run draft 现在还带统一的 provenance payload，字段风格尽量向 watchdog 既有 successor provenance 对齐，例如：
 
 ```text
