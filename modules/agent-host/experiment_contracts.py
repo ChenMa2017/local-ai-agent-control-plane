@@ -32,6 +32,7 @@ RUNNER_METRIC_ALLOWED_FIELDS = {
     "notes",
     "baseline_value",
 }
+RUNNER_OWNED_METRIC_SOURCES = {"runner_metrics", "future_runner_metrics"}
 
 
 def _metric_key(item: JsonObject) -> str:
@@ -208,6 +209,9 @@ def validate_runner_metrics_payload(
         if canonical_key in seen_metric_keys:
             return {}, f"duplicate metric {canonical_key}"
         seen_metric_keys.add(canonical_key)
+        definition_source = str(definition.get("source") or "").strip()
+        if definition_source not in RUNNER_OWNED_METRIC_SOURCES:
+            return {}, f"metric {canonical_key} is evaluator-owned and cannot be supplied by runner"
         definition_metric_id = str(definition.get("metric_id") or "").strip()
         provided_metric_id = str(item.get("metric_id") or "").strip()
         if provided_metric_id and definition_metric_id and provided_metric_id != definition_metric_id:
@@ -354,7 +358,12 @@ def _merge_metric_items(
             continue
         merged = dict(item)
         key = _metric_key(merged)
-        provided = metric_index.get(key) if key else None
+        definition_source = str(merged.get("source") or "").strip()
+        provided = (
+            metric_index.get(key)
+            if key and definition_source in RUNNER_OWNED_METRIC_SOURCES
+            else None
+        )
         if isinstance(provided, dict):
             for field in ("value", "notes", "unit", "sample_count", "artifact_refs", "baseline_value"):
                 if field in provided:

@@ -1460,7 +1460,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
                     "metric_id": "M-01",
                     "name": "safe_result_available",
                     "kind": "binary",
-                    "source": "execution_safe_result_excerpt",
+                    "source": "runner_metrics",
                     "higher_is_better": True,
                 }
             ],
@@ -1499,6 +1499,126 @@ class ExecutionEvaluationTests(unittest.TestCase):
 
         self.assertEqual(validated, {})
         self.assertIn("must be 0 or 1 for binary kind", rejection_reason)
+
+    def test_validate_runner_metrics_payload_rejects_evaluator_owned_metric(self):
+        experiment_spec = {
+            "experiment_id": "experiment_metric_probe_owned",
+            "objective": "bounded_cpu_eval",
+            "task_type": "bounded_execution",
+            "metric_definitions": [
+                {
+                    "metric_id": "M-01",
+                    "name": "safe_result_available",
+                    "kind": "binary",
+                    "source": "execution_safe_result_excerpt",
+                    "higher_is_better": True,
+                }
+            ],
+            "success_criteria": [],
+            "failure_criteria": [],
+        }
+        payload = {
+            "schema_version": "runner_metrics.v0.2",
+            "task_id": "task_20260619_160300_ownedmetric",
+            "intake_id": "intake_ownedmetric",
+            "experiment_id": "experiment_metric_probe_owned",
+            "experiment_spec_digest": experiment_contracts.experiment_spec_digest(experiment_spec),
+            "producer": {
+                "kind": "experiment_runner",
+                "id": "local-runner",
+                "version": "0.2",
+            },
+            "generated_at": "2026-06-19T16:03:00Z",
+            "metrics": [
+                {
+                    "metric_id": "M-01",
+                    "name": "safe_result_available",
+                    "value": 0,
+                }
+            ],
+        }
+
+        validated, rejection_reason = experiment_contracts.validate_runner_metrics_payload(
+            payload,
+            evaluation={
+                "task_id": "task_20260619_160300_ownedmetric",
+                "intake_id": "intake_ownedmetric",
+            },
+            experiment_spec=experiment_spec,
+        )
+
+        self.assertEqual(validated, {})
+        self.assertIn("evaluator-owned and cannot be supplied by runner", rejection_reason)
+
+    def test_build_experiment_result_ignores_runner_override_for_evaluator_owned_metric(self):
+        experiment_result = research_objects.build_experiment_result(
+            {
+                "task_status": "done",
+                "result_available": True,
+                "write_audit": {},
+                "task_id": "task_20260619_160400_ownedmetric",
+                "intake_id": "intake_ownedmetric",
+                "workspace": "demo",
+                "updated_at": "2026-06-19T16:04:00Z",
+            },
+            {
+                "required": True,
+                "experiment_id": "experiment_metric_probe_owned",
+                "hypothesis_ids": ["hypothesis_metric_probe_owned"],
+                "metric_definitions": [
+                    {
+                        "metric_id": "M-01",
+                        "name": "safe_result_available",
+                        "kind": "binary",
+                        "source": "execution_safe_result_excerpt",
+                        "higher_is_better": True,
+                    },
+                    {
+                        "metric_id": "M-02",
+                        "name": "accuracy_gain",
+                        "kind": "delta",
+                        "source": "runner_metrics",
+                        "higher_is_better": True,
+                    },
+                ],
+                "success_criteria": [
+                    {
+                        "criterion_id": "SC-D1",
+                        "name": "accuracy_gain_positive",
+                        "kind": "metric",
+                        "metric_name": "accuracy_gain",
+                        "target": {"operator": ">", "value": 0.0},
+                    }
+                ],
+            },
+            {},
+            {},
+            runner_metrics={
+                "schema_version": "runner_metrics.v0.2",
+                "metrics": [
+                    {
+                        "metric_id": "M-01",
+                        "name": "safe_result_available",
+                        "value": 0,
+                    },
+                    {
+                        "metric_id": "M-02",
+                        "name": "accuracy_gain",
+                        "value": 0.031,
+                    },
+                ],
+            },
+            runner_metrics_status={
+                "present": True,
+                "trusted": True,
+            },
+        )
+
+        self.assertEqual(experiment_result["metrics"][0]["name"], "safe_result_available")
+        self.assertEqual(experiment_result["metrics"][0]["value"], 1)
+        self.assertIn("non-empty safe result excerpt", experiment_result["metrics"][0]["notes"])
+        self.assertEqual(experiment_result["metrics"][1]["name"], "accuracy_gain")
+        self.assertEqual(experiment_result["metrics"][1]["value"], 0.031)
 
     def test_build_post_run_operator_summary_uses_hypothesis_status_blockers(self):
         summary = operator_summary.build_post_run_operator_summary(
