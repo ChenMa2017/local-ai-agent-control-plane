@@ -51,6 +51,46 @@ def blocker_payload(
     }
 
 
+def _joined_reason(parts: list[str]) -> str:
+    normalized = [str(item).strip() for item in parts if str(item or "").strip()]
+    return "; ".join(normalized)
+
+
+def _hypothesis_review_reason(promotion: JsonObject) -> str:
+    hypothesis_update = promotion.get("hypothesis_update") if isinstance(promotion.get("hypothesis_update"), dict) else {}
+    status_reason = str(hypothesis_update.get("status_reason") or "").strip()
+    status_blockers = [
+        str(item).strip()
+        for item in (hypothesis_update.get("status_blockers") or [])
+        if str(item or "").strip()
+    ]
+    if status_reason or status_blockers:
+        return _joined_reason([status_reason, ", ".join(status_blockers[:3])])
+    return ""
+
+
+def _experiment_review_reason(promotion: JsonObject) -> str:
+    experiment_index_update = promotion.get("experiment_index_update") if isinstance(promotion.get("experiment_index_update"), dict) else {}
+    failure_criteria = (
+        experiment_index_update.get("failure_criteria")
+        if isinstance(experiment_index_update.get("failure_criteria"), list)
+        else []
+    )
+    triggered_failure_criteria = [
+        str(item.get("name") or item.get("criterion_id") or "").strip()
+        for item in failure_criteria
+        if isinstance(item, dict) and str(item.get("status") or "").strip() == "triggered"
+    ]
+    if triggered_failure_criteria:
+        return f"Triggered failure criteria: {', '.join(triggered_failure_criteria[:3])}"
+    experiment_result = str(experiment_index_update.get("experiment_result") or "").strip()
+    experiment_validity = str(experiment_index_update.get("experiment_validity") or "").strip()
+    assessment_basis = str(experiment_index_update.get("assessment_basis") or "").strip()
+    if experiment_validity or experiment_result or assessment_basis:
+        return _joined_reason([experiment_validity, experiment_result, assessment_basis])
+    return ""
+
+
 def current_conclusion_operator_context(promotion: JsonObject | None) -> tuple[str, str | None, str, str]:
     if not isinstance(promotion, dict):
         return "", None, "", ""
@@ -112,29 +152,30 @@ def hypothesis_operator_context(promotion: JsonObject | None) -> tuple[str, str 
         or str(promotion.get("target_path_hint") or "").strip()
         or None
     )
-    if notes:
-        return notes[0], target_path, sync_status, decision
+    detailed_reason = _hypothesis_review_reason(promotion)
     if sync_status == "review_bundle_written":
         return (
-            "A hypothesis review bundle was written and needs operator resolution before project publication.",
+            detailed_reason or "A hypothesis review bundle was written and needs operator resolution before project publication.",
             target_path,
             sync_status,
             decision,
         )
     if state == "review_required":
         return (
-            "The hypothesis candidate still has unresolved clarification or review requirements.",
+            detailed_reason or "The hypothesis candidate still has unresolved clarification or review requirements.",
             target_path,
             sync_status,
             decision,
         )
     if state == "human_review_required" or decision == "blocked_on_human_review":
         return (
-            "A human decision is required before any hypothesis promotion can proceed.",
+            detailed_reason or "A human decision is required before any hypothesis promotion can proceed.",
             target_path,
             sync_status,
             decision,
         )
+    if notes:
+        return notes[0], target_path, sync_status, decision
     return state or decision or sync_status, target_path, sync_status, decision
 
 
@@ -152,29 +193,30 @@ def experiment_operator_context(promotion: JsonObject | None) -> tuple[str, str 
         or str(promotion.get("target_path_hint") or "").strip()
         or None
     )
-    if notes:
-        return notes[0], target_path, sync_status, decision
+    detailed_reason = _experiment_review_reason(promotion)
     if sync_status == "review_bundle_written":
         return (
-            "An experiment review bundle was written and needs operator resolution before project publication.",
+            detailed_reason or "An experiment review bundle was written and needs operator resolution before project publication.",
             target_path,
             sync_status,
             decision,
         )
     if state == "review_required":
         return (
-            "The experiment candidate is structurally ready, but project policy still requires review before publication.",
+            detailed_reason or "The experiment candidate is structurally ready, but project policy still requires review before publication.",
             target_path,
             sync_status,
             decision,
         )
     if state == "human_review_required" or decision == "blocked_on_human_review":
         return (
-            "A human decision is required before any experiment promotion can proceed.",
+            detailed_reason or "A human decision is required before any experiment promotion can proceed.",
             target_path,
             sync_status,
             decision,
         )
+    if notes:
+        return notes[0], target_path, sync_status, decision
     return state or decision or sync_status, target_path, sync_status, decision
 
 

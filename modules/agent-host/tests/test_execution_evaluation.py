@@ -6,6 +6,7 @@ from pathlib import Path
 
 import execution_evaluation
 import experiment_contracts
+import operator_summary
 import research_objects
 
 
@@ -1332,6 +1333,77 @@ class ExecutionEvaluationTests(unittest.TestCase):
                 "runner_metrics_rejected",
                 attachments["evaluation_report"]["validity"]["limitations"],
             )
+            self.assertIn(
+                "runner_metrics_rejected",
+                attachments["operator_summary"]["next_safe_action"]["reason"],
+            )
+
+    def test_build_post_run_operator_summary_uses_hypothesis_status_blockers(self):
+        summary = operator_summary.build_post_run_operator_summary(
+            {
+                "intake_id": "intake_operator_summary_hypothesis",
+                "workspace": "demo",
+                "task_id": "task_20260619_150000_hypothesis_reason",
+                "task_status": "done",
+                "result_available": True,
+                "evidence_retrieval_decision": "safe_to_answer",
+            },
+            None,
+            None,
+            {
+                "promotion_state": "review_required",
+                "decision": "prepare_review_bundle",
+                "hypothesis_update": {
+                    "status": "testing",
+                    "status_reason": "experiment_not_promotion_eligible",
+                    "status_blockers": ["runner_metrics_rejected"],
+                },
+                "notes": ["The hypothesis candidate still has unresolved clarification or review requirements."],
+            },
+            None,
+            None,
+            {"validity": {}},
+            None,
+        )
+
+        self.assertEqual(summary["next_safe_action"]["kind"], "review_hypothesis_promotion")
+        self.assertIn("runner_metrics_rejected", summary["next_safe_action"]["reason"])
+        self.assertIn("runner_metrics_rejected", summary["blockers"][0]["reason"])
+
+    def test_build_post_run_operator_summary_uses_experiment_failure_criteria(self):
+        summary = operator_summary.build_post_run_operator_summary(
+            {
+                "intake_id": "intake_operator_summary_experiment",
+                "workspace": "demo",
+                "task_id": "task_20260619_150500_experiment_reason",
+                "task_status": "done",
+                "result_available": True,
+                "evidence_retrieval_decision": "safe_to_answer",
+            },
+            None,
+            None,
+            None,
+            {
+                "promotion_state": "review_required",
+                "decision": "prepare_review_bundle",
+                "experiment_index_update": {
+                    "failure_criteria": [
+                        {
+                            "name": "accuracy_gain_exceeds_guardrail",
+                            "status": "triggered",
+                        }
+                    ],
+                },
+                "notes": ["The experiment candidate is structurally ready, but project policy still requires review before publication."],
+            },
+            None,
+            {"validity": {}},
+            None,
+        )
+
+        self.assertEqual(summary["next_safe_action"]["kind"], "review_experiment_promotion")
+        self.assertIn("accuracy_gain_exceeds_guardrail", summary["next_safe_action"]["reason"])
+        self.assertIn("accuracy_gain_exceeds_guardrail", summary["blockers"][0]["reason"])
 
     def test_maybe_attach_execution_evaluation_writes_experiment_review_bundle_when_required(self):
         with tempfile.TemporaryDirectory() as tmp:
