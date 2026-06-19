@@ -181,6 +181,7 @@ def normalize_experiment_index_record(update: JsonObject) -> JsonObject:
         "without_definition": update.get("without_definition"),
         "metric_definitions": list(update.get("metric_definitions") or []),
         "success_criteria": list(update.get("success_criteria") or []),
+        "failure_criteria": list(update.get("failure_criteria") or []),
         "primary_metrics": list(update.get("primary_metrics") or []),
         "primary_metric_name": update.get("primary_metric_name"),
         "assessment_basis": update.get("assessment_basis"),

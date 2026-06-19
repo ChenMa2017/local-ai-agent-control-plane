@@ -421,6 +421,11 @@ def build_experiment_index_update(
         "without_definition": "No bounded result excerpt is available for this prepared experiment candidate.",
         "metric_definitions": list(experiment_spec.get("metric_definitions") or []),
         "success_criteria": list(experiment_spec.get("success_criteria") or []),
+        "failure_criteria": (
+            list((experiment_result or {}).get("failure_criteria") or [])
+            if isinstance(experiment_result, dict) and list((experiment_result or {}).get("failure_criteria") or [])
+            else list(experiment_spec.get("failure_criteria") or [])
+        ),
         "primary_metrics": metrics
         or [
             {

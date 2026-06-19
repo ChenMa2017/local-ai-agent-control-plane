@@ -404,6 +404,23 @@ class ExecutionEvaluationTests(unittest.TestCase):
                                 "status": "missing",
                             }
                         ],
+                        "failure_criteria": [
+                            {
+                                "criterion_id": "FC-01",
+                                "name": "task_not_terminal",
+                                "kind": "execution",
+                            },
+                            {
+                                "criterion_id": "FC-02",
+                                "name": "protected_path_violation",
+                                "kind": "policy",
+                            },
+                            {
+                                "criterion_id": "FC-03",
+                                "name": "missing_safe_result_excerpt",
+                                "kind": "execution",
+                            },
+                        ],
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -449,12 +466,17 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(experiment_result["metrics"][0]["name"], "safe_result_available")
             self.assertEqual(experiment_result["metrics"][0]["value"], 1)
             self.assertIn("success_criteria_unresolved", experiment_result["limitations"])
+            self.assertEqual(experiment_result["failure_criteria"][0]["status"], "clear")
+            self.assertEqual(experiment_result["failure_criteria"][1]["status"], "clear")
+            self.assertEqual(experiment_result["failure_criteria"][2]["status"], "clear")
             self.assertEqual(experiment_update["experiment_id"], "experiment_latency_probe")
             self.assertEqual(experiment_update["status"], "draft")
             self.assertEqual(experiment_update["experiment_result"], "inconclusive")
             self.assertEqual(experiment_update["experiment_validity"], "valid")
             self.assertEqual(experiment_update["assessment_basis"], "structural_only")
             self.assertTrue(experiment_update["success_criteria"])
+            self.assertEqual(experiment_update["failure_criteria"][2]["name"], "missing_safe_result_excerpt")
+            self.assertEqual(experiment_update["failure_criteria"][2]["status"], "clear")
             self.assertEqual(experiment_promotion["promotion_state"], "candidate_ready")
             self.assertEqual(experiment_promotion["project_sync"]["status"], "applied")
             self.assertEqual(experiment_promotion["project_sync"]["transition_validation"]["status"], "valid")
@@ -492,6 +514,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(experiment_records[0]["experiment_id"], "experiment_latency_probe")
             self.assertEqual(experiment_records[0]["status"], "draft")
             self.assertEqual(experiment_records[0]["experiment_result"], "inconclusive")
+            self.assertEqual(experiment_records[0]["failure_criteria"][0]["status"], "clear")
             self.assertEqual(experiment_records[0]["run_id"], "task_20260618_120000_expapply")
 
             current_conclusions = json.loads((root / "project_index" / "current_conclusions.json").read_text())
@@ -788,6 +811,54 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(experiment_result["adjudication_status"], "accepted")
         self.assertTrue(experiment_result["promotion_eligible"])
         self.assertEqual(experiment_result["success_criteria"][0]["status"], "pass")
+
+    def test_build_experiment_result_evaluates_failure_criteria_statuses(self):
+        experiment_result = research_objects.build_experiment_result(
+            {
+                "task_status": "running",
+                "result_available": False,
+                "write_audit": {"protected_path_violation": True},
+                "task_id": "task_20260619_122000_failurecriteria",
+                "intake_id": "intake_failurecriteria",
+                "workspace": "demo",
+                "updated_at": "2026-06-19T12:20:00Z",
+            },
+            {
+                "required": True,
+                "experiment_id": "experiment_failure_probe",
+                "hypothesis_ids": ["hypothesis_failure_probe"],
+                "failure_criteria": [
+                    {
+                        "criterion_id": "FC-01",
+                        "name": "task_not_terminal",
+                        "kind": "execution",
+                    },
+                    {
+                        "criterion_id": "FC-02",
+                        "name": "protected_path_violation",
+                        "kind": "policy",
+                    },
+                    {
+                        "criterion_id": "FC-03",
+                        "name": "missing_safe_result_excerpt",
+                        "kind": "execution",
+                    },
+                ],
+            },
+            {},
+            {},
+        )
+
+        self.assertEqual(experiment_result["validity"], "invalid")
+        self.assertEqual(experiment_result["result"], "invalid")
+        self.assertEqual(
+            [item["status"] for item in experiment_result["failure_criteria"]],
+            ["triggered", "triggered", "triggered"],
+        )
+        self.assertEqual(
+            [item["triggered"] for item in experiment_result["failure_criteria"]],
+            [True, True, True],
+        )
 
     def test_build_experiment_result_requires_review_for_conflicting_success_criteria(self):
         experiment_result = research_objects.build_experiment_result(

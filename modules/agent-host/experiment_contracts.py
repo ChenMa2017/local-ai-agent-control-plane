@@ -384,6 +384,36 @@ def _merge_success_criteria(
     return merged_criteria
 
 
+def _merge_failure_criteria(
+    failure_criteria: list[JsonObject],
+    *,
+    task_status: str,
+    result_available: bool,
+    protected_path_violation: bool,
+) -> list[JsonObject]:
+    merged_criteria: list[JsonObject] = []
+    for item in failure_criteria:
+        if not isinstance(item, dict):
+            continue
+        merged = dict(item)
+        name = str(merged.get("name") or "").strip()
+        triggered: bool | None = None
+        if name == "task_not_terminal":
+            triggered = task_status not in TERMINAL_TASK_STATUSES
+        elif name == "protected_path_violation":
+            triggered = protected_path_violation
+        elif name == "missing_safe_result_excerpt":
+            triggered = not result_available
+        merged["status"] = (
+            "triggered"
+            if triggered is True
+            else ("clear" if triggered is False else "not_evaluated")
+        )
+        merged["triggered"] = triggered
+        merged_criteria.append(merged)
+    return merged_criteria
+
+
 def build_experiment_contract_fields(
     *,
     objective: str,
@@ -599,6 +629,11 @@ def build_structural_experiment_result(
         if isinstance(experiment_spec.get("success_criteria"), list)
         else []
     )
+    failure_criteria = (
+        list(experiment_spec.get("failure_criteria") or [])
+        if isinstance(experiment_spec.get("failure_criteria"), list)
+        else []
+    )
     metric_definitions = (
         list(experiment_spec.get("metric_definitions") or [])
         if isinstance(experiment_spec.get("metric_definitions"), list)
@@ -630,6 +665,12 @@ def build_structural_experiment_result(
     success_criteria = _merge_success_criteria(
         success_criteria,
         metrics,
+    )
+    failure_criteria = _merge_failure_criteria(
+        failure_criteria,
+        task_status=task_status,
+        result_available=result_available,
+        protected_path_violation=protected_path_violation,
     )
     unresolved_success_criteria = [
         str(item.get("name") or item.get("criterion_id") or "")
@@ -736,6 +777,7 @@ def build_structural_experiment_result(
         "metrics": metrics,
         "baseline_comparison": baseline_comparison,
         "success_criteria": success_criteria,
+        "failure_criteria": failure_criteria,
         "limitations": limitations,
         "runner_metrics_artifact": {
             "present": bool(runner_metrics_metadata.get("present")),
