@@ -506,6 +506,32 @@ def hypothesis_promotion_state(
     return "candidate_ready"
 
 
+def derive_hypothesis_record_status(
+    evaluation: JsonObject,
+    experiment_spec: JsonObject,
+    experiment_result: JsonObject | None,
+) -> str:
+    if not bool(experiment_spec.get("required")):
+        return "proposed"
+    if not evaluation.get("result_available") or str(evaluation.get("task_status") or "") != "done":
+        return "testing"
+    evaluation_result = (
+        str((experiment_result or {}).get("result") or "").strip()
+        if isinstance(experiment_result, dict)
+        else ""
+    )
+    evaluation_validity = (
+        str((experiment_result or {}).get("validity") or "").strip()
+        if isinstance(experiment_result, dict)
+        else ""
+    )
+    if evaluation_validity == "invalid" or evaluation_result == "invalid":
+        return "invalid"
+    if evaluation_result in {"supported", "refuted", "inconclusive"}:
+        return evaluation_result
+    return "testing"
+
+
 def build_hypothesis_update(
     evaluation: JsonObject,
     contract: JsonObject,
@@ -594,9 +620,11 @@ def build_hypothesis_update(
     confidence_value = confidence.get("value")
     if not isinstance(confidence_value, (int, float)):
         confidence_value = 0.35 if promotion_state == "candidate_ready" else 0.2
-    hypothesis_status = "proposed"
-    if bool(experiment_spec.get("required")) and evaluation.get("result_available"):
-        hypothesis_status = "active"
+    hypothesis_status = derive_hypothesis_record_status(
+        evaluation,
+        experiment_spec,
+        experiment_result,
+    )
     return {
         "schema_version": "hypothesis_record.v0.1",
         "intake_id": evaluation.get("intake_id"),
@@ -1768,11 +1796,27 @@ def validate_hypothesis_registry_transition(
     existing_record: JsonObject | None,
     update: JsonObject,
 ) -> JsonObject:
-    known_statuses = {"proposed", "active", "superseded", "archived"}
+    known_statuses = {
+        "proposed",
+        "testing",
+        "active",
+        "supported",
+        "refuted",
+        "inconclusive",
+        "invalid",
+        "superseded",
+        "archived",
+    }
     allowed_transitions = {
         "__new__": set(known_statuses),
-        "proposed": {"proposed", "active", "superseded", "archived"},
-        "active": {"active", "superseded", "archived"},
+        "proposed": {"proposed", "testing", "active", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
+        "testing": {"testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
+        # Keep `active` as a legacy-compatible state for older project registries.
+        "active": {"active", "testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
+        "supported": {"supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
+        "refuted": {"refuted", "supported", "inconclusive", "invalid", "superseded", "archived"},
+        "inconclusive": {"testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
+        "invalid": {"testing", "supported", "refuted", "inconclusive", "invalid", "superseded", "archived"},
         "superseded": {"superseded", "archived"},
         "archived": {"archived"},
     }

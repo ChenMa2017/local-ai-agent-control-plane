@@ -269,7 +269,9 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
 - HYPOTHESIS_UPDATE
   当 intake 阶段已经形成 hypothesis candidate 时，
   Agent Host 会把结果整理成一份 project-level hypothesis record 草稿，
-  包含 hypothesis_id / claim / mechanism / prediction / falsification_criteria / supporting_evidence
+  包含 hypothesis_id / claim / mechanism / prediction / falsification_criteria / supporting_evidence，
+  同时也会把 post-run 研究状态写进 `status / evaluation_result / evaluation_validity`，
+  让 `testing / inconclusive / invalid` 这类真实阶段能直接出现在 hypothesis record 里
 
 - HYPOTHESIS_PROMOTION
   把 hypothesis_update 包成一个 promotion bundle，

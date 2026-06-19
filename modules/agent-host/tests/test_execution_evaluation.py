@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import execution_evaluation
+import research_objects
 
 
 class ExecutionEvaluationTests(unittest.TestCase):
@@ -431,7 +432,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             hypothesis_promotion = attachments["hypothesis_promotion"]
             experiment_result = attachments["experiment_result"]
             self.assertEqual(hypothesis_update["hypothesis_id"], "hypothesis_latency_probe")
-            self.assertEqual(hypothesis_update["status"], "active")
+            self.assertEqual(hypothesis_update["status"], "inconclusive")
             self.assertEqual(hypothesis_update["evaluation_result"], "inconclusive")
             self.assertEqual(hypothesis_update["evaluation_validity"], "valid")
             self.assertEqual(hypothesis_promotion["promotion_state"], "candidate_ready")
@@ -478,7 +479,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             ]
             self.assertEqual(hypothesis_records[0]["hypothesis_id"], "hypothesis_latency_probe")
             self.assertEqual(hypothesis_records[0]["revision"], 1)
-            self.assertEqual(hypothesis_records[0]["status"], "active")
+            self.assertEqual(hypothesis_records[0]["status"], "inconclusive")
 
             experiment_index_path = root / "project_index" / "experiment_index.jsonl"
             self.assertTrue(experiment_index_path.exists())
@@ -744,7 +745,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(hypothesis_sync["status"], "transition_review_required")
             self.assertEqual(hypothesis_sync["transition_validation"]["reason"], "transition_not_allowed")
             self.assertEqual(hypothesis_sync["transition_validation"]["current_status"], "archived")
-            self.assertEqual(hypothesis_sync["transition_validation"]["proposed_status"], "active")
+            self.assertEqual(hypothesis_sync["transition_validation"]["proposed_status"], "inconclusive")
             self.assertEqual(experiment_sync["status"], "transition_review_required")
             self.assertEqual(experiment_sync["transition_validation"]["reason"], "transition_not_allowed")
             self.assertEqual(experiment_sync["transition_validation"]["current_status"], "archived")
@@ -781,6 +782,22 @@ class ExecutionEvaluationTests(unittest.TestCase):
             ]
             self.assertEqual(len(experiment_records), 1)
             self.assertEqual(experiment_records[0]["status"], "archived")
+
+    def test_validate_hypothesis_registry_transition_accepts_legacy_active_to_inconclusive(self):
+        transition = research_objects.validate_hypothesis_registry_transition(
+            {
+                "hypothesis_id": "hypothesis_latency_probe",
+                "status": "active",
+            },
+            {
+                "hypothesis_id": "hypothesis_latency_probe",
+                "status": "inconclusive",
+            },
+        )
+
+        self.assertEqual(transition["status"], "valid")
+        self.assertEqual(transition["current_status"], "active")
+        self.assertEqual(transition["proposed_status"], "inconclusive")
 
     def test_maybe_attach_execution_evaluation_writes_review_bundle_when_publication_requires_review(self):
         with tempfile.TemporaryDirectory() as tmp:
