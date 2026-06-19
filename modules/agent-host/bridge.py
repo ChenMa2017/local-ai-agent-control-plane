@@ -27,27 +27,18 @@ from codex_execution_handlers import build_codex_execution_handlers
 from codex_task_runtime_bindings import build_codex_task_runtime_bindings
 from health_bridge_bindings import build_health_bridge_bindings
 from intake_bridge_bindings import build_intake_bridge_bindings
+from stream_bridge_bindings import build_stream_bridge_bindings
 from watchdog_bridge_bindings import build_watchdog_bridge_bindings
 from execution_evaluation import (
     maybe_attach_execution_evaluation,
 )
 from result_streaming import (
-    cleanup_stream_tokens as cleanup_stream_token_records,
-    issue_stream_token,
     redact_url_secrets,
-    remaining_seconds as compute_remaining_seconds,
-    resolve_stream_principal,
-    safe_log_snapshot as load_safe_log_snapshot,
     stream_task_events,
-    task_snapshot as build_task_snapshot,
 )
 from codex_tasking import (
     read_visible_task_summaries,
 )
-from codex_runtime import (
-    principal_from_stream_token as resolve_stream_session_principal,
-)
-from web_ui import render_index_html
 from prepared_context import (
     prepared_run_prompt,
     prepared_run_summary,
@@ -298,31 +289,28 @@ def attach_execution_evaluation(
     )
 
 
-def cleanup_stream_tokens() -> None:
-    cleanup_stream_token_records(STREAM_TOKENS, STREAM_TOKEN_LOCK, utc_now)
-
-
-def create_stream_token_payload(task_id: str, user: str, role: str) -> dict[str, Any]:
-    return issue_stream_token(
-        task_id,
-        user,
-        role,
-        STREAM_TOKENS,
-        STREAM_TOKEN_LOCK,
-        utc_now,
-        STREAM_TOKEN_TTL_SECONDS,
-    )
-
-
-def resolve_active_stream_principal(task_id: str, stream_token: str) -> tuple[str, str]:
-    return resolve_stream_principal(
-        task_id,
-        stream_token,
-        STREAM_TOKENS,
-        STREAM_TOKEN_LOCK,
-        utc_now,
-        lambda message, status: BridgeError(message, status),
-    )
+STREAM_BRIDGE_BINDINGS = build_stream_bridge_bindings(
+    stream_tokens=STREAM_TOKENS,
+    stream_token_lock=STREAM_TOKEN_LOCK,
+    utc_now=utc_now,
+    stream_token_ttl_seconds=STREAM_TOKEN_TTL_SECONDS,
+    auth_principal_factory=AuthPrincipal,
+    parse_iso_datetime=parse_iso_datetime,
+    run_codex_bridge=run_codex_bridge,
+    require_success=require_success,
+    sse_log_tail_lines=SSE_LOG_TAIL_LINES,
+    sse_log_max_chars=SSE_LOG_MAX_CHARS,
+    status_error_factory=lambda message, status: BridgeError(message, status),
+)
+cleanup_stream_tokens = STREAM_BRIDGE_BINDINGS.cleanup_stream_tokens
+create_stream_token_payload = STREAM_BRIDGE_BINDINGS.create_stream_token_payload
+resolve_active_stream_principal = STREAM_BRIDGE_BINDINGS.resolve_active_stream_principal
+principal_from_stream_token = STREAM_BRIDGE_BINDINGS.principal_from_stream_token
+remaining_seconds = STREAM_BRIDGE_BINDINGS.remaining_seconds
+task_snapshot = STREAM_BRIDGE_BINDINGS.task_snapshot
+safe_log_snapshot = STREAM_BRIDGE_BINDINGS.safe_log_snapshot
+has_safe_result = STREAM_BRIDGE_BINDINGS.has_safe_result
+index_html = STREAM_BRIDGE_BINDINGS.index_html
 
 
 CODEX_EXECUTION_HANDLERS = build_codex_execution_handlers(
@@ -371,44 +359,6 @@ handle_codex_run = CODEX_EXECUTION_HANDLERS.handle_codex_run
 handle_codex_query = CODEX_EXECUTION_HANDLERS.handle_codex_query
 handle_codex_result_page = CODEX_EXECUTION_HANDLERS.handle_codex_result_page
 handle_stream_token = CODEX_EXECUTION_HANDLERS.handle_stream_token
-
-
-def principal_from_stream_token(task_id: str, stream_token: str) -> AuthPrincipal:
-    user, role = resolve_stream_session_principal(
-        task_id,
-        stream_token,
-        resolve_stream_principal=resolve_active_stream_principal,
-    )
-    return AuthPrincipal(user=user, role=role)
-
-
-def remaining_seconds(task: dict[str, Any]) -> int | None:
-    return compute_remaining_seconds(task, parse_iso_datetime, utc_now)
-
-
-def task_snapshot(task: dict[str, Any]) -> dict[str, Any]:
-    return build_task_snapshot(task, remaining_seconds)
-
-
-def safe_log_snapshot(config: BridgeConfig, task_id: str) -> dict[str, Any]:
-    return load_safe_log_snapshot(
-        config,
-        task_id,
-        run_codex_bridge,
-        require_success,
-        tail_lines=SSE_LOG_TAIL_LINES,
-        max_chars=SSE_LOG_MAX_CHARS,
-        timeout=10,
-        error_factory=lambda message, status: BridgeError(message, status),
-    )
-
-
-def has_safe_result(task_dir: Path) -> bool:
-    return (task_dir / "result.safe.md").exists() or (task_dir / "result.md").exists()
-
-
-def index_html(config: BridgeConfig) -> str:
-    return render_index_html(list(config.projects))
 
 
 def build_handler_dependencies() -> HandlerDependencies:
