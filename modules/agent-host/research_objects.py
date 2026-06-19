@@ -266,6 +266,7 @@ def build_experiment_result(
     evaluation: JsonObject,
     experiment_spec: JsonObject,
     review_proposal_draft: JsonObject,
+    runner_metrics: JsonObject | None = None,
 ) -> JsonObject | None:
     if not bool(experiment_spec.get("required")):
         return None
@@ -273,6 +274,7 @@ def build_experiment_result(
         evaluation=evaluation,
         experiment_spec=experiment_spec,
         review_required=bool(review_proposal_draft.get("requires_human_review")),
+        runner_metrics=runner_metrics,
     )
 
 
@@ -353,7 +355,18 @@ def build_experiment_index_update(
         if isinstance(experiment_result, dict)
         else []
     )
-    primary_metric_name = str(metrics[0].get("name") or "") if metrics and isinstance(metrics[0], dict) else "safe_result_available"
+    preferred_metric = next(
+        (
+            item
+            for item in metrics
+            if isinstance(item, dict)
+            and str(item.get("name") or "").strip()
+            and str(item.get("name") or "").strip() != "safe_result_available"
+            and item.get("value") is not None
+        ),
+        metrics[0] if metrics and isinstance(metrics[0], dict) else {},
+    )
+    primary_metric_name = str(preferred_metric.get("name") or "") if isinstance(preferred_metric, dict) else "safe_result_available"
     if not primary_metric_name:
         primary_metric_name = "safe_result_available"
     baseline_spec = experiment_spec.get("baseline_spec") if isinstance(experiment_spec.get("baseline_spec"), dict) else {}
@@ -783,6 +796,11 @@ def build_research_machine_checks(
         "experiment_spec_present": bool(experiment_spec),
         "experiment_result_present": (not bool(experiment_spec.get("required"))) or bool(experiment_result),
         "experiment_required": bool(experiment_spec.get("required")),
+        "experiment_metric_backed": (
+            str((experiment_result or {}).get("assessment_basis") or "") == "runner_metrics"
+            if isinstance(experiment_result, dict)
+            else False
+        ),
         "experiment_success_criteria_resolved": experiment_success_criteria_resolved,
         "experiment_has_hypothesis_binding": (not bool(experiment_spec.get("required"))) or bool(experiment_hypothesis_ids),
         "generated_supporting_experiments_present": (not bool(experiment_spec.get("required"))) or bool(generated_supporting_experiments),
@@ -828,7 +846,7 @@ def build_research_validity(
     if machine_checks.get("human_review_required"):
         limitations.append("human_review_required")
 
-    status = "valid_structural_only"
+    status = "valid_metric_backed" if machine_checks.get("experiment_metric_backed") else "valid_structural_only"
     if blocking_reasons:
         status = "invalid"
     elif machine_checks.get("human_review_required"):
@@ -868,7 +886,7 @@ def build_hypothesis_assessment(
         "hypothesis_id": hypothesis_id,
         "assessment": assessment,
         "confidence": confidence_value,
-        "assessment_basis": "structural_only",
+        "assessment_basis": str(first.get("assessment_basis") or "structural_only"),
         "status_candidate": str(first.get("status") or "") or None,
         "evaluation_result": str(first.get("evaluation_result") or "") or None,
         "evaluation_validity": str(first.get("evaluation_validity") or "") or None,
@@ -1164,7 +1182,11 @@ def build_evaluation_report(
         "claim_boundary": claim_boundary_for_evaluation(evaluation),
         "safe_result_excerpt": evaluation.get("safe_result_excerpt"),
         "created_by": "agent_host_evaluator_stub",
-        "assessment_basis": "structural_only",
+        "assessment_basis": (
+            str((experiment_result or {}).get("assessment_basis") or "structural_only")
+            if isinstance(experiment_result, dict)
+            else "structural_only"
+        ),
         "machine_checks": machine_checks,
         "validity": validity,
         "experiment_result": experiment_result or None,

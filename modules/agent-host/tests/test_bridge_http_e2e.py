@@ -42,9 +42,15 @@ class BridgeHttpE2ETests(unittest.TestCase):
         *,
         task_id: str,
         result_text: str,
+        runner_metrics: dict[str, object] | None = None,
     ) -> None:
         script = codex_root / "scripts" / "codex-bridge.js"
         script.parent.mkdir(parents=True, exist_ok=True)
+        runner_metrics_write = (
+            f"  fs.writeFileSync(path.join(taskDir, 'RUNNER_METRICS.json'), JSON.stringify({json.dumps(runner_metrics, ensure_ascii=False)}, null, 2));\n"
+            if runner_metrics is not None
+            else ""
+        )
         script.write_text(
             "const fs = require('fs');\n"
             "const path = require('path');\n"
@@ -80,7 +86,8 @@ class BridgeHttpE2ETests(unittest.TestCase):
             "  };\n"
             "  fs.writeFileSync(path.join(taskDir, 'task.json'), JSON.stringify(task, null, 2));\n"
             f"  fs.writeFileSync(path.join(taskDir, 'result.md'), {json.dumps(result_text)});\n"
-            "  fs.writeFileSync(path.join(taskDir, 'bridge.log'), 'log line\\n');\n"
+            + runner_metrics_write
+            + "  fs.writeFileSync(path.join(taskDir, 'bridge.log'), 'log line\\n');\n"
             "  console.log(`queued ${taskId}`);\n"
             "  process.exit(0);\n"
             "}\n"

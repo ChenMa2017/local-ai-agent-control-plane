@@ -5,6 +5,190 @@ from typing import Any
 JsonObject = dict[str, Any]
 
 TERMINAL_TASK_STATUSES = {"done", "failed", "timeout", "stale", "cancelled", "policy_violation"}
+PASS_STATUSES = {"pass", "passed", "met", "success", "satisfied"}
+FAIL_STATUSES = {"fail", "failed", "not_met", "unsatisfied"}
+
+
+def _metric_key(item: JsonObject) -> str:
+    return str(item.get("name") or item.get("metric_id") or "").strip().lower()
+
+
+def _criterion_key(item: JsonObject) -> str:
+    return str(item.get("criterion_id") or item.get("name") or "").strip().lower()
+
+
+def _coerce_comparable(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return stripped
+        try:
+            return float(stripped)
+        except ValueError:
+            return stripped
+    return value
+
+
+def _evaluate_target(value: Any, target: JsonObject) -> bool | None:
+    operator = str(target.get("operator") or "").strip()
+    if not operator:
+        return None
+    actual = _coerce_comparable(value)
+    expected = _coerce_comparable(target.get("value"))
+    try:
+        if operator == ">":
+            return actual > expected
+        if operator == ">=":
+            return actual >= expected
+        if operator == "<":
+            return actual < expected
+        if operator == "<=":
+            return actual <= expected
+        if operator == "==":
+            return actual == expected
+        if operator == "!=":
+            return actual != expected
+    except TypeError:
+        return None
+    return None
+
+
+def _normalized_outcome_status(status: Any) -> str | None:
+    normalized = str(status or "").strip().lower()
+    if normalized in PASS_STATUSES:
+        return "pass"
+    if normalized in FAIL_STATUSES:
+        return "fail"
+    return None
+
+
+def _merge_metric_items(
+    metric_definitions: list[JsonObject],
+    provided_metrics: list[JsonObject],
+    *,
+    result_available: bool,
+) -> list[JsonObject]:
+    metric_index = {
+        _metric_key(item): dict(item)
+        for item in provided_metrics
+        if isinstance(item, dict) and _metric_key(item)
+    }
+    metrics: list[JsonObject] = []
+    seen_keys: set[str] = set()
+    for item in metric_definitions:
+        if not isinstance(item, dict):
+            continue
+        merged = dict(item)
+        key = _metric_key(merged)
+        provided = metric_index.get(key) if key else None
+        if isinstance(provided, dict):
+            for field in ("value", "notes", "unit", "status", "target", "baseline_value", "baseline_delta", "source"):
+                if field in provided:
+                    merged[field] = provided.get(field)
+            if "higher_is_better" in provided and provided.get("higher_is_better") is not None:
+                merged["higher_is_better"] = provided.get("higher_is_better")
+        name = str(merged.get("name") or "")
+        if name == "safe_result_available" and "value" not in merged:
+            merged["value"] = 1 if result_available else 0
+            merged["notes"] = (
+                "Execution produced a non-empty safe result excerpt."
+                if result_available
+                else "Execution did not produce a safe result excerpt."
+            )
+        elif "value" not in merged:
+            merged["value"] = None
+            merged["notes"] = "Structured runner metrics are not yet exported for this experiment."
+        if not _normalized_outcome_status(merged.get("status")) and isinstance(merged.get("target"), dict):
+            evaluated = _evaluate_target(merged.get("value"), merged.get("target"))
+            if evaluated is True:
+                merged["status"] = "pass"
+            elif evaluated is False:
+                merged["status"] = "fail"
+        metrics.append(merged)
+        if key:
+            seen_keys.add(key)
+    for item in provided_metrics:
+        if not isinstance(item, dict):
+            continue
+        key = _metric_key(item)
+        if not key or key in seen_keys:
+            continue
+        extra = dict(item)
+        if not _normalized_outcome_status(extra.get("status")) and isinstance(extra.get("target"), dict):
+            evaluated = _evaluate_target(extra.get("value"), extra.get("target"))
+            if evaluated is True:
+                extra["status"] = "pass"
+            elif evaluated is False:
+                extra["status"] = "fail"
+        metrics.append(extra)
+    return metrics
+
+
+def _merge_success_criteria(
+    success_criteria: list[JsonObject],
+    provided_criteria: list[JsonObject],
+    metrics: list[JsonObject],
+) -> list[JsonObject]:
+    criteria_index = {
+        _criterion_key(item): dict(item)
+        for item in provided_criteria
+        if isinstance(item, dict) and _criterion_key(item)
+    }
+    metric_index = {
+        _metric_key(item): item
+        for item in metrics
+        if isinstance(item, dict) and _metric_key(item)
+    }
+    merged_criteria: list[JsonObject] = []
+    seen_keys: set[str] = set()
+    for item in success_criteria:
+        if not isinstance(item, dict):
+            continue
+        merged = dict(item)
+        key = _criterion_key(merged)
+        provided = criteria_index.get(key) if key else None
+        if isinstance(provided, dict):
+            merged.update(provided)
+        metric_name = str(merged.get("metric_name") or "").strip().lower()
+        metric = metric_index.get(metric_name) if metric_name else None
+        if not _normalized_outcome_status(merged.get("status")) and isinstance(metric, dict):
+            metric_status = _normalized_outcome_status(metric.get("status"))
+            if metric_status is not None:
+                merged["status"] = metric_status
+            elif isinstance(merged.get("target"), dict):
+                evaluated = _evaluate_target(metric.get("value"), merged.get("target"))
+                if evaluated is True:
+                    merged["status"] = "pass"
+                elif evaluated is False:
+                    merged["status"] = "fail"
+        merged_criteria.append(merged)
+        if key:
+            seen_keys.add(key)
+    for item in provided_criteria:
+        if not isinstance(item, dict):
+            continue
+        key = _criterion_key(item)
+        if not key or key in seen_keys:
+            continue
+        extra = dict(item)
+        metric_name = str(extra.get("metric_name") or "").strip().lower()
+        metric = metric_index.get(metric_name) if metric_name else None
+        if not _normalized_outcome_status(extra.get("status")) and isinstance(metric, dict):
+            metric_status = _normalized_outcome_status(metric.get("status"))
+            if metric_status is not None:
+                extra["status"] = metric_status
+            elif isinstance(extra.get("target"), dict):
+                evaluated = _evaluate_target(metric.get("value"), extra.get("target"))
+                if evaluated is True:
+                    extra["status"] = "pass"
+                elif evaluated is False:
+                    extra["status"] = "fail"
+        merged_criteria.append(extra)
+    return merged_criteria
 
 
 def build_experiment_contract_fields(
@@ -211,6 +395,7 @@ def build_structural_experiment_result(
     evaluation: JsonObject,
     experiment_spec: JsonObject,
     review_required: bool,
+    runner_metrics: JsonObject | None = None,
 ) -> JsonObject:
     task_status = str(evaluation.get("task_status") or "")
     result_available = bool(evaluation.get("result_available"))
@@ -220,11 +405,6 @@ def build_structural_experiment_result(
         if isinstance(experiment_spec.get("success_criteria"), list)
         else []
     )
-    unresolved_success_criteria = [
-        str(item.get("name") or item.get("criterion_id") or "")
-        for item in success_criteria
-        if isinstance(item, dict) and str(item.get("status") or "") == "missing"
-    ]
     metric_definitions = (
         list(experiment_spec.get("metric_definitions") or [])
         if isinstance(experiment_spec.get("metric_definitions"), list)
@@ -241,23 +421,32 @@ def build_structural_experiment_result(
                 "description": "Whether the bounded run produced a non-empty safe result excerpt.",
             }
         ]
-    metrics: list[JsonObject] = []
-    for item in metric_definitions:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "")
-        metric = dict(item)
-        if name == "safe_result_available":
-            metric["value"] = 1 if result_available else 0
-            metric["notes"] = (
-                "Execution produced a non-empty safe result excerpt."
-                if result_available
-                else "Execution did not produce a safe result excerpt."
-            )
-        else:
-            metric["value"] = None
-            metric["notes"] = "Structured runner metrics are not yet exported for this experiment."
-        metrics.append(metric)
+    runner_metrics_payload = runner_metrics if isinstance(runner_metrics, dict) else {}
+    provided_metrics = (
+        list(runner_metrics_payload.get("metrics") or [])
+        if isinstance(runner_metrics_payload.get("metrics"), list)
+        else []
+    )
+    provided_success_criteria = (
+        list(runner_metrics_payload.get("success_criteria") or [])
+        if isinstance(runner_metrics_payload.get("success_criteria"), list)
+        else []
+    )
+    metrics = _merge_metric_items(
+        metric_definitions,
+        provided_metrics,
+        result_available=result_available,
+    )
+    success_criteria = _merge_success_criteria(
+        success_criteria,
+        provided_success_criteria,
+        metrics,
+    )
+    unresolved_success_criteria = [
+        str(item.get("name") or item.get("criterion_id") or "")
+        for item in success_criteria
+        if isinstance(item, dict) and str(item.get("status") or "") == "missing"
+    ]
     missing_reproducibility_fields: list[str] = []
     if not list(experiment_spec.get("dataset_refs") or []):
         missing_reproducibility_fields.append("dataset_refs")
@@ -280,17 +469,63 @@ def build_structural_experiment_result(
         validity = "review_required"
 
     result = "inconclusive"
+    assessment_basis = "structural_only"
+    if provided_metrics or provided_success_criteria or str(runner_metrics_payload.get("result") or "").strip():
+        assessment_basis = "runner_metrics"
     if validity == "invalid":
         result = "invalid"
+    elif not unresolved_success_criteria and assessment_basis == "runner_metrics":
+        outcome_statuses = [
+            normalized
+            for normalized in (
+                _normalized_outcome_status(item.get("status"))
+                for item in success_criteria
+                if isinstance(item, dict)
+            )
+            if normalized is not None
+        ]
+        explicit_result = str(runner_metrics_payload.get("result") or "").strip().lower()
+        if outcome_statuses:
+            if all(status == "pass" for status in outcome_statuses):
+                result = "supported"
+            elif all(status == "fail" for status in outcome_statuses):
+                result = "refuted"
+        elif explicit_result in {"supported", "refuted", "inconclusive"}:
+            result = explicit_result
 
-    limitations = ["assessment_structural_only"]
+    limitations: list[str] = []
+    if assessment_basis == "structural_only":
+        limitations.append("assessment_structural_only")
     if unresolved_success_criteria:
         limitations.append("success_criteria_unresolved")
     if missing_reproducibility_fields:
         limitations.append("reproducibility_contract_incomplete")
+    if assessment_basis == "runner_metrics":
+        outcome_statuses = [
+            normalized
+            for normalized in (
+                _normalized_outcome_status(item.get("status"))
+                for item in success_criteria
+                if isinstance(item, dict)
+            )
+            if normalized is not None
+        ]
+        if "pass" in outcome_statuses and "fail" in outcome_statuses:
+            limitations.append("mixed_success_criteria")
 
     experiment_id = str(experiment_spec.get("experiment_id") or "").strip() or None
     hypothesis_ids = [str(item) for item in (experiment_spec.get("hypothesis_ids") or []) if str(item or "").strip()]
+    baseline_comparison = (
+        runner_metrics_payload.get("baseline_comparison")
+        if isinstance(runner_metrics_payload.get("baseline_comparison"), dict)
+        else {}
+    )
+    if not baseline_comparison:
+        baseline_comparison = {
+            "status": "not_available",
+            "baseline_required": baseline_spec.get("required"),
+            "baseline_entities": list(baseline_spec.get("entities") or []),
+        }
     return {
         "schema_version": "experiment_result.v0.1",
         "intake_id": evaluation.get("intake_id"),
@@ -298,20 +533,16 @@ def build_structural_experiment_result(
         "workspace": evaluation.get("workspace"),
         "experiment_id": experiment_id,
         "hypothesis_ids": hypothesis_ids,
-        "assessment_basis": "structural_only",
+        "assessment_basis": assessment_basis,
         "evaluator": {
-            "kind": "agent_host_structural_evaluator",
-            "version": "v0.1",
+            "kind": "agent_host_experiment_evaluator",
+            "version": "v0.2",
         },
         "validity": validity,
         "result": result,
-        "evidence_strength": "structural_only",
+        "evidence_strength": "metric_backed" if assessment_basis == "runner_metrics" else "structural_only",
         "metrics": metrics,
-        "baseline_comparison": {
-            "status": "not_available",
-            "baseline_required": baseline_spec.get("required"),
-            "baseline_entities": list(baseline_spec.get("entities") or []),
-        },
+        "baseline_comparison": baseline_comparison,
         "success_criteria": success_criteria,
         "limitations": limitations,
         "reproducibility": {

@@ -290,7 +290,9 @@ curl -X POST http://127.0.0.1:8787/codex/intake \
   当 prepare 阶段已经判定“这次工作对应一个 experiment object”时，
   Agent Host 还会生成一份独立的 experiment result contract，
   包含 assessment_basis / validity / result / metrics / baseline_comparison / reproducibility
-  当前默认是 `structural_only` evaluator，用来明确区分“流程结构有效”与“真实指标已经证明假设成立”
+  默认会先走 `structural_only` evaluator；
+  如果任务目录里额外提供 `RUNNER_METRICS.json`，Agent Host 会把结构化指标并入评估，
+  在 success criteria 足够明确时把 assessment basis 提升到 `runner_metrics`，并产出 `supported / refuted / inconclusive`
 
 - EXPERIMENT_PROMOTION
   把 experiment_index_update 包成一个 promotion bundle，

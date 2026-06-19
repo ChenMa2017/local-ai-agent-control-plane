@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -305,6 +306,17 @@ def persist_experiment_result(
     return experiment_result
 
 
+def load_runner_metrics_artifact(task_dir: Path) -> JsonObject:
+    artifact_path = task_dir / "RUNNER_METRICS.json"
+    if not artifact_path.exists():
+        return {}
+    try:
+        payload = json.loads(artifact_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def persist_hypothesis_update(
     config: Any,
     hypothesis_update: dict[str, Any] | None,
@@ -584,6 +596,7 @@ def maybe_attach_execution_evaluation(
     research_program = prepare_bundle.get("research_program") if isinstance(prepare_bundle.get("research_program"), dict) else {}
     hypothesis_registry = prepare_bundle.get("hypothesis_registry") if isinstance(prepare_bundle.get("hypothesis_registry"), dict) else {}
     experiment_spec = prepare_bundle.get("experiment_spec") if isinstance(prepare_bundle.get("experiment_spec"), dict) else {}
+    runner_metrics = load_runner_metrics_artifact(task_dir)
     followup_task_draft = persist_followup_task_draft(config, evaluation, contract, evidence, deps)
     ledger_note_draft = persist_ledger_note_draft(config, evaluation, contract, evidence, deps)
     review_proposal_draft = persist_review_proposal_draft(config, evaluation, contract, evidence, deps)
@@ -593,6 +606,7 @@ def maybe_attach_execution_evaluation(
             evaluation,
             experiment_spec,
             review_proposal_draft or {},
+            runner_metrics=runner_metrics,
         ),
         deps,
     )
