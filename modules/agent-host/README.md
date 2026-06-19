@@ -386,6 +386,7 @@ curl -X POST http://127.0.0.1:8787/codex/prepare \
 ```text
 - overall_status
 - blocked
+- followup_guidance
 - blockers
 - evidence_decision
 - promotion_states

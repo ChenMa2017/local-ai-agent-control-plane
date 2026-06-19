@@ -1482,6 +1482,51 @@ class ExecutionEvaluationTests(unittest.TestCase):
             {"category": "result_review", "subject": "task_result"},
         )
 
+    def test_build_prepare_operator_summary_surfaces_followup_guidance(self):
+        summary = operator_summary.build_prepare_operator_summary(
+            {
+                "intake_id": "intake_prepare_followup",
+                "workspace": "demo",
+                "followup_recommended_next_action": "review_result",
+                "followup_reason": "Task completed successfully; review the safe result before any promotion.",
+                "followup_remediation": {"category": "result_review", "subject": "task_result"},
+                "followup_evidence_retrieval_decision": "stale_conclusion",
+                "followup_requires_prepare": True,
+                "updated_at": "2026-06-19T15:20:00Z",
+            },
+            {
+                "intake_id": "intake_prepare_followup",
+                "updated_at": "2026-06-19T15:20:00Z",
+                "experiment_decision_gate": {},
+            },
+            {
+                "experiment_gate_status": "not_required",
+            },
+            {
+                "required_action": "run",
+                "blocked_by": [],
+            },
+            {
+                "decision": "stale_conclusion",
+            },
+            [],
+        )
+
+        self.assertEqual(summary["overall_status"], "ready_to_run")
+        self.assertEqual(summary["next_safe_action"]["kind"], "queue_run")
+        self.assertIn("Task completed successfully", summary["next_safe_action"]["reason"])
+        self.assertEqual(
+            summary["followup_guidance"],
+            {
+                "recommended_next_action": "review_result",
+                "reason": "Task completed successfully; review the safe result before any promotion.",
+                "remediation": {"category": "result_review", "subject": "task_result"},
+                "evidence_retrieval_decision": "stale_conclusion",
+                "requires_prepare": True,
+            },
+        )
+        self.assertIn("follow-up task is ready to run", summary["operator_message"])
+
     def test_maybe_attach_execution_evaluation_writes_experiment_review_bundle_when_required(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

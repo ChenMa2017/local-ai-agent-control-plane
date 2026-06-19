@@ -470,6 +470,14 @@ class BridgeTests(unittest.TestCase):
                 {"category": "result_review", "subject": "task_result"},
             )
             self.assertEqual(
+                response["operator_summary"]["followup_guidance"]["recommended_next_action"],
+                "review_result",
+            )
+            self.assertIn(
+                "Task completed successfully",
+                response["operator_summary"]["next_safe_action"]["reason"],
+            )
+            self.assertEqual(
                 response["followup_guidance"]["evidence_retrieval_decision"],
                 "stale_conclusion",
             )

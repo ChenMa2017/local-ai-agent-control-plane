@@ -106,6 +106,25 @@ def blocker_payload(
     }
 
 
+def prepare_followup_guidance(intent: JsonObject) -> JsonObject | None:
+    recommended_next_action = str(intent.get("followup_recommended_next_action") or "").strip()
+    reason = str(intent.get("followup_reason") or "").strip()
+    remediation = intent.get("followup_remediation") if isinstance(intent.get("followup_remediation"), dict) else None
+    evidence_retrieval_decision = str(intent.get("followup_evidence_retrieval_decision") or "").strip()
+    requires_prepare = bool(intent.get("followup_requires_prepare"))
+    if not remediation and recommended_next_action:
+        remediation = remediation_payload(recommended_next_action)
+    if not any([recommended_next_action, reason, remediation, evidence_retrieval_decision, requires_prepare]):
+        return None
+    return {
+        "recommended_next_action": recommended_next_action or None,
+        "reason": reason or None,
+        "remediation": remediation,
+        "evidence_retrieval_decision": evidence_retrieval_decision or None,
+        "requires_prepare": requires_prepare,
+    }
+
+
 def _joined_reason(parts: list[str]) -> str:
     normalized = [str(item).strip() for item in parts if str(item or "").strip()]
     return "; ".join(normalized)
@@ -286,6 +305,7 @@ def build_prepare_operator_summary(
     blocked_by = [str(item) for item in (preflight.get("blocked_by") or []) if str(item or "").strip()]
     decision_gate = contract.get("experiment_decision_gate") if isinstance(contract.get("experiment_decision_gate"), dict) else {}
     unresolved_items = [str(item) for item in (decision_gate.get("unresolved_items") or []) if str(item or "").strip()]
+    followup_guidance = prepare_followup_guidance(intent)
     blockers: list[JsonObject] = []
     unmet_requirements: list[str] = []
     if questions:
@@ -335,7 +355,10 @@ def build_prepare_operator_summary(
         next_safe_action = action_payload(
             kind="queue_run",
             description="Queue the prepared bounded task.",
-            reason="Prepare checks passed and the intake is ready to run.",
+            reason=_joined_reason([
+                str((followup_guidance or {}).get("reason") or ""),
+                "Prepare checks passed and the intake is ready to run.",
+            ]) or "Prepare checks passed and the intake is ready to run.",
             can_execute_automatically=True,
         )
     elif required_action == "reply_to_questions":
@@ -358,11 +381,23 @@ def build_prepare_operator_summary(
         overall_status = "human_review_required" if any(item.get("kind") == "human_review_required" for item in blockers) else "blocked"
 
     if overall_status == "ready_to_run":
-        operator_message = "Prepare is complete and the bounded task is ready to run."
+        operator_message = (
+            "Prepare is complete and the bounded follow-up task is ready to run."
+            if followup_guidance
+            else "Prepare is complete and the bounded task is ready to run."
+        )
     elif any(item.get("kind") == "clarification_required" for item in blockers):
-        operator_message = "Prepare is blocked on clarification; answer the open questions before rerunning prepare."
+        operator_message = (
+            "Follow-up preparation is blocked on clarification; answer the open questions before rerunning prepare."
+            if followup_guidance
+            else "Prepare is blocked on clarification; answer the open questions before rerunning prepare."
+        )
     elif any(item.get("kind") == "experiment_decision_gate_required" for item in blockers):
-        operator_message = "Prepare is blocked on an unresolved experiment decision gate."
+        operator_message = (
+            "Follow-up preparation is blocked on an unresolved experiment decision gate."
+            if followup_guidance
+            else "Prepare is blocked on an unresolved experiment decision gate."
+        )
     else:
         operator_message = "Prepare is blocked until a human resolves the current safety or approval requirement."
 
@@ -378,6 +413,7 @@ def build_prepare_operator_summary(
         "evidence_decision": evidence_decision or None,
         "prepare_gate_status": str(taskbox.get("experiment_gate_status") or "").strip() or None,
         "promotion_states": {},
+        "followup_guidance": followup_guidance,
         "blockers": blockers,
         "unmet_requirements": unmet_requirements,
         "next_safe_action": next_safe_action,
@@ -724,6 +760,7 @@ def operator_summary_fingerprint(summary: JsonObject) -> str:
         "evidence_decision": summary.get("evidence_decision"),
         "prepare_gate_status": summary.get("prepare_gate_status"),
         "promotion_states": summary.get("promotion_states"),
+        "followup_guidance": summary.get("followup_guidance"),
         "blockers": summary.get("blockers"),
         "unmet_requirements": summary.get("unmet_requirements"),
         "next_safe_action": summary.get("next_safe_action"),
@@ -762,6 +799,19 @@ def operator_summary_markdown(summary: JsonObject) -> str:
     if next_safe_action.get("target_path"):
         lines.append(f"- target_path: {next_safe_action.get('target_path')}")
     lines.append("")
+    followup_guidance = summary.get("followup_guidance") if isinstance(summary.get("followup_guidance"), dict) else {}
+    if followup_guidance:
+        lines.extend(
+            [
+                "## Follow-up Guidance",
+                "",
+                f"- recommended_next_action: {followup_guidance.get('recommended_next_action') or 'none'}",
+                f"- reason: {followup_guidance.get('reason') or 'none'}",
+                f"- evidence_retrieval_decision: {followup_guidance.get('evidence_retrieval_decision') or 'none'}",
+                f"- requires_prepare: {'true' if followup_guidance.get('requires_prepare') else 'false'}",
+                "",
+            ]
+        )
     blockers = summary.get("blockers") if isinstance(summary.get("blockers"), list) else []
     if blockers:
         lines.extend(["## Blockers", ""])
