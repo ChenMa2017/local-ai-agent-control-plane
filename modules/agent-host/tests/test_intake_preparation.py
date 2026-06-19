@@ -204,6 +204,18 @@ class IntakePreparationTests(unittest.TestCase):
                 )
                 + "\n"
             )
+            (intake_root / "EXPERIMENT_RESULT.json").write_text(
+                json.dumps(
+                    {
+                        "source_task_id": "task_20260617_follow01",
+                        "experiment_id": "experiment_demo",
+                        "result": "inconclusive",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
             (intake_root / "EXPERIMENT_INDEX_UPDATE.json").write_text(
                 json.dumps(
                     {"source_task_id": "task_20260617_follow01", "experiment_id": "experiment_demo"},
@@ -274,6 +286,7 @@ class IntakePreparationTests(unittest.TestCase):
         self.assertEqual(seed["ledger_note_draft"], {})
         self.assertEqual(seed["hypothesis_update"]["hypothesis_id"], "hypothesis_demo")
         self.assertEqual(seed["hypothesis_promotion"]["promotion_state"], "candidate_ready")
+        self.assertEqual(seed["experiment_result"]["experiment_id"], "experiment_demo")
         self.assertEqual(seed["experiment_index_update"]["experiment_id"], "experiment_demo")
         self.assertEqual(seed["experiment_promotion"]["promotion_state"], "candidate_ready")
         self.assertEqual(seed["current_conclusion_update"]["topic_id"], "demo_topic")

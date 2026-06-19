@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from experiment_contracts import build_experiment_contract_fields, build_structural_experiment_result
 from post_run_artifacts import claim_boundary_for_evaluation
 from research_store import write_json_atomic
 
@@ -204,6 +205,36 @@ def build_experiment_spec(
     status = "not_required"
     if experiment_required:
         status = "blocked" if not preflight.get("ok") else "ready"
+    baseline_policy = (
+        research_program.get("program", {}).get("baseline_policy")
+        if isinstance(research_program.get("program"), dict)
+        else {}
+    )
+    baseline_entities = (
+        [str(item) for item in (baseline_policy.get("baseline_entities") or []) if str(item or "").strip()]
+        if isinstance(baseline_policy, dict)
+        else []
+    )
+    summary = str(contract.get("summary") or contract.get("prompt") or objective or "")
+    read_plan = list(evidence_retrieval.get("read_plan") or [])
+    experiment_id = None
+    if experiment_required:
+        experiment_id = safe_topic_slug(
+            f"experiment_{contract.get('intake_id') or objective}_{summary}",
+            "experiment_candidate",
+        )
+    contract_fields = build_experiment_contract_fields(
+        objective=objective,
+        task_type=objective_task_type(objective),
+        summary=summary,
+        decision_gate=decision_gate,
+        taskbox=taskbox,
+        preflight=preflight,
+        read_plan=read_plan,
+        baseline_required=research_program.get("baseline_required"),
+        baseline_entities=baseline_entities,
+        experiment_required=experiment_required,
+    )
     return {
         "schema_version": "experiment_spec.v0.1",
         "intake_id": contract.get("intake_id"),
@@ -214,6 +245,7 @@ def build_experiment_spec(
         "status": status,
         "research_program_id": str(research_program.get("program_id") or ""),
         "baseline_required": research_program.get("baseline_required"),
+        "experiment_id": experiment_id,
         "allowed_runner": taskbox.get("allowed_runner"),
         "workspace_mode": taskbox.get("workspace_mode"),
         "hypothesis_ids": [
@@ -224,9 +256,24 @@ def build_experiment_spec(
         "decision_gate": decision_gate,
         "blocked_by": list(preflight.get("blocked_by") or []),
         "evidence_retrieval_decision": evidence_retrieval.get("decision"),
-        "read_plan": list(evidence_retrieval.get("read_plan") or []),
+        "read_plan": read_plan,
+        **contract_fields,
         "updated_at": utc_now().isoformat().replace("+00:00", "Z"),
     }
+
+
+def build_experiment_result(
+    evaluation: JsonObject,
+    experiment_spec: JsonObject,
+    review_proposal_draft: JsonObject,
+) -> JsonObject | None:
+    if not bool(experiment_spec.get("required")):
+        return None
+    return build_structural_experiment_result(
+        evaluation=evaluation,
+        experiment_spec=experiment_spec,
+        review_required=bool(review_proposal_draft.get("requires_human_review")),
+    )
 
 
 def experiment_evidence_scope(evaluation: JsonObject) -> str:
@@ -265,6 +312,7 @@ def build_experiment_index_update(
     research_program: JsonObject,
     hypothesis_registry: JsonObject,
     experiment_spec: JsonObject,
+    experiment_result: JsonObject | None,
     review_proposal_draft: JsonObject,
 ) -> JsonObject | None:
     promotion_state = experiment_promotion_state(
@@ -300,7 +348,15 @@ def build_experiment_index_update(
             f"experiment_{evaluation.get('intake_id') or evaluation.get('task_id') or objective}",
             "experiment_candidate",
         )
-    primary_metric_name = "safe_result_available"
+    metrics = (
+        list((experiment_result or {}).get("metrics") or [])
+        if isinstance(experiment_result, dict)
+        else []
+    )
+    primary_metric_name = str(metrics[0].get("name") or "") if metrics and isinstance(metrics[0], dict) else "safe_result_available"
+    if not primary_metric_name:
+        primary_metric_name = "safe_result_available"
+    baseline_spec = experiment_spec.get("baseline_spec") if isinstance(experiment_spec.get("baseline_spec"), dict) else {}
     return {
         "schema_version": "experiment_index_update.v0.1",
         "intake_id": evaluation.get("intake_id"),
@@ -319,6 +375,7 @@ def build_experiment_index_update(
         ),
         "model": None,
         "baseline_model": str(baseline_entities[0]).strip() if baseline_entities else None,
+        "baseline_spec": baseline_spec,
         "train_data": None,
         "test_data": None,
         "eval_protocol": f"prepared_{safe_topic_slug(objective or 'task', 'task')}_evaluation",
@@ -327,7 +384,10 @@ def build_experiment_index_update(
             220,
         ),
         "without_definition": "No bounded result excerpt is available for this prepared experiment candidate.",
-        "primary_metrics": [
+        "metric_definitions": list(experiment_spec.get("metric_definitions") or []),
+        "success_criteria": list(experiment_spec.get("success_criteria") or []),
+        "primary_metrics": metrics
+        or [
             {
                 "name": primary_metric_name,
                 "value": 1,
@@ -336,6 +396,10 @@ def build_experiment_index_update(
             }
         ],
         "primary_metric_name": primary_metric_name,
+        "assessment_basis": str((experiment_result or {}).get("assessment_basis") or "structural_only"),
+        "experiment_result": (experiment_result or {}).get("result") if isinstance(experiment_result, dict) else None,
+        "experiment_validity": (experiment_result or {}).get("validity") if isinstance(experiment_result, dict) else None,
+        "reproducibility": (experiment_result or {}).get("reproducibility") if isinstance(experiment_result, dict) else {},
         "best_epoch": None,
         "primary_eval_path": None,
         "config_path": None,
@@ -353,6 +417,7 @@ def build_experiment_promotion(
     research_program: JsonObject,
     hypothesis_registry: JsonObject,
     experiment_spec: JsonObject,
+    experiment_result: JsonObject | None,
     review_proposal_draft: JsonObject,
 ) -> JsonObject:
     promotion_state = experiment_promotion_state(
@@ -368,6 +433,7 @@ def build_experiment_promotion(
         research_program,
         hypothesis_registry,
         experiment_spec,
+        experiment_result,
         review_proposal_draft,
     )
     decision = {
@@ -449,6 +515,7 @@ def build_hypothesis_update(
     experiment_spec: JsonObject,
     review_proposal_draft: JsonObject,
     *,
+    experiment_result: JsonObject | None = None,
     generated_supporting_experiments: list[str] | None = None,
 ) -> JsonObject | None:
     promotion_state = hypothesis_promotion_state(
@@ -559,6 +626,21 @@ def build_hypothesis_update(
             "method": str(confidence.get("method") or "prepare_prior"),
             "calibration": str(confidence.get("calibration") or "low"),
         },
+        "evaluation_result": (
+            str((experiment_result or {}).get("result") or "").strip()
+            if isinstance(experiment_result, dict)
+            else None
+        ),
+        "evaluation_validity": (
+            str((experiment_result or {}).get("validity") or "").strip()
+            if isinstance(experiment_result, dict)
+            else None
+        ),
+        "assessment_basis": (
+            str((experiment_result or {}).get("assessment_basis") or "").strip()
+            if isinstance(experiment_result, dict)
+            else None
+        ),
         "status": hypothesis_status,
         "supersedes": list(first.get("supersedes") or []) if isinstance(first.get("supersedes"), list) else [],
         "superseded_by": first.get("superseded_by"),
@@ -576,6 +658,7 @@ def build_hypothesis_promotion(
     experiment_spec: JsonObject,
     review_proposal_draft: JsonObject,
     *,
+    experiment_result: JsonObject | None = None,
     generated_supporting_experiments: list[str] | None = None,
 ) -> JsonObject:
     promotion_state = hypothesis_promotion_state(
@@ -591,6 +674,7 @@ def build_hypothesis_promotion(
         hypothesis_registry,
         experiment_spec,
         review_proposal_draft,
+        experiment_result=experiment_result,
         generated_supporting_experiments=generated_supporting_experiments,
     )
     decision = {
@@ -637,6 +721,7 @@ def build_research_machine_checks(
     evidence_retrieval: JsonObject,
     hypothesis_registry: JsonObject,
     experiment_spec: JsonObject,
+    experiment_result: JsonObject | None,
     review_proposal_draft: JsonObject,
     *,
     hypothesis_promotion_state_value: str,
@@ -651,6 +736,13 @@ def build_research_machine_checks(
         for item in (experiment_spec.get("hypothesis_ids") or [])
         if str(item or "").strip()
     ]
+    success_criteria = experiment_spec.get("success_criteria") if isinstance(experiment_spec.get("success_criteria"), list) else []
+    experiment_success_criteria_resolved = True
+    if bool(experiment_spec.get("required")):
+        experiment_success_criteria_resolved = not any(
+            isinstance(item, dict) and str(item.get("status") or "") == "missing"
+            for item in success_criteria
+        )
     return {
         "schema_valid": True,
         "task_terminal": str(evaluation.get("task_status") or "") in {"done", "failed", "timeout", "stale", "cancelled", "policy_violation"},
@@ -661,7 +753,9 @@ def build_research_machine_checks(
         "hypothesis_registry_present": bool(hypothesis_registry),
         "hypothesis_candidate_present": bool(hypotheses),
         "experiment_spec_present": bool(experiment_spec),
+        "experiment_result_present": (not bool(experiment_spec.get("required"))) or bool(experiment_result),
         "experiment_required": bool(experiment_spec.get("required")),
+        "experiment_success_criteria_resolved": experiment_success_criteria_resolved,
         "experiment_has_hypothesis_binding": (not bool(experiment_spec.get("required"))) or bool(experiment_hypothesis_ids),
         "generated_supporting_experiments_present": (not bool(experiment_spec.get("required"))) or bool(generated_supporting_experiments),
         "evidence_safe_to_answer": str(evaluation.get("evidence_retrieval_decision") or "") == "safe_to_answer",
@@ -687,12 +781,16 @@ def build_research_validity(
         blocking_reasons.append("missing_safe_result_excerpt")
     if not machine_checks.get("write_audit_clean"):
         blocking_reasons.append("write_audit_not_clean")
+    if machine_checks.get("experiment_required") and not machine_checks.get("experiment_result_present"):
+        blocking_reasons.append("experiment_result_missing")
     if not machine_checks.get("experiment_has_hypothesis_binding"):
         blocking_reasons.append("experiment_missing_hypothesis_binding")
     if not machine_checks.get("read_plan_available"):
         limitations.append("read_plan_missing")
     if not machine_checks.get("evidence_safe_to_answer"):
         limitations.append("safe_to_answer_not_confirmed")
+    if machine_checks.get("experiment_required") and not machine_checks.get("experiment_success_criteria_resolved"):
+        limitations.append("success_criteria_not_resolved")
     if hypothesis_promotion_state_value == "review_required":
         limitations.append("hypothesis_review_required")
     if experiment_promotion_state_value == "review_required":
@@ -744,12 +842,15 @@ def build_hypothesis_assessment(
         "confidence": confidence_value,
         "assessment_basis": "structural_only",
         "status_candidate": str(first.get("status") or "") or None,
+        "evaluation_result": str(first.get("evaluation_result") or "") or None,
+        "evaluation_validity": str(first.get("evaluation_validity") or "") or None,
     }
 
 
 def build_experiment_assessment(
     experiment_spec: JsonObject,
     experiment_index_update: JsonObject | None,
+    experiment_result: JsonObject | None,
     *,
     experiment_promotion_state_value: str,
 ) -> JsonObject:
@@ -768,7 +869,21 @@ def build_experiment_assessment(
     return {
         "experiment_id": experiment_id,
         "assessment": assessment,
-        "assessment_basis": "structural_only",
+        "assessment_basis": (
+            str((experiment_result or {}).get("assessment_basis") or "structural_only")
+            if isinstance(experiment_result, dict)
+            else "structural_only"
+        ),
+        "result": (
+            str((experiment_result or {}).get("result") or "").strip()
+            if isinstance(experiment_result, dict)
+            else None
+        ),
+        "validity": (
+            str((experiment_result or {}).get("validity") or "").strip()
+            if isinstance(experiment_result, dict)
+            else None
+        ),
         "status_candidate": (
             str((experiment_index_update or {}).get("status") or "").strip()
             if isinstance(experiment_index_update, dict)
@@ -953,6 +1068,7 @@ def build_evaluation_report(
     research_program: JsonObject,
     hypothesis_registry: JsonObject,
     experiment_spec: JsonObject,
+    experiment_result: JsonObject | None,
     review_proposal_draft: JsonObject,
     *,
     hypothesis_promotion: JsonObject | None = None,
@@ -993,6 +1109,7 @@ def build_evaluation_report(
         evidence_retrieval,
         hypothesis_registry,
         experiment_spec,
+        experiment_result,
         review_proposal_draft,
         hypothesis_promotion_state_value=hypothesis_promotion_state_value,
         experiment_promotion_state_value=experiment_promotion_state_value,
@@ -1022,6 +1139,7 @@ def build_evaluation_report(
         "assessment_basis": "structural_only",
         "machine_checks": machine_checks,
         "validity": validity,
+        "experiment_result": experiment_result or None,
         "hypothesis_assessment": build_hypothesis_assessment(
             hypothesis_registry,
             hypothesis_update,
@@ -1030,6 +1148,7 @@ def build_evaluation_report(
         "experiment_assessment": build_experiment_assessment(
             experiment_spec,
             experiment_index_update,
+            experiment_result,
             experiment_promotion_state_value=experiment_promotion_state_value,
         ),
         "conclusion_assessment": build_conclusion_assessment(
@@ -1066,6 +1185,7 @@ def evaluation_report_fingerprint(report: JsonObject) -> str:
         "assessment_basis": report.get("assessment_basis"),
         "machine_checks": report.get("machine_checks"),
         "validity": report.get("validity"),
+        "experiment_result": report.get("experiment_result"),
         "hypothesis_assessment": report.get("hypothesis_assessment"),
         "experiment_assessment": report.get("experiment_assessment"),
         "conclusion_assessment": report.get("conclusion_assessment"),
@@ -1343,13 +1463,20 @@ def normalize_experiment_index_record(update: JsonObject) -> JsonObject:
         "purpose": str(update.get("purpose") or "").strip(),
         "model": update.get("model"),
         "baseline_model": update.get("baseline_model"),
+        "baseline_spec": update.get("baseline_spec") if isinstance(update.get("baseline_spec"), dict) else {},
         "train_data": update.get("train_data"),
         "test_data": update.get("test_data"),
         "eval_protocol": update.get("eval_protocol"),
         "with_definition": update.get("with_definition"),
         "without_definition": update.get("without_definition"),
+        "metric_definitions": list(update.get("metric_definitions") or []),
+        "success_criteria": list(update.get("success_criteria") or []),
         "primary_metrics": list(update.get("primary_metrics") or []),
         "primary_metric_name": update.get("primary_metric_name"),
+        "assessment_basis": update.get("assessment_basis"),
+        "experiment_result": update.get("experiment_result"),
+        "experiment_validity": update.get("experiment_validity"),
+        "reproducibility": update.get("reproducibility") if isinstance(update.get("reproducibility"), dict) else {},
         "best_epoch": update.get("best_epoch"),
         "primary_eval_path": update.get("primary_eval_path"),
         "config_path": update.get("config_path"),
@@ -1600,6 +1727,9 @@ def normalize_hypothesis_record(update: JsonObject) -> JsonObject:
         "supporting_evidence": list(update.get("supporting_evidence") or []),
         "contradicting_evidence": list(update.get("contradicting_evidence") or []),
         "confidence": update.get("confidence") if isinstance(update.get("confidence"), dict) else {},
+        "evaluation_result": update.get("evaluation_result"),
+        "evaluation_validity": update.get("evaluation_validity"),
+        "assessment_basis": update.get("assessment_basis"),
         "status": str(update.get("status") or "").strip(),
         "supersedes": list(update.get("supersedes") or []),
         "superseded_by": update.get("superseded_by"),
@@ -1845,7 +1975,30 @@ def hypothesis_update_fingerprint(update: JsonObject) -> str:
         "supporting_evidence": update.get("supporting_evidence"),
         "contradicting_evidence": update.get("contradicting_evidence"),
         "confidence": update.get("confidence"),
+        "evaluation_result": update.get("evaluation_result"),
+        "evaluation_validity": update.get("evaluation_validity"),
+        "assessment_basis": update.get("assessment_basis"),
         "status": update.get("status"),
+    }
+    return json.dumps(stable, ensure_ascii=False, sort_keys=True)
+
+
+def experiment_result_fingerprint(result: JsonObject) -> str:
+    stable = {
+        "intake_id": result.get("intake_id"),
+        "source_task_id": result.get("source_task_id"),
+        "workspace": result.get("workspace"),
+        "experiment_id": result.get("experiment_id"),
+        "hypothesis_ids": result.get("hypothesis_ids"),
+        "assessment_basis": result.get("assessment_basis"),
+        "validity": result.get("validity"),
+        "result": result.get("result"),
+        "evidence_strength": result.get("evidence_strength"),
+        "metrics": result.get("metrics"),
+        "baseline_comparison": result.get("baseline_comparison"),
+        "success_criteria": result.get("success_criteria"),
+        "limitations": result.get("limitations"),
+        "reproducibility": result.get("reproducibility"),
     }
     return json.dumps(stable, ensure_ascii=False, sort_keys=True)
 
@@ -1883,11 +2036,18 @@ def experiment_index_update_fingerprint(update: JsonObject) -> str:
         "name": update.get("name"),
         "purpose": update.get("purpose"),
         "baseline_model": update.get("baseline_model"),
+        "baseline_spec": update.get("baseline_spec"),
         "eval_protocol": update.get("eval_protocol"),
         "with_definition": update.get("with_definition"),
         "without_definition": update.get("without_definition"),
+        "metric_definitions": update.get("metric_definitions"),
+        "success_criteria": update.get("success_criteria"),
         "primary_metrics": update.get("primary_metrics"),
         "primary_metric_name": update.get("primary_metric_name"),
+        "assessment_basis": update.get("assessment_basis"),
+        "experiment_result": update.get("experiment_result"),
+        "experiment_validity": update.get("experiment_validity"),
+        "reproducibility": update.get("reproducibility"),
         "run_id": update.get("run_id"),
         "official_conclusion_doc": update.get("official_conclusion_doc"),
     }

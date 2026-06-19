@@ -182,6 +182,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertEqual(attachments["hypothesis_promotion"]["project_sync"]["status"], "workspace_unavailable")
             self.assertEqual(attachments["experiment_promotion"]["promotion_state"], "not_required")
             self.assertEqual(attachments["experiment_promotion"]["project_sync"]["status"], "workspace_unavailable")
+            self.assertNotIn("experiment_result", attachments)
             self.assertEqual(attachments["current_conclusion_update"]["conclusion_status"], "auxiliary_only")
             self.assertEqual(attachments["current_conclusion_promotion"]["decision"], "bounded_only_do_not_publish")
             self.assertEqual(attachments["current_conclusion_promotion"]["project_sync"]["status"], "workspace_unavailable")
@@ -384,6 +385,23 @@ class ExecutionEvaluationTests(unittest.TestCase):
                         "task_type": "bounded_execution",
                         "hypothesis_ids": ["hypothesis_latency_probe"],
                         "experiment_id": "experiment_latency_probe",
+                        "baseline_spec": {"required": False, "entities": []},
+                        "metric_definitions": [
+                            {
+                                "metric_id": "M-01",
+                                "name": "safe_result_available",
+                                "kind": "binary",
+                                "source": "execution_safe_result_excerpt",
+                                "higher_is_better": True,
+                            }
+                        ],
+                        "success_criteria": [
+                            {
+                                "criterion_id": "SC-02",
+                                "name": "user_success_criterion_defined",
+                                "status": "missing",
+                            }
+                        ],
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -411,25 +429,45 @@ class ExecutionEvaluationTests(unittest.TestCase):
             experiment_promotion = attachments["experiment_promotion"]
             hypothesis_update = attachments["hypothesis_update"]
             hypothesis_promotion = attachments["hypothesis_promotion"]
+            experiment_result = attachments["experiment_result"]
             self.assertEqual(hypothesis_update["hypothesis_id"], "hypothesis_latency_probe")
             self.assertEqual(hypothesis_update["status"], "active")
+            self.assertEqual(hypothesis_update["evaluation_result"], "inconclusive")
+            self.assertEqual(hypothesis_update["evaluation_validity"], "valid")
             self.assertEqual(hypothesis_promotion["promotion_state"], "candidate_ready")
             self.assertEqual(hypothesis_promotion["project_sync"]["status"], "applied")
             self.assertEqual(hypothesis_promotion["project_sync"]["transition_validation"]["status"], "valid")
+            self.assertEqual(experiment_result["experiment_id"], "experiment_latency_probe")
+            self.assertEqual(experiment_result["assessment_basis"], "structural_only")
+            self.assertEqual(experiment_result["validity"], "valid")
+            self.assertEqual(experiment_result["result"], "inconclusive")
+            self.assertEqual(experiment_result["metrics"][0]["name"], "safe_result_available")
+            self.assertEqual(experiment_result["metrics"][0]["value"], 1)
+            self.assertIn("success_criteria_unresolved", experiment_result["limitations"])
             self.assertEqual(experiment_update["experiment_id"], "experiment_latency_probe")
             self.assertEqual(experiment_update["status"], "draft")
+            self.assertEqual(experiment_update["experiment_result"], "inconclusive")
+            self.assertEqual(experiment_update["experiment_validity"], "valid")
+            self.assertEqual(experiment_update["assessment_basis"], "structural_only")
+            self.assertTrue(experiment_update["success_criteria"])
             self.assertEqual(experiment_promotion["promotion_state"], "candidate_ready")
             self.assertEqual(experiment_promotion["project_sync"]["status"], "applied")
             self.assertEqual(experiment_promotion["project_sync"]["transition_validation"]["status"], "valid")
             self.assertEqual(attachments["evaluation_report"]["hypothesis_promotion_state"], "candidate_ready")
             self.assertEqual(attachments["evaluation_report"]["experiment_promotion_state"], "candidate_ready")
-            self.assertEqual(attachments["evaluation_report"]["validity"]["status"], "valid_structural_only")
+            self.assertEqual(attachments["evaluation_report"]["validity"]["status"], "valid_with_limitations")
+            self.assertIn("success_criteria_not_resolved", attachments["evaluation_report"]["validity"]["limitations"])
+            self.assertEqual(attachments["evaluation_report"]["experiment_result"]["result"], "inconclusive")
             self.assertEqual(attachments["evaluation_report"]["hypothesis_assessment"]["assessment"], "active_candidate")
+            self.assertEqual(attachments["evaluation_report"]["hypothesis_assessment"]["evaluation_result"], "inconclusive")
             self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["assessment"], "candidate_recorded")
+            self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["result"], "inconclusive")
+            self.assertEqual(attachments["evaluation_report"]["experiment_assessment"]["validity"], "valid")
             self.assertEqual(attachments["evaluation_report"]["conclusion_assessment"]["assessment"], "candidate_ready")
             self.assertEqual(attachments["operator_summary"]["overall_status"], "promotion_ready")
             self.assertEqual(attachments["operator_summary"]["next_safe_action"]["kind"], "review_result")
             self.assertIn("experiment_latency_probe", attachments["current_conclusion_update"]["supporting_experiments"])
+            self.assertTrue((intake_root / "EXPERIMENT_RESULT.json").exists())
 
             hypothesis_registry_path = root / "research" / "HYPOTHESIS_REGISTRY.jsonl"
             self.assertTrue(hypothesis_registry_path.exists())
@@ -451,6 +489,7 @@ class ExecutionEvaluationTests(unittest.TestCase):
             ]
             self.assertEqual(experiment_records[0]["experiment_id"], "experiment_latency_probe")
             self.assertEqual(experiment_records[0]["status"], "draft")
+            self.assertEqual(experiment_records[0]["experiment_result"], "inconclusive")
             self.assertEqual(experiment_records[0]["run_id"], "task_20260618_120000_expapply")
 
             current_conclusions = json.loads((root / "project_index" / "current_conclusions.json").read_text())

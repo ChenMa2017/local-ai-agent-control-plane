@@ -28,12 +28,14 @@ from operator_summary import (
 from research_objects import (
     build_experiment_index_update,
     build_experiment_promotion,
+    build_experiment_result,
     build_hypothesis_promotion,
     build_hypothesis_update,
     build_current_conclusion_promotion,
     build_current_conclusion_update,
     build_current_conclusions_candidate,
     build_evaluation_report,
+    experiment_result_fingerprint,
     experiment_index_update_fingerprint,
     experiment_promotion_fingerprint,
     hypothesis_promotion_fingerprint,
@@ -271,6 +273,36 @@ def persist_review_proposal_draft(
         },
     )
     return draft
+
+
+def persist_experiment_result(
+    config: Any,
+    experiment_result: dict[str, Any] | None,
+    deps: ExecutionEvaluationDependencies,
+) -> dict[str, Any] | None:
+    if not isinstance(experiment_result, dict) or not experiment_result:
+        return None
+    intake_id = str(experiment_result.get("intake_id") or "")
+    if not intake_id:
+        return None
+    root = deps.intake_dir(config, intake_id)
+    existing = deps.read_json_object_if_exists(root / "EXPERIMENT_RESULT.json")
+    if existing and experiment_result_fingerprint(existing) == experiment_result_fingerprint(experiment_result):
+        return existing
+    deps.write_json_atomic(root / "EXPERIMENT_RESULT.json", experiment_result)
+    deps.append_jsonl(
+        root / "TASK_INTAKE.events.jsonl",
+        {
+            "event": "experiment_result_evaluated",
+            "intake_id": intake_id,
+            "source_task_id": experiment_result.get("source_task_id"),
+            "experiment_id": experiment_result.get("experiment_id"),
+            "validity": experiment_result.get("validity"),
+            "result": experiment_result.get("result"),
+            "timestamp": deps.utc_now().isoformat().replace("+00:00", "Z"),
+        },
+    )
+    return experiment_result
 
 
 def persist_hypothesis_update(
@@ -555,6 +587,15 @@ def maybe_attach_execution_evaluation(
     followup_task_draft = persist_followup_task_draft(config, evaluation, contract, evidence, deps)
     ledger_note_draft = persist_ledger_note_draft(config, evaluation, contract, evidence, deps)
     review_proposal_draft = persist_review_proposal_draft(config, evaluation, contract, evidence, deps)
+    experiment_result = persist_experiment_result(
+        config,
+        build_experiment_result(
+            evaluation,
+            experiment_spec,
+            review_proposal_draft or {},
+        ),
+        deps,
+    )
     experiment_index_update = persist_experiment_index_update(
         config,
         build_experiment_index_update(
@@ -564,6 +605,7 @@ def maybe_attach_execution_evaluation(
             research_program,
             hypothesis_registry,
             experiment_spec,
+            experiment_result,
             review_proposal_draft or {},
         ),
         deps,
@@ -576,6 +618,7 @@ def maybe_attach_execution_evaluation(
         research_program,
         hypothesis_registry,
         experiment_spec,
+        experiment_result,
         review_proposal_draft or {},
     )
     if experiment_index_update:
@@ -617,6 +660,7 @@ def maybe_attach_execution_evaluation(
             hypothesis_registry,
             experiment_spec,
             review_proposal_draft or {},
+            experiment_result=experiment_result,
             generated_supporting_experiments=generated_experiment_ids,
         ),
         deps,
@@ -629,6 +673,7 @@ def maybe_attach_execution_evaluation(
         hypothesis_registry,
         experiment_spec,
         review_proposal_draft or {},
+        experiment_result=experiment_result,
         generated_supporting_experiments=generated_experiment_ids,
     )
     if hypothesis_update:
@@ -676,6 +721,7 @@ def maybe_attach_execution_evaluation(
             research_program,
             hypothesis_registry,
             experiment_spec,
+            experiment_result,
             review_proposal_draft or {},
             hypothesis_promotion=hypothesis_promotion,
             experiment_promotion=experiment_promotion,
@@ -741,6 +787,8 @@ def maybe_attach_execution_evaluation(
         attachments["hypothesis_update"] = hypothesis_update
     if hypothesis_promotion:
         attachments["hypothesis_promotion"] = hypothesis_promotion
+    if experiment_result:
+        attachments["experiment_result"] = experiment_result
     if experiment_index_update:
         attachments["experiment_index_update"] = experiment_index_update
     if experiment_promotion:
