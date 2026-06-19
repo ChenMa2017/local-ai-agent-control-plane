@@ -715,6 +715,163 @@ class ExecutionEvaluationTests(unittest.TestCase):
             )
             self.assertTrue((intake_root / "EXPERIMENT_RESULT.json").exists())
 
+    def test_build_experiment_result_uses_runner_metrics_for_refuted_result(self):
+        experiment_result = research_objects.build_experiment_result(
+            {
+                "task_status": "done",
+                "result_available": True,
+                "write_audit": {},
+                "task_id": "task_20260619_121000_refuted",
+                "intake_id": "intake_refuted",
+                "workspace": "demo",
+                "updated_at": "2026-06-19T12:10:00Z",
+            },
+            {
+                "required": True,
+                "experiment_id": "experiment_refuted_probe",
+                "hypothesis_ids": ["hypothesis_refuted_probe"],
+                "baseline_spec": {"required": True, "entities": ["baseline_v1"]},
+                "dataset_refs": ["eval://demo/validation"],
+                "random_seeds": [7],
+                "code_reference": {"commit": "deadbeef"},
+                "config_reference": {"path": "configs/refuted_probe.yaml"},
+                "repeat_count": 3,
+                "metric_definitions": [
+                    {
+                        "metric_id": "M-01",
+                        "name": "safe_result_available",
+                        "kind": "binary",
+                        "source": "execution_safe_result_excerpt",
+                        "higher_is_better": True,
+                    },
+                    {
+                        "metric_id": "M-02",
+                        "name": "latency_delta",
+                        "kind": "delta",
+                        "source": "runner_metrics",
+                        "higher_is_better": False,
+                    },
+                ],
+                "success_criteria": [
+                    {
+                        "criterion_id": "FC-01",
+                        "name": "latency_regression_detected",
+                        "kind": "falsification",
+                        "metric_name": "latency_delta",
+                        "target": {"operator": ">", "value": 0.0},
+                    }
+                ],
+            },
+            {},
+            {},
+            runner_metrics={
+                "schema_version": "runner_metrics.v0.2",
+                "metrics": [
+                    {
+                        "metric_id": "M-02",
+                        "name": "latency_delta",
+                        "value": 0.042,
+                        "baseline_value": 0.0,
+                    }
+                ],
+            },
+            runner_metrics_status={
+                "present": True,
+                "trusted": True,
+            },
+        )
+
+        self.assertEqual(experiment_result["assessment_basis"], "runner_metrics")
+        self.assertEqual(experiment_result["provisional_result"], "refuted")
+        self.assertEqual(experiment_result["result"], "refuted")
+        self.assertEqual(experiment_result["final_result"], "refuted")
+        self.assertEqual(experiment_result["adjudication_status"], "accepted")
+        self.assertTrue(experiment_result["promotion_eligible"])
+        self.assertEqual(experiment_result["success_criteria"][0]["status"], "pass")
+
+    def test_build_experiment_result_requires_review_for_conflicting_success_criteria(self):
+        experiment_result = research_objects.build_experiment_result(
+            {
+                "task_status": "done",
+                "result_available": True,
+                "write_audit": {},
+                "task_id": "task_20260619_121500_conflict",
+                "intake_id": "intake_conflict",
+                "workspace": "demo",
+                "updated_at": "2026-06-19T12:15:00Z",
+            },
+            {
+                "required": True,
+                "experiment_id": "experiment_conflict_probe",
+                "hypothesis_ids": ["hypothesis_conflict_probe"],
+                "baseline_spec": {"required": True, "entities": ["baseline_v1"]},
+                "dataset_refs": ["eval://demo/validation"],
+                "random_seeds": [11],
+                "code_reference": {"commit": "deadbeef"},
+                "config_reference": {"path": "configs/conflict_probe.yaml"},
+                "repeat_count": 3,
+                "metric_definitions": [
+                    {
+                        "metric_id": "M-01",
+                        "name": "safe_result_available",
+                        "kind": "binary",
+                        "source": "execution_safe_result_excerpt",
+                        "higher_is_better": True,
+                    },
+                    {
+                        "metric_id": "M-02",
+                        "name": "quality_delta",
+                        "kind": "delta",
+                        "source": "runner_metrics",
+                        "higher_is_better": True,
+                    },
+                ],
+                "success_criteria": [
+                    {
+                        "criterion_id": "SC-01",
+                        "name": "quality_gain_positive",
+                        "kind": "metric",
+                        "metric_name": "quality_delta",
+                        "target": {"operator": ">", "value": 0.0},
+                    },
+                    {
+                        "criterion_id": "FC-01",
+                        "name": "quality_gain_should_not_be_positive",
+                        "kind": "falsification",
+                        "metric_name": "quality_delta",
+                        "target": {"operator": ">", "value": 0.0},
+                    },
+                ],
+            },
+            {},
+            {},
+            runner_metrics={
+                "schema_version": "runner_metrics.v0.2",
+                "metrics": [
+                    {
+                        "metric_id": "M-02",
+                        "name": "quality_delta",
+                        "value": 0.021,
+                        "baseline_value": 0.0,
+                    }
+                ],
+            },
+            runner_metrics_status={
+                "present": True,
+                "trusted": True,
+            },
+        )
+
+        self.assertEqual(experiment_result["assessment_basis"], "runner_metrics")
+        self.assertEqual(experiment_result["provisional_result"], "inconclusive")
+        self.assertEqual(experiment_result["result"], "inconclusive")
+        self.assertIsNone(experiment_result["final_result"])
+        self.assertEqual(experiment_result["adjudication_status"], "pending_review")
+        self.assertFalse(experiment_result["promotion_eligible"])
+        self.assertIn("conflicting_success_criteria", experiment_result["limitations"])
+        self.assertEqual(experiment_result["success_criteria"][0]["status"], "pass")
+        self.assertEqual(experiment_result["success_criteria"][1]["status"], "pass")
+
     def test_maybe_attach_execution_evaluation_rejects_mismatched_runner_metrics_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

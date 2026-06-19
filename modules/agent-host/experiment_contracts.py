@@ -660,6 +660,7 @@ def build_structural_experiment_result(
     result = "inconclusive"
     provisional_result = "inconclusive"
     assessment_basis = "structural_only"
+    conflicting_success_criteria = False
     if provided_metrics and bool(runner_metrics_metadata.get("trusted")):
         assessment_basis = "runner_metrics"
     if validity == "invalid":
@@ -668,9 +669,14 @@ def build_structural_experiment_result(
     elif not unresolved_success_criteria and assessment_basis == "runner_metrics":
         support_outcomes = _criterion_outcome_statuses(success_criteria, criterion_kind="metric")
         falsification_outcomes = _criterion_outcome_statuses(success_criteria, criterion_kind="falsification")
-        if support_outcomes and all(status == "pass" for status in support_outcomes):
+        support_passed = bool(support_outcomes) and all(status == "pass" for status in support_outcomes)
+        falsification_passed = bool(falsification_outcomes) and all(status == "pass" for status in falsification_outcomes)
+        conflicting_success_criteria = support_passed and falsification_passed
+        if conflicting_success_criteria:
+            provisional_result = "inconclusive"
+        elif support_passed:
             provisional_result = "supported"
-        elif falsification_outcomes and all(status == "pass" for status in falsification_outcomes):
+        elif falsification_passed:
             provisional_result = "refuted"
 
     limitations: list[str] = []
@@ -684,11 +690,17 @@ def build_structural_experiment_result(
         outcome_statuses = _criterion_outcome_statuses(success_criteria)
         if "pass" in outcome_statuses and "fail" in outcome_statuses:
             limitations.append("mixed_success_criteria")
+    if conflicting_success_criteria:
+        limitations.append("conflicting_success_criteria")
     runner_metrics_rejection_reason = str(runner_metrics_metadata.get("rejection_reason") or "").strip()
     if runner_metrics_rejection_reason:
         limitations.append("runner_metrics_rejected")
 
-    promotion_eligible = validity == "valid" and not runner_metrics_rejection_reason
+    promotion_eligible = (
+        validity == "valid"
+        and not runner_metrics_rejection_reason
+        and not conflicting_success_criteria
+    )
     adjudication_status = "accepted"
     if validity == "invalid":
         adjudication_status = "rejected"
