@@ -3,11 +3,14 @@ import hashlib
 import json
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
 import execution_evaluation
 import experiment_contracts
 import operator_summary
+import project_research_sync
 import research_objects
 
 
@@ -3641,6 +3644,131 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertTrue(records[0]["imported_from_history"])
             self.assertEqual(records[0]["import_review_id"], "review_20260619_001")
             self.assertEqual(records[0]["status"], "supported")
+
+    def test_sync_project_experiment_index_runs_transaction_under_registry_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active_lock = {"held": False}
+
+            @contextmanager
+            def fake_lock(lock_path: Path):
+                self.assertEqual(lock_path.name, "experiment_index.jsonl.lock")
+                self.assertFalse(active_lock["held"])
+                active_lock["held"] = True
+                try:
+                    yield
+                finally:
+                    active_lock["held"] = False
+
+            original_read = project_research_sync.read_jsonl_records_if_exists
+            original_write = project_research_sync.write_jsonl_records_atomic
+
+            def locked_read(path: Path):
+                self.assertTrue(active_lock["held"])
+                return original_read(path)
+
+            def locked_write(path: Path, records: list[dict[str, object]]):
+                self.assertTrue(active_lock["held"])
+                return original_write(path, records)
+
+            with mock.patch("project_research_sync.advisory_file_lock", fake_lock), mock.patch(
+                "project_research_sync.read_jsonl_records_if_exists",
+                side_effect=locked_read,
+            ), mock.patch(
+                "project_research_sync.write_jsonl_records_atomic",
+                side_effect=locked_write,
+            ):
+                sync = research_objects.sync_project_experiment_index(
+                    root,
+                    {
+                        "source_task_id": "task_20260620_120000_experiment_lock",
+                        "promotion_state": "candidate_ready",
+                        "updated_at": "2026-06-20T12:00:00Z",
+                        "experiment_index_update": {
+                            "experiment_id": "experiment_lock_probe",
+                            "status": "draft",
+                        },
+                    },
+                )
+
+            self.assertEqual(sync["status"], "applied")
+            records = [
+                json.loads(line)
+                for line in (root / "project_index" / "experiment_index.jsonl").read_text().strip().splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["experiment_id"], "experiment_lock_probe")
+
+    def test_sync_project_hypothesis_registry_runs_transaction_under_registry_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active_lock = {"held": False}
+
+            @contextmanager
+            def fake_lock(lock_path: Path):
+                self.assertEqual(lock_path.name, "HYPOTHESIS_REGISTRY.jsonl.lock")
+                self.assertFalse(active_lock["held"])
+                active_lock["held"] = True
+                try:
+                    yield
+                finally:
+                    active_lock["held"] = False
+
+            original_read = project_research_sync.read_jsonl_records_if_exists
+            original_write = project_research_sync.write_jsonl_records_atomic
+
+            def locked_read(path: Path):
+                self.assertTrue(active_lock["held"])
+                return original_read(path)
+
+            def locked_write(path: Path, records: list[dict[str, object]]):
+                self.assertTrue(active_lock["held"])
+                return original_write(path, records)
+
+            with mock.patch("project_research_sync.advisory_file_lock", fake_lock), mock.patch(
+                "project_research_sync.read_jsonl_records_if_exists",
+                side_effect=locked_read,
+            ), mock.patch(
+                "project_research_sync.write_jsonl_records_atomic",
+                side_effect=locked_write,
+            ):
+                sync = research_objects.sync_project_hypothesis_registry(
+                    root,
+                    {
+                        "source_task_id": "task_20260620_120500_hypothesis_lock",
+                        "promotion_state": "candidate_ready",
+                        "updated_at": "2026-06-20T12:05:00Z",
+                        "hypothesis_update": {
+                            "hypothesis_id": "hypothesis_lock_probe",
+                            "program_id": "demo-program",
+                            "claim": "Locking preserves transaction isolation.",
+                            "mechanism": "Registry update occurs inside advisory lock.",
+                            "prediction": [],
+                            "falsification_criteria": [],
+                            "required_experiments": [],
+                            "scope": {},
+                            "supporting_evidence": [
+                                {"kind": "document", "path": "research/history/hypothesis_lock_probe.md"}
+                            ],
+                            "contradicting_evidence": [],
+                            "confidence": {"value": 0.7},
+                            "source": {"origin": "historical_import"},
+                            "imported_from_history": True,
+                            "import_review_id": "review_20260620_001",
+                            "status": "supported",
+                        },
+                    },
+                )
+
+            self.assertEqual(sync["status"], "applied")
+            records = [
+                json.loads(line)
+                for line in (root / "research" / "HYPOTHESIS_REGISTRY.jsonl").read_text().strip().splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["hypothesis_id"], "hypothesis_lock_probe")
 
     def test_experiment_promotion_state_requires_review_when_result_is_not_promotion_eligible(self):
         promotion_state = research_objects.experiment_promotion_state(

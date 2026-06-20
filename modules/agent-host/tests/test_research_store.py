@@ -1,10 +1,24 @@
 import json
+import multiprocessing
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import research_store
+
+
+def hold_file_lock(lock_path: str, ready_queue, release_queue) -> None:
+    with research_store.advisory_file_lock(Path(lock_path)):
+        ready_queue.put("locked")
+        release_queue.get(timeout=5)
+
+
+def acquire_file_lock(lock_path: str, elapsed_queue) -> None:
+    started = time.monotonic()
+    with research_store.advisory_file_lock(Path(lock_path)):
+        elapsed_queue.put(time.monotonic() - started)
 
 
 class ResearchStoreTests(unittest.TestCase):
@@ -68,3 +82,29 @@ class ResearchStoreTests(unittest.TestCase):
             self.assertEqual(lines, [{"id": "old"}])
             temp_files = list(path.parent.glob(f".{path.name}.*.tmp"))
             self.assertEqual(temp_files, [])
+
+    def test_advisory_file_lock_blocks_other_processes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / "registry.jsonl.lock"
+            ctx = multiprocessing.get_context("fork")
+            ready_queue = ctx.Queue()
+            release_queue = ctx.Queue()
+            elapsed_queue = ctx.Queue()
+            holder = ctx.Process(target=hold_file_lock, args=(str(lock_path), ready_queue, release_queue))
+            waiter = ctx.Process(target=acquire_file_lock, args=(str(lock_path), elapsed_queue))
+            try:
+                holder.start()
+                self.assertEqual(ready_queue.get(timeout=5), "locked")
+                waiter.start()
+                time.sleep(0.2)
+                self.assertTrue(elapsed_queue.empty())
+                release_queue.put("release")
+                elapsed = elapsed_queue.get(timeout=5)
+                self.assertGreaterEqual(elapsed, 0.15)
+            finally:
+                if holder.is_alive():
+                    holder.terminate()
+                if waiter.is_alive():
+                    waiter.terminate()
+                holder.join(timeout=5)
+                waiter.join(timeout=5)

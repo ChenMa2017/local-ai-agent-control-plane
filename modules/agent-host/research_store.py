@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import tempfile
@@ -20,6 +22,17 @@ def _fsync_directory(path: Path) -> None:
         pass
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def advisory_file_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def write_json_atomic(path: Path, data: JsonObject) -> None:

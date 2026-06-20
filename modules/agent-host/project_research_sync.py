@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from hypothesis_state import validate_hypothesis_registry_transition, validate_status_transition
-from research_store import write_json_atomic, write_jsonl_atomic
+from research_store import advisory_file_lock, write_json_atomic, write_jsonl_atomic
 
 JsonObject = dict[str, Any]
 
@@ -56,6 +56,10 @@ def read_jsonl_records_if_exists(path: Path) -> list[JsonObject]:
 
 def write_jsonl_records_atomic(path: Path, records: list[JsonObject]) -> None:
     write_jsonl_atomic(path, records)
+
+
+def registry_lock_path(path: Path) -> Path:
+    return path.with_name(path.name + ".lock")
 
 
 def normalize_current_conclusions_item(update: JsonObject) -> JsonObject:
@@ -120,10 +124,11 @@ def sync_project_current_conclusion(
         }
     if promotion_state == "candidate_ready":
         current_path = project_root / "project_index" / "current_conclusions.json"
-        current = read_json_object_if_exists(current_path)
-        updated = upsert_current_conclusions_document(current, update, updated_at)
-        if current != updated:
-            write_json_atomic(current_path, updated)
+        with advisory_file_lock(registry_lock_path(current_path)):
+            current = read_json_object_if_exists(current_path)
+            updated = upsert_current_conclusions_document(current, update, updated_at)
+            if current != updated:
+                write_json_atomic(current_path, updated)
         return {
             "status": "applied",
             "target_path": "project_index/current_conclusions.json",
@@ -294,39 +299,40 @@ def sync_project_experiment_index(
         }
     if promotion_state == "candidate_ready":
         index_path = project_root / "project_index" / "experiment_index.jsonl"
-        existing_records = read_jsonl_records_if_exists(index_path)
-        existing_record = next(
-            (
-                record
-                for record in existing_records
-                if isinstance(record, dict) and str(record.get("experiment_id") or "").strip() == experiment_id
-            ),
-            None,
-        )
-        transition_validation = validate_experiment_index_transition(existing_record, update)
-        if transition_validation.get("status") != "valid":
-            proposal_name, target_path = write_experiment_review_bundle(
-                project_root,
-                promotion,
-                update,
-                updated_at=updated_at,
-                promotion_state=promotion_state,
-                source_task_id=source_task_id,
-                experiment_id=experiment_id,
-                transition_validation=transition_validation,
-                existing_record=existing_record,
+        with advisory_file_lock(registry_lock_path(index_path)):
+            existing_records = read_jsonl_records_if_exists(index_path)
+            existing_record = next(
+                (
+                    record
+                    for record in existing_records
+                    if isinstance(record, dict) and str(record.get("experiment_id") or "").strip() == experiment_id
+                ),
+                None,
             )
-            return {
-                "status": "transition_review_required",
-                "target_path": target_path,
-                "experiment_id": experiment_id or None,
-                "source_task_id": source_task_id or None,
-                "proposal_name": proposal_name,
-                "transition_validation": transition_validation,
-            }
-        updated_records = upsert_experiment_index_records(existing_records, update)
-        if existing_records != updated_records:
-            write_jsonl_records_atomic(index_path, updated_records)
+            transition_validation = validate_experiment_index_transition(existing_record, update)
+            if transition_validation.get("status") != "valid":
+                proposal_name, target_path = write_experiment_review_bundle(
+                    project_root,
+                    promotion,
+                    update,
+                    updated_at=updated_at,
+                    promotion_state=promotion_state,
+                    source_task_id=source_task_id,
+                    experiment_id=experiment_id,
+                    transition_validation=transition_validation,
+                    existing_record=existing_record,
+                )
+                return {
+                    "status": "transition_review_required",
+                    "target_path": target_path,
+                    "experiment_id": experiment_id or None,
+                    "source_task_id": source_task_id or None,
+                    "proposal_name": proposal_name,
+                    "transition_validation": transition_validation,
+                }
+            updated_records = upsert_experiment_index_records(existing_records, update)
+            if existing_records != updated_records:
+                write_jsonl_records_atomic(index_path, updated_records)
         return {
             "status": "applied",
             "target_path": "project_index/experiment_index.jsonl",
@@ -469,39 +475,40 @@ def sync_project_hypothesis_registry(
         }
     if promotion_state == "candidate_ready":
         registry_path = project_root / "research" / "HYPOTHESIS_REGISTRY.jsonl"
-        existing_records = read_jsonl_records_if_exists(registry_path)
-        existing_record = next(
-            (
-                record
-                for record in existing_records
-                if isinstance(record, dict) and str(record.get("hypothesis_id") or "").strip() == hypothesis_id
-            ),
-            None,
-        )
-        transition_validation = validate_hypothesis_registry_transition(existing_record, update)
-        if transition_validation.get("status") != "valid":
-            proposal_name, target_path = write_hypothesis_review_bundle(
-                project_root,
-                promotion,
-                update,
-                updated_at=updated_at,
-                promotion_state=promotion_state,
-                source_task_id=source_task_id,
-                hypothesis_id=hypothesis_id,
-                transition_validation=transition_validation,
-                existing_record=existing_record,
+        with advisory_file_lock(registry_lock_path(registry_path)):
+            existing_records = read_jsonl_records_if_exists(registry_path)
+            existing_record = next(
+                (
+                    record
+                    for record in existing_records
+                    if isinstance(record, dict) and str(record.get("hypothesis_id") or "").strip() == hypothesis_id
+                ),
+                None,
             )
-            return {
-                "status": "transition_review_required",
-                "target_path": target_path,
-                "hypothesis_id": hypothesis_id or None,
-                "source_task_id": source_task_id or None,
-                "proposal_name": proposal_name,
-                "transition_validation": transition_validation,
-            }
-        updated_records = upsert_hypothesis_registry_records(existing_records, update, updated_at)
-        if existing_records != updated_records:
-            write_jsonl_records_atomic(registry_path, updated_records)
+            transition_validation = validate_hypothesis_registry_transition(existing_record, update)
+            if transition_validation.get("status") != "valid":
+                proposal_name, target_path = write_hypothesis_review_bundle(
+                    project_root,
+                    promotion,
+                    update,
+                    updated_at=updated_at,
+                    promotion_state=promotion_state,
+                    source_task_id=source_task_id,
+                    hypothesis_id=hypothesis_id,
+                    transition_validation=transition_validation,
+                    existing_record=existing_record,
+                )
+                return {
+                    "status": "transition_review_required",
+                    "target_path": target_path,
+                    "hypothesis_id": hypothesis_id or None,
+                    "source_task_id": source_task_id or None,
+                    "proposal_name": proposal_name,
+                    "transition_validation": transition_validation,
+                }
+            updated_records = upsert_hypothesis_registry_records(existing_records, update, updated_at)
+            if existing_records != updated_records:
+                write_jsonl_records_atomic(registry_path, updated_records)
         return {
             "status": "applied",
             "target_path": "research/HYPOTHESIS_REGISTRY.jsonl",
