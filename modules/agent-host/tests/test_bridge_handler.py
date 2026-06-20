@@ -1,7 +1,7 @@
 import io
 import unittest
 
-import bridge_handler
+from agent_host.bridge import bridge_handler
 
 
 class FakeBridgeError(Exception):

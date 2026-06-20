@@ -6,8 +6,8 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-import intake_preparation
-import prepare_flow
+from agent_host.intake import intake_preparation
+from agent_host.intake import prepare_flow
 
 
 PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")

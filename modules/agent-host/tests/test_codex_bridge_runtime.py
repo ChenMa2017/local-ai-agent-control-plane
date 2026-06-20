@@ -5,7 +5,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-import codex_bridge_runtime
+from agent_host.runtime import codex_bridge_runtime
 
 
 class FakeBridgeError(Exception):

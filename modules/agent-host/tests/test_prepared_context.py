@@ -1,6 +1,6 @@
 import unittest
 
-import prepared_context
+from agent_host.intake import prepared_context
 
 
 class PreparedContextTests(unittest.TestCase):

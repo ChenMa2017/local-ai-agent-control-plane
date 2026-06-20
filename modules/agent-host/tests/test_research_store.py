@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import research_store
+from agent_host.research import research_store
 
 
 def hold_file_lock(lock_path: str, ready_queue, release_queue) -> None:
@@ -35,7 +35,7 @@ class ResearchStoreTests(unittest.TestCase):
             path = Path(tmp) / "registry.json"
             path.write_text(json.dumps({"value": "old"}, ensure_ascii=False) + "\n")
 
-            with mock.patch("research_store.os.replace", side_effect=OSError("replace failed")):
+            with mock.patch("agent_host.research.research_store.os.replace", side_effect=OSError("replace failed")):
                 with self.assertRaises(OSError):
                     research_store.write_json_atomic(path, {"value": "new"})
 
@@ -69,7 +69,7 @@ class ResearchStoreTests(unittest.TestCase):
             path = Path(tmp) / "registry.jsonl"
             path.write_text(json.dumps({"id": "old"}, ensure_ascii=False) + "\n")
 
-            with mock.patch("research_store.os.replace", side_effect=OSError("replace failed")):
+            with mock.patch("agent_host.research.research_store.os.replace", side_effect=OSError("replace failed")):
                 with self.assertRaises(OSError):
                     research_store.write_jsonl_atomic(
                         path,

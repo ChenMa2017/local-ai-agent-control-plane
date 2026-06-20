@@ -1,7 +1,7 @@
 import unittest
 from dataclasses import dataclass
 
-import auth_policy
+from agent_host.bridge import auth_policy
 
 
 @dataclass(frozen=True)

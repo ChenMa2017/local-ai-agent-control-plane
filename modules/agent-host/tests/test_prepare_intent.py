@@ -1,6 +1,6 @@
 import unittest
 
-import prepare_intent
+from agent_host.intake import prepare_intent
 
 
 class PrepareIntentTests(unittest.TestCase):

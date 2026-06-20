@@ -1,6 +1,6 @@
 import unittest
 
-import request_contracts
+from agent_host.bridge import request_contracts
 
 
 class FakeBridgeError(Exception):

@@ -7,11 +7,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-import execution_evaluation
-import experiment_contracts
-import operator_summary
-import project_research_sync
-import research_objects
+from agent_host.research import execution_evaluation
+from agent_host.research import experiment_contracts
+from agent_host.reporting import operator_summary
+from agent_host.research import project_research_sync
+from agent_host.research import research_objects
 
 
 class ExecutionEvaluationTests(unittest.TestCase):
@@ -3671,11 +3671,11 @@ class ExecutionEvaluationTests(unittest.TestCase):
                 self.assertTrue(active_lock["held"])
                 return original_write(path, records)
 
-            with mock.patch("project_research_sync.advisory_file_lock", fake_lock), mock.patch(
-                "project_research_sync.read_jsonl_records_if_exists",
+            with mock.patch("agent_host.research.project_research_sync.advisory_file_lock", fake_lock), mock.patch(
+                "agent_host.research.project_research_sync.read_jsonl_records_if_exists",
                 side_effect=locked_read,
             ), mock.patch(
-                "project_research_sync.write_jsonl_records_atomic",
+                "agent_host.research.project_research_sync.write_jsonl_records_atomic",
                 side_effect=locked_write,
             ):
                 sync = research_objects.sync_project_experiment_index(
@@ -3726,11 +3726,11 @@ class ExecutionEvaluationTests(unittest.TestCase):
                 self.assertTrue(active_lock["held"])
                 return original_write(path, records)
 
-            with mock.patch("project_research_sync.advisory_file_lock", fake_lock), mock.patch(
-                "project_research_sync.read_jsonl_records_if_exists",
+            with mock.patch("agent_host.research.project_research_sync.advisory_file_lock", fake_lock), mock.patch(
+                "agent_host.research.project_research_sync.read_jsonl_records_if_exists",
                 side_effect=locked_read,
             ), mock.patch(
-                "project_research_sync.write_jsonl_records_atomic",
+                "agent_host.research.project_research_sync.write_jsonl_records_atomic",
                 side_effect=locked_write,
             ):
                 sync = research_objects.sync_project_hypothesis_registry(

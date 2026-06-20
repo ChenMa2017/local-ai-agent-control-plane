@@ -1,6 +1,6 @@
 import unittest
 
-import http_routes
+from agent_host.bridge import http_routes
 
 
 class FakeBridgeError(Exception):

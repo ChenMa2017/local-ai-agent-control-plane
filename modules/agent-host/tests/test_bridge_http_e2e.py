@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import bridge
-import experiment_contracts
+from agent_host.research import experiment_contracts
 
 
 class BridgeHttpE2ETests(unittest.TestCase):

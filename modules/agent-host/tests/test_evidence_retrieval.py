@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import evidence_retrieval
+from agent_host.intake import evidence_retrieval
 
 
 class EvidenceRetrievalTests(unittest.TestCase):

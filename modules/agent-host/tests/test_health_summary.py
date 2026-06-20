@@ -4,7 +4,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-import health_summary
+from agent_host.bridge import health_summary
 
 
 @dataclass(frozen=True)

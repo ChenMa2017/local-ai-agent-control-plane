@@ -1,6 +1,6 @@
 import unittest
 
-import web_ui
+from agent_host.bridge import web_ui
 
 
 class WebUiTests(unittest.TestCase):

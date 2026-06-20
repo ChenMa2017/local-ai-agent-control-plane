@@ -4,7 +4,7 @@ import threading
 import unittest
 from pathlib import Path
 
-import result_streaming
+from agent_host.bridge import result_streaming
 
 
 class ResultStreamingTests(unittest.TestCase):

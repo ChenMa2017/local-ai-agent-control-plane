@@ -5,7 +5,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-import config_loader
+from agent_host.bridge import config_loader
 
 
 @dataclass(frozen=True)

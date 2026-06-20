@@ -6,8 +6,8 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-import codex_runtime
-import result_streaming
+from agent_host.runtime import codex_runtime
+from agent_host.bridge import result_streaming
 
 
 class FakeBridgeError(Exception):

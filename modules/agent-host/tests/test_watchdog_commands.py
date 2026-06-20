@@ -6,7 +6,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-import watchdog_commands
+from agent_host.runtime import watchdog_commands
 
 
 class FakeBridgeError(Exception):

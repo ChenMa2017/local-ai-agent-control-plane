@@ -6,7 +6,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-import codex_tasking
+from agent_host.runtime import codex_tasking
 
 
 TASK_ID_RE = re.compile(r"^task_[A-Za-z0-9_.-]+$")

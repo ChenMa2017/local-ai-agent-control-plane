@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from api_bridge_bindings import build_api_bridge_bindings
-from bridge_foundation import (
+from agent_host.bridge.api_bridge_bindings import build_api_bridge_bindings
+from agent_host.bridge.bridge_foundation import (
     AGENT_HOST_VERSION,
     AuthPrincipal,
     BridgeConfig,
@@ -44,25 +44,25 @@ from bridge_foundation import (
     TASK_LIST_MAX_LIMIT,
     utc_now,
 )
-from bridge_runtime_bindings import build_bridge_runtime_bindings
-from codex_execution_handlers import build_codex_execution_handlers
-from codex_task_runtime_bindings import build_codex_task_runtime_bindings
-from execution_evaluation import (
+from agent_host.bridge.bridge_runtime_bindings import build_bridge_runtime_bindings
+from agent_host.runtime.codex_execution_handlers import build_codex_execution_handlers
+from agent_host.runtime.codex_task_runtime_bindings import build_codex_task_runtime_bindings
+from agent_host.research.execution_evaluation import (
     maybe_attach_execution_evaluation,
 )
-from health_bridge_bindings import build_health_bridge_bindings
-from intake_bridge_bindings import build_intake_bridge_bindings
-from stream_bridge_bindings import build_stream_bridge_bindings
-from watchdog_bridge_bindings import build_watchdog_bridge_bindings
-from result_streaming import redact_url_secrets
-from codex_tasking import (
+from agent_host.bridge.health_bridge_bindings import build_health_bridge_bindings
+from agent_host.intake.intake_bridge_bindings import build_intake_bridge_bindings
+from agent_host.bridge.stream_bridge_bindings import build_stream_bridge_bindings
+from agent_host.bridge.watchdog_bridge_bindings import build_watchdog_bridge_bindings
+from agent_host.bridge.result_streaming import redact_url_secrets
+from agent_host.runtime.codex_tasking import (
     read_visible_task_summaries,
 )
-from prepared_context import (
+from agent_host.intake.prepared_context import (
     prepared_run_prompt,
     prepared_run_summary,
 )
-from startup_runtime import build_parser, check_config, serve_bridge
+from agent_host.runtime.startup_runtime import build_parser, check_config, serve_bridge
 
 
 API_BRIDGE_BINDINGS = build_api_bridge_bindings(

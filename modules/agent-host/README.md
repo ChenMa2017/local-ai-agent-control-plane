@@ -11,6 +11,28 @@ watchdog_bridge.sh
 tests/test_bridge.py
 ```
 
+## 当前内部结构
+
+`agent-host` 现在开始采用“按领域收口、兼容旧入口”的整理方式：
+
+```text
+agent_host/
+  bridge/      # HTTP / API / SSE / UI / auth / route bindings
+  intake/      # intake / prepare / evidence retrieval / taskbox artifacts
+  reporting/   # operator summary / post-run artifact rendering
+  research/    # 研究闭环、实验评估、project sync、promotion 规则
+  runtime/     # Codex task runtime / watchdog commands / server startup
+
+bridge.py       # 主入口
+顶层 *.py       # 兼容入口，继续保留既有 import 路径
+```
+
+这一层重组的目标不是一次性把全部文件搬完，而是先把高耦合的研究域实现收进内部包，
+把顶层目录从“功能全平铺”逐步变成“入口层 + 内部领域层”。
+
+如果后续确认外部调用只使用 `bridge.py` 和少量稳定入口，就可以再做一轮
+“compat shim 清理”，那时顶层文件数量才会真正明显下降。
+
 这个原型现在有两个入口：
 
 ```text

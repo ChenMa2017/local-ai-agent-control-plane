@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import startup_runtime
+from agent_host.runtime import startup_runtime
 
 
 class FakeProject:
