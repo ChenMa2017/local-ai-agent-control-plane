@@ -1,6 +1,0 @@
-{
-  "files.exclude": {
-    "**/__pycache__": true,
-    "modules/agent-host/legacy_root_shims": true
-  }
-}
