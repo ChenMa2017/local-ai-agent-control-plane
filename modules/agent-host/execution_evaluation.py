@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +54,7 @@ from research_objects import (
 
 JsonObject = dict[str, Any]
 MAX_RUNNER_METRICS_BYTES = 256 * 1024
+ALLOWED_RUNNER_METRICS_PRODUCERS = {("experiment_runner", "local-runner")}
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,50 @@ class ExecutionEvaluationDependencies:
     write_text_atomic: Callable[[Path, str], None]
     append_jsonl: Callable[[Path, JsonObject], None]
     task_intake_id: Callable[[JsonObject], str]
+
+
+def _normalized_runner_metrics_producer(payload: JsonObject) -> tuple[str, str]:
+    producer = payload.get("producer") if isinstance(payload.get("producer"), dict) else {}
+    return (
+        str(producer.get("kind") or "").strip().lower(),
+        str(producer.get("id") or "").strip().lower(),
+    )
+
+
+def _runner_metrics_replay_rejection_reason(
+    prior_experiment_result: JsonObject,
+    *,
+    evaluation: JsonObject,
+    experiment_spec: JsonObject,
+    status: JsonObject,
+) -> str | None:
+    if not isinstance(prior_experiment_result, dict) or not prior_experiment_result:
+        return None
+    current_hash = str(status.get("sha256") or "").strip()
+    if not current_hash:
+        return None
+    prior_artifact = (
+        prior_experiment_result.get("runner_metrics_artifact")
+        if isinstance(prior_experiment_result.get("runner_metrics_artifact"), dict)
+        else {}
+    )
+    prior_hash = str(prior_artifact.get("sha256") or "").strip()
+    if not prior_hash:
+        return None
+    prior_task_id = str(prior_experiment_result.get("source_task_id") or "").strip()
+    current_task_id = str(evaluation.get("task_id") or "").strip()
+    prior_experiment_id = str(prior_experiment_result.get("experiment_id") or "").strip()
+    current_experiment_id = str(experiment_spec.get("experiment_id") or "").strip()
+    same_experiment = (
+        not prior_experiment_id
+        or not current_experiment_id
+        or prior_experiment_id == current_experiment_id
+    )
+    if prior_hash == current_hash and prior_task_id and current_task_id and prior_task_id != current_task_id and same_experiment:
+        return f"artifact sha256 already consumed by task {prior_task_id}"
+    if prior_task_id and current_task_id and prior_task_id == current_task_id and prior_hash != current_hash and same_experiment:
+        return "artifact sha256 changed after prior evaluation for the same task"
+    return None
 
 
 def load_task_prepare_bundle(
@@ -127,6 +173,10 @@ def build_execution_evaluation(
         "task_status": str(task.get("status") or ""),
         "task_mode": str(task.get("mode") or ""),
         "reference_task_id": str(task.get("reference_task_id") or ""),
+        "task_created_at": str(task.get("created_at") or ""),
+        "task_started_at": str(task.get("started_at") or ""),
+        "task_updated_at": str(task.get("updated_at") or ""),
+        "task_ended_at": str(task.get("ended_at") or ""),
         "execution_decision": execution_decision,
         "recommended_next_action": next_action,
         "summary": summary,
@@ -313,11 +363,17 @@ def load_runner_metrics_artifact(
     *,
     evaluation: JsonObject,
     experiment_spec: JsonObject,
+    prior_experiment_result: JsonObject | None = None,
 ) -> tuple[JsonObject, JsonObject]:
     artifact_path = task_dir / "RUNNER_METRICS.json"
     status: JsonObject = {
         "present": False,
+        "validated": False,
+        "producer_allowed": False,
         "trusted": False,
+        "sha256": None,
+        "replay_detected": False,
+        "prior_consumed_by_task_id": None,
         "rejection_reason": None,
     }
     if not artifact_path.exists():
@@ -337,8 +393,10 @@ def load_runner_metrics_artifact(
         status["rejection_reason"] = f"artifact metadata unreadable: {exc}"
         return {}, status
     try:
-        payload = json.loads(artifact_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        raw_payload = artifact_path.read_bytes()
+        status["sha256"] = "sha256:" + hashlib.sha256(raw_payload).hexdigest()
+        payload = json.loads(raw_payload.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         status["rejection_reason"] = f"invalid JSON: {exc}"
         return {}, status
     if not isinstance(payload, dict):
@@ -352,6 +410,31 @@ def load_runner_metrics_artifact(
     if rejection_reason:
         status["rejection_reason"] = rejection_reason
         return {}, status
+    status["validated"] = True
+    producer_key = _normalized_runner_metrics_producer(validated_payload)
+    status["producer_allowed"] = producer_key in ALLOWED_RUNNER_METRICS_PRODUCERS
+    if not status["producer_allowed"]:
+        producer_kind, producer_id = producer_key
+        status["rejection_reason"] = (
+            f"producer {producer_kind or '<unknown>'}:{producer_id or '<unknown>'} is not in the allowlist"
+        )
+        return validated_payload, status
+    replay_rejection_reason = _runner_metrics_replay_rejection_reason(
+        prior_experiment_result if isinstance(prior_experiment_result, dict) else {},
+        evaluation=evaluation,
+        experiment_spec=experiment_spec,
+        status=status,
+    )
+    if replay_rejection_reason:
+        status["replay_detected"] = True
+        prior_task_id = (
+            str(prior_experiment_result.get("source_task_id") or "").strip()
+            if isinstance(prior_experiment_result, dict)
+            else ""
+        )
+        status["prior_consumed_by_task_id"] = prior_task_id or None
+        status["rejection_reason"] = replay_rejection_reason
+        return validated_payload, status
     status["trusted"] = True
     return validated_payload, status
 
@@ -634,10 +717,14 @@ def maybe_attach_execution_evaluation(
     research_program = prepare_bundle.get("research_program") if isinstance(prepare_bundle.get("research_program"), dict) else {}
     hypothesis_registry = prepare_bundle.get("hypothesis_registry") if isinstance(prepare_bundle.get("hypothesis_registry"), dict) else {}
     experiment_spec = prepare_bundle.get("experiment_spec") if isinstance(prepare_bundle.get("experiment_spec"), dict) else {}
+    prior_experiment_result = deps.read_json_object_if_exists(
+        deps.intake_dir(config, intake_id) / "EXPERIMENT_RESULT.json"
+    )
     runner_metrics, runner_metrics_status = load_runner_metrics_artifact(
         task_dir,
         evaluation=evaluation,
         experiment_spec=experiment_spec,
+        prior_experiment_result=prior_experiment_result,
     )
     if runner_metrics_status.get("rejection_reason"):
         evaluation["warnings"] = list(evaluation.get("warnings") or []) + [

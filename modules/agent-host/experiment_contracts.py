@@ -33,6 +33,9 @@ RUNNER_METRIC_ALLOWED_FIELDS = {
     "baseline_value",
 }
 RUNNER_OWNED_METRIC_SOURCES = {"runner_metrics", "future_runner_metrics"}
+EPISTEMIC_SUCCESS_CRITERION_KINDS = {"metric", "falsification"}
+UNRESOLVED_SUCCESS_CRITERION_STATUSES = {"missing", "not_observed", "not_evaluable", "invalid"}
+RUNNER_METRICS_MAX_CLOCK_SKEW = dt.timedelta(minutes=5)
 
 
 def _metric_key(item: JsonObject) -> str:
@@ -41,6 +44,10 @@ def _metric_key(item: JsonObject) -> str:
 
 def _criterion_key(item: JsonObject) -> str:
     return str(item.get("criterion_id") or item.get("name") or "").strip().lower()
+
+
+def _criterion_kind(item: JsonObject) -> str:
+    return str(item.get("kind") or "").strip().lower()
 
 
 def _coerce_comparable(value: Any) -> Any:
@@ -92,19 +99,64 @@ def _normalized_outcome_status(status: Any) -> str | None:
     return None
 
 
+def _criterion_requires_metric_observation(item: JsonObject) -> bool:
+    return _criterion_kind(item) in EPISTEMIC_SUCCESS_CRITERION_KINDS
+
+
+def _is_success_criterion_unresolved(item: JsonObject) -> bool:
+    status = str(item.get("status") or "").strip().lower()
+    if _criterion_requires_metric_observation(item):
+        return _normalized_outcome_status(status) is None
+    return status in UNRESOLVED_SUCCESS_CRITERION_STATUSES
+
+
+def _is_epistemic_success_criterion_unresolved(item: JsonObject) -> bool:
+    if not _criterion_requires_metric_observation(item):
+        return False
+    status = str(item.get("status") or "").strip().lower()
+    return _normalized_outcome_status(status) is None
+
+
 def _is_finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
 def _is_timezone_aware_timestamp(value: Any) -> bool:
+    return _parse_timezone_aware_timestamp(value) is not None
+
+
+def _parse_timezone_aware_timestamp(value: Any) -> dt.datetime | None:
     text = str(value or "").strip()
     if not text:
-        return False
+        return None
     try:
         parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
-        return False
-    return parsed.tzinfo is not None
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
+
+
+def _runner_metrics_temporal_validation_error(
+    generated_at_value: Any,
+    *,
+    evaluation: JsonObject,
+) -> str | None:
+    generated_at = _parse_timezone_aware_timestamp(generated_at_value)
+    if generated_at is None:
+        return "generated_at must be a valid timezone-aware timestamp"
+    task_started_at = _parse_timezone_aware_timestamp(
+        evaluation.get("task_started_at") or evaluation.get("task_created_at")
+    )
+    task_finished_at = _parse_timezone_aware_timestamp(
+        evaluation.get("task_ended_at") or evaluation.get("task_updated_at")
+    )
+    if task_started_at is not None and generated_at < task_started_at - RUNNER_METRICS_MAX_CLOCK_SKEW:
+        return "generated_at predates the task execution window"
+    if task_finished_at is not None and generated_at > task_finished_at + RUNNER_METRICS_MAX_CLOCK_SKEW:
+        return "generated_at is later than the task completion window"
+    return None
 
 
 def _stable_experiment_spec_for_digest(experiment_spec: JsonObject) -> JsonObject:
@@ -146,6 +198,86 @@ def _metric_definition_index(metric_definitions: list[JsonObject]) -> dict[str, 
     return index
 
 
+def _metric_definition_alias_errors(metric_definitions: list[JsonObject]) -> list[str]:
+    seen_aliases: dict[str, str] = {}
+    errors: list[str] = []
+    for item in metric_definitions:
+        if not isinstance(item, dict):
+            continue
+        canonical = str(item.get("metric_id") or item.get("name") or "").strip() or "<unnamed_metric>"
+        aliases = {
+            str(item.get("metric_id") or "").strip().lower(),
+            str(item.get("name") or "").strip().lower(),
+        }
+        aliases.discard("")
+        for alias in aliases:
+            previous = seen_aliases.get(alias)
+            if previous is not None and previous != canonical:
+                errors.append(f"duplicate metric definition alias: {alias}")
+            else:
+                seen_aliases[alias] = canonical
+    return errors
+
+
+def _criterion_definition_errors(
+    criteria: list[JsonObject],
+    *,
+    metric_index: dict[str, JsonObject],
+    criterion_label: str,
+) -> list[str]:
+    seen_ids: set[str] = set()
+    errors: list[str] = []
+    for item in criteria:
+        if not isinstance(item, dict):
+            continue
+        criterion_id = str(item.get("criterion_id") or "").strip().lower()
+        if criterion_id:
+            if criterion_id in seen_ids:
+                errors.append(f"duplicate {criterion_label} criterion_id: {criterion_id}")
+            else:
+                seen_ids.add(criterion_id)
+        metric_name = str(item.get("metric_name") or "").strip().lower()
+        if metric_name and metric_name not in metric_index:
+            criterion_name = str(item.get("name") or item.get("criterion_id") or "").strip() or "<unnamed_criterion>"
+            errors.append(f"{criterion_label} criterion {criterion_name} references undeclared metric {metric_name}")
+    return errors
+
+
+def _experiment_spec_validation_errors(experiment_spec: JsonObject) -> list[str]:
+    metric_definitions = (
+        list(experiment_spec.get("metric_definitions") or [])
+        if isinstance(experiment_spec.get("metric_definitions"), list)
+        else []
+    )
+    success_criteria = (
+        list(experiment_spec.get("success_criteria") or [])
+        if isinstance(experiment_spec.get("success_criteria"), list)
+        else []
+    )
+    failure_criteria = (
+        list(experiment_spec.get("failure_criteria") or [])
+        if isinstance(experiment_spec.get("failure_criteria"), list)
+        else []
+    )
+    errors = _metric_definition_alias_errors(metric_definitions)
+    metric_index = _metric_definition_index(metric_definitions)
+    errors.extend(
+        _criterion_definition_errors(
+            success_criteria,
+            metric_index=metric_index,
+            criterion_label="success",
+        )
+    )
+    errors.extend(
+        _criterion_definition_errors(
+            failure_criteria,
+            metric_index=metric_index,
+            criterion_label="failure",
+        )
+    )
+    return errors
+
+
 def validate_runner_metrics_payload(
     payload: JsonObject,
     *,
@@ -169,14 +301,21 @@ def validate_runner_metrics_payload(
         return {}, "experiment_id does not match ExperimentSpec"
     if str(payload.get("experiment_spec_digest") or "") != experiment_spec_digest(experiment_spec):
         return {}, "experiment_spec_digest does not match ExperimentSpec"
+    spec_validation_errors = _experiment_spec_validation_errors(experiment_spec)
+    if spec_validation_errors:
+        return {}, f"ExperimentSpec invalid: {spec_validation_errors[0]}"
     producer = payload.get("producer")
     if not isinstance(producer, dict):
         return {}, "producer must be an object"
     for field in ("kind", "id", "version"):
         if not str(producer.get(field) or "").strip():
             return {}, f"producer.{field} is required"
-    if not _is_timezone_aware_timestamp(payload.get("generated_at")):
-        return {}, "generated_at must be a valid timezone-aware timestamp"
+    temporal_validation_error = _runner_metrics_temporal_validation_error(
+        payload.get("generated_at"),
+        evaluation=evaluation,
+    )
+    if temporal_validation_error:
+        return {}, temporal_validation_error
     metrics = payload.get("metrics")
     if not isinstance(metrics, list) or not metrics:
         return {}, "metrics must be a non-empty list"
@@ -281,7 +420,7 @@ def _criterion_outcome_statuses(success_criteria: list[JsonObject], *, criterion
     for item in success_criteria:
         if not isinstance(item, dict):
             continue
-        if criterion_kind and str(item.get("kind") or "").strip() != criterion_kind:
+        if criterion_kind and _criterion_kind(item) != criterion_kind:
             continue
         normalized = _normalized_outcome_status(item.get("status"))
         if normalized is not None:
@@ -405,6 +544,7 @@ def _merge_success_criteria(
         if not isinstance(item, dict):
             continue
         merged = dict(item)
+        criterion_kind = _criterion_kind(merged)
         metric_name = str(merged.get("metric_name") or "").strip().lower()
         metric = metric_index.get(metric_name) if metric_name else None
         if not _normalized_outcome_status(merged.get("status")) and isinstance(metric, dict):
@@ -417,6 +557,16 @@ def _merge_success_criteria(
                     merged["status"] = "pass"
                 elif evaluated is False:
                     merged["status"] = "fail"
+        if criterion_kind in EPISTEMIC_SUCCESS_CRITERION_KINDS and _normalized_outcome_status(merged.get("status")) is None:
+            target = merged.get("target")
+            if not metric_name:
+                merged["status"] = "not_evaluable"
+            elif not isinstance(metric, dict) or metric.get("value") is None:
+                merged["status"] = "not_observed"
+            elif not isinstance(target, dict) or not str(target.get("operator") or "").strip() or "value" not in target:
+                merged["status"] = "not_evaluable"
+            else:
+                merged["status"] = "not_evaluable"
         merged_criteria.append(merged)
     return merged_criteria
 
@@ -716,11 +866,12 @@ def build_structural_experiment_result(
         ]
     runner_metrics_payload = runner_metrics if isinstance(runner_metrics, dict) else {}
     runner_metrics_metadata = runner_metrics_status if isinstance(runner_metrics_status, dict) else {}
-    provided_metrics = (
+    raw_runner_metrics = (
         list(runner_metrics_payload.get("metrics") or [])
         if isinstance(runner_metrics_payload.get("metrics"), list)
         else []
     )
+    provided_metrics = raw_runner_metrics if bool(runner_metrics_metadata.get("trusted")) else []
     metrics = _merge_metric_items(
         metric_definitions,
         provided_metrics,
@@ -740,7 +891,12 @@ def build_structural_experiment_result(
     unresolved_success_criteria = [
         str(item.get("name") or item.get("criterion_id") or "")
         for item in success_criteria
-        if isinstance(item, dict) and str(item.get("status") or "") == "missing"
+        if isinstance(item, dict) and _is_success_criterion_unresolved(item)
+    ]
+    unresolved_epistemic_success_criteria = [
+        str(item.get("name") or item.get("criterion_id") or "")
+        for item in success_criteria
+        if isinstance(item, dict) and _is_epistemic_success_criterion_unresolved(item)
     ]
     missing_reproducibility_fields: list[str] = []
     if not list(experiment_spec.get("dataset_refs") or []):
@@ -772,7 +928,7 @@ def build_structural_experiment_result(
     if validity == "invalid":
         result = "invalid"
         provisional_result = "invalid"
-    elif not unresolved_success_criteria and assessment_basis == "runner_metrics":
+    elif not unresolved_epistemic_success_criteria and assessment_basis == "runner_metrics":
         support_outcomes = _criterion_outcome_statuses(success_criteria, criterion_kind="metric")
         falsification_outcomes = _criterion_outcome_statuses(success_criteria, criterion_kind="falsification")
         support_passed = bool(support_outcomes) and all(status == "pass" for status in support_outcomes)
@@ -811,6 +967,7 @@ def build_structural_experiment_result(
 
     promotion_eligible = (
         validity == "valid"
+        and not unresolved_epistemic_success_criteria
         and not runner_metrics_rejection_reason
         and not conflicting_success_criteria
         and not triggered_failure_criteria
@@ -854,9 +1011,20 @@ def build_structural_experiment_result(
         "limitations": limitations,
         "runner_metrics_artifact": {
             "present": bool(runner_metrics_metadata.get("present")),
+            "validated": bool(runner_metrics_metadata.get("validated")),
+            "producer_allowed": bool(runner_metrics_metadata.get("producer_allowed")),
             "trusted": bool(runner_metrics_metadata.get("trusted")),
+            "sha256": str(runner_metrics_metadata.get("sha256") or "") or None,
+            "replay_detected": bool(runner_metrics_metadata.get("replay_detected")),
+            "prior_consumed_by_task_id": str(runner_metrics_metadata.get("prior_consumed_by_task_id") or "") or None,
             "rejection_reason": runner_metrics_rejection_reason or None,
             "schema_version": str(runner_metrics_payload.get("schema_version") or "") or None,
+            "producer": (
+                dict(runner_metrics_payload.get("producer"))
+                if isinstance(runner_metrics_payload.get("producer"), dict)
+                else None
+            ),
+            "generated_at": str(runner_metrics_payload.get("generated_at") or "") or None,
         },
         "reproducibility": {
             "status": "contract_incomplete" if missing_reproducibility_fields else "contract_ready",

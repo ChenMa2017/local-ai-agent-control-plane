@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 import tempfile
 import threading
@@ -47,6 +48,21 @@ class BridgeHttpE2ETests(unittest.TestCase):
     ) -> None:
         script = codex_root / "scripts" / "codex-bridge.js"
         script.parent.mkdir(parents=True, exist_ok=True)
+        task_created_at = "2026-06-18T12:00:00.000Z"
+        task_started_at = "2026-06-18T12:00:05.000Z"
+        task_updated_at = "2026-06-18T12:01:00.000Z"
+        task_ended_at = "2026-06-18T12:01:00.000Z"
+        if isinstance(runner_metrics, dict):
+            generated_at_text = str(runner_metrics.get("generated_at") or "").strip()
+            if generated_at_text:
+                generated_at = dt.datetime.fromisoformat(generated_at_text.replace("Z", "+00:00"))
+                task_started = generated_at - dt.timedelta(minutes=5)
+                task_created = task_started - dt.timedelta(seconds=5)
+                task_ended = generated_at
+                task_created_at = task_created.isoformat().replace("+00:00", "Z")
+                task_started_at = task_started.isoformat().replace("+00:00", "Z")
+                task_updated_at = task_ended.isoformat().replace("+00:00", "Z")
+                task_ended_at = task_ended.isoformat().replace("+00:00", "Z")
         runner_metrics_write = (
             f"  fs.writeFileSync(path.join(taskDir, 'RUNNER_METRICS.json'), JSON.stringify({json.dumps(runner_metrics, ensure_ascii=False)}, null, 2));\n"
             if runner_metrics is not None
@@ -78,10 +94,10 @@ class BridgeHttpE2ETests(unittest.TestCase):
             "    project_path: path.join(root, 'secret-real-project-path'),\n"
             "    mode: readFlag('--mode', 'readonly'),\n"
             "    prompt: args[args.length - 1] || '',\n"
-            "    created_at: '2026-06-18T12:00:00.000Z',\n"
-            "    updated_at: '2026-06-18T12:01:00.000Z',\n"
-            "    started_at: '2026-06-18T12:00:05.000Z',\n"
-            "    ended_at: '2026-06-18T12:01:00.000Z',\n"
+            f"    created_at: {json.dumps(task_created_at)},\n"
+            f"    updated_at: {json.dumps(task_updated_at)},\n"
+            f"    started_at: {json.dumps(task_started_at)},\n"
+            f"    ended_at: {json.dumps(task_ended_at)},\n"
             "    exit_code: 0,\n"
             "    adapter_metadata: readJsonFlag('--metadata'),\n"
             "  };\n"
@@ -487,7 +503,10 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 self.assertEqual(page["experiment_result"]["adjudication_status"], "accepted")
                 self.assertTrue(page["experiment_result"]["promotion_eligible"])
                 self.assertTrue(page["experiment_result"]["runner_metrics_artifact"]["present"])
+                self.assertTrue(page["experiment_result"]["runner_metrics_artifact"]["validated"])
+                self.assertTrue(page["experiment_result"]["runner_metrics_artifact"]["producer_allowed"])
                 self.assertTrue(page["experiment_result"]["runner_metrics_artifact"]["trusted"])
+                self.assertTrue(str(page["experiment_result"]["runner_metrics_artifact"]["sha256"]).startswith("sha256:"))
                 self.assertEqual(page["experiment_result"]["metrics"][1]["name"], "domain_primary_metric")
                 self.assertEqual(page["experiment_result"]["metrics"][1]["value"], 0.031)
                 self.assertEqual(page["experiment_result"]["baseline_comparison"]["status"], "observed")
@@ -511,7 +530,10 @@ class BridgeHttpE2ETests(unittest.TestCase):
                 intake = self.request_json(base_url, f"/codex/intake?intake_id={intake_id}")
                 self.assertTrue(intake["ok"])
                 self.assertEqual(intake["experiment_result"]["assessment_basis"], "runner_metrics")
+                self.assertEqual(intake["experiment_result"]["runner_metrics_artifact"]["validated"], True)
+                self.assertEqual(intake["experiment_result"]["runner_metrics_artifact"]["producer_allowed"], True)
                 self.assertEqual(intake["experiment_result"]["runner_metrics_artifact"]["trusted"], True)
+                self.assertTrue(str(intake["experiment_result"]["runner_metrics_artifact"]["sha256"]).startswith("sha256:"))
                 self.assertEqual(intake["experiment_result"]["metrics"][1]["value"], 0.031)
                 self.assertEqual(intake["experiment_promotion"]["promotion_state"], "candidate_ready")
                 self.assertEqual(intake["hypothesis_promotion"]["promotion_state"], "candidate_ready")
@@ -771,6 +793,621 @@ class BridgeHttpE2ETests(unittest.TestCase):
                     "name does not match ExperimentSpec",
                     intake["experiment_result"]["runner_metrics_artifact"]["rejection_reason"],
                 )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        bridge.STREAM_TOKENS.clear()
+
+    def test_http_e2e_bounded_cpu_eval_blocks_partial_runner_metrics_from_promotion(self):
+        bridge.STREAM_TOKENS.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir(parents=True)
+            (workspace_root / "project_index").mkdir(parents=True)
+            codex_root = root / "codex-bridge"
+            self.write_watchdog_doc_search(
+                workspace_root,
+                {
+                    "query": "bounded cpu partial metric probe status",
+                    "decision": "safe_to_answer",
+                    "warnings": [],
+                    "read_plan": [{"path": "formal/partial_metric_probe.md", "reason": "primary source"}],
+                    "hits": [{"kind": "current_conclusion", "id": "partial_metric_probe_status", "score": 6.0}],
+                },
+            )
+            config = self.make_config(workspace_root, codex_root)
+
+            handler_class = type(
+                "ConfiguredWatchdogBridgeHandler",
+                (bridge.WatchdogBridgeHandler,),
+                {"config": config},
+            )
+            server = ThreadingHTTPServer((config.host, 0), handler_class)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://{config.host}:{server.server_port}"
+                self.wait_for_server(base_url)
+
+                prepared = self.request_json(
+                    base_url,
+                    "/codex/prepare",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "prompt": "Run a bounded CPU experiment to compare baseline vs variant with same data and same budget; success criterion accuracy.",
+                        "source": "web",
+                    },
+                )
+                self.assertTrue(prepared["ok"])
+                self.assertEqual(prepared["contract"]["objective"], "bounded_cpu_eval")
+                self.assertTrue(prepared["ready_to_run"])
+                intake_id = prepared["intake_id"]
+                experiment_spec = dict(prepared["experiment_spec"])
+                hypothesis_ids = list(experiment_spec.get("hypothesis_ids") or [])
+
+                experiment_spec.update(
+                    {
+                        "baseline_spec": {"required": True, "entities": ["baseline_v1"]},
+                        "dataset_refs": ["eval://demo/validation"],
+                        "random_seeds": [42],
+                        "code_reference": {
+                            "commit": "deadbeef",
+                            "paths": ["train.py"],
+                            "status": "resolved",
+                        },
+                        "config_reference": {
+                            "path": "configs/demo_partial_probe.yaml",
+                            "hash": "cfg-002",
+                            "status": "resolved",
+                        },
+                        "repeat_count": 3,
+                        "metric_definitions": [
+                            {
+                                "metric_id": "M-01",
+                                "name": "safe_result_available",
+                                "kind": "binary",
+                                "source": "execution_safe_result_excerpt",
+                                "higher_is_better": True,
+                            },
+                            {
+                                "metric_id": "M-02",
+                                "name": "accuracy_gain",
+                                "kind": "delta",
+                                "source": "runner_metrics",
+                                "higher_is_better": True,
+                                "unit": "fraction",
+                            },
+                            {
+                                "metric_id": "M-03",
+                                "name": "precision_gain",
+                                "kind": "delta",
+                                "source": "runner_metrics",
+                                "higher_is_better": True,
+                                "unit": "fraction",
+                            },
+                        ],
+                        "success_criteria": [
+                            {
+                                "criterion_id": "SC-D1",
+                                "name": "accuracy_gain_positive",
+                                "kind": "metric",
+                                "metric_name": "accuracy_gain",
+                                "target": {"operator": ">", "value": 0.0},
+                            },
+                            {
+                                "criterion_id": "SC-D2",
+                                "name": "precision_gain_positive",
+                                "kind": "metric",
+                                "metric_name": "precision_gain",
+                                "target": {"operator": ">", "value": 0.0},
+                            },
+                        ],
+                        "failure_criteria": [
+                            {
+                                "criterion_id": "FC-D1",
+                                "name": "accuracy_gain_exceeds_guardrail",
+                                "kind": "metric_guardrail",
+                                "metric_name": "accuracy_gain",
+                                "target": {"operator": ">", "value": 0.05},
+                            }
+                        ],
+                        "hypothesis_ids": hypothesis_ids,
+                    }
+                )
+
+                intake_root = codex_root / ".codex-bridge" / "intake" / intake_id
+                (intake_root / "EXPERIMENT_SPEC.json").write_text(
+                    json.dumps(experiment_spec, ensure_ascii=False, indent=2) + "\n"
+                )
+
+                task_id = "task_20260620_101500_e2epartial"
+                self.write_codex_bridge_script(
+                    codex_root,
+                    task_id=task_id,
+                    result_text="The bounded CPU probe completed, but only one of the required metric observations was exported.",
+                    runner_metrics={
+                        "schema_version": "runner_metrics.v0.2",
+                        "task_id": task_id,
+                        "intake_id": intake_id,
+                        "experiment_id": experiment_spec["experiment_id"],
+                        "experiment_spec_digest": experiment_contracts.experiment_spec_digest(experiment_spec),
+                        "producer": {
+                            "kind": "experiment_runner",
+                            "id": "local-runner",
+                            "version": "0.2",
+                        },
+                        "generated_at": "2026-06-20T10:15:00Z",
+                        "metrics": [
+                            {
+                                "metric_id": "M-02",
+                                "name": "accuracy_gain",
+                                "value": 0.031,
+                                "unit": "fraction",
+                                "sample_count": 3,
+                                "artifact_refs": ["artifacts/accuracy_probe.json"],
+                                "baseline_value": 0.0,
+                            }
+                        ],
+                    },
+                )
+
+                queued = self.request_json(
+                    base_url,
+                    "/codex/run",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "intake_id": intake_id,
+                    },
+                )
+                self.assertTrue(queued["ok"])
+                self.assertEqual(queued["task_id"], task_id)
+
+                page = self.request_json(
+                    base_url,
+                    f"/codex/result-page?task_id={task_id}&page=1&page_size=80",
+                )
+                self.assertTrue(page["ok"])
+                self.assertEqual(page["experiment_result"]["assessment_basis"], "runner_metrics")
+                self.assertEqual(page["experiment_result"]["validity"], "valid")
+                self.assertEqual(page["experiment_result"]["provisional_result"], "inconclusive")
+                self.assertEqual(page["experiment_result"]["result"], "inconclusive")
+                self.assertIsNone(page["experiment_result"]["final_result"])
+                self.assertEqual(page["experiment_result"]["adjudication_status"], "pending_review")
+                self.assertFalse(page["experiment_result"]["promotion_eligible"])
+                self.assertEqual(page["experiment_result"]["success_criteria"][0]["status"], "pass")
+                self.assertEqual(page["experiment_result"]["success_criteria"][1]["status"], "not_observed")
+                self.assertIn("success_criteria_unresolved", page["experiment_result"]["limitations"])
+                self.assertEqual(page["hypothesis_update"]["status"], "testing")
+                self.assertEqual(page["hypothesis_update"]["status_reason"], "experiment_not_promotion_eligible")
+                self.assertIn("success_criteria_unresolved", page["hypothesis_update"]["status_blockers"])
+                self.assertEqual(page["experiment_promotion"]["promotion_state"], "review_required")
+                self.assertNotEqual(page["experiment_promotion"]["project_sync"]["status"], "applied")
+                self.assertEqual(page["hypothesis_promotion"]["promotion_state"], "review_required")
+                self.assertNotEqual(page["hypothesis_promotion"]["project_sync"]["status"], "applied")
+                self.assertIn("success_criteria_not_resolved", page["evaluation_report"]["validity"]["limitations"])
+                self.assertEqual(page["operator_summary"]["overall_status"], "review_required")
+
+                intake = self.request_json(base_url, f"/codex/intake?intake_id={intake_id}")
+                self.assertTrue(intake["ok"])
+                self.assertEqual(intake["experiment_result"]["assessment_basis"], "runner_metrics")
+                self.assertFalse(intake["experiment_result"]["promotion_eligible"])
+                self.assertEqual(intake["hypothesis_update"]["status"], "testing")
+                self.assertEqual(intake["experiment_promotion"]["promotion_state"], "review_required")
+                self.assertEqual(intake["hypothesis_promotion"]["promotion_state"], "review_required")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        bridge.STREAM_TOKENS.clear()
+
+    def test_http_e2e_bounded_cpu_eval_promotes_supported_hypothesis_with_complete_runner_metrics(self):
+        bridge.STREAM_TOKENS.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir(parents=True)
+            (workspace_root / "project_index").mkdir(parents=True)
+            (workspace_root / "research").mkdir(parents=True)
+            codex_root = root / "codex-bridge"
+            self.write_watchdog_doc_search(
+                workspace_root,
+                {
+                    "query": "bounded cpu supported metric probe status",
+                    "decision": "safe_to_answer",
+                    "warnings": [],
+                    "read_plan": [{"path": "formal/supported_metric_probe.md", "reason": "primary source"}],
+                    "hits": [{"kind": "current_conclusion", "id": "supported_metric_probe_status", "score": 6.0}],
+                },
+            )
+            config = self.make_config(workspace_root, codex_root)
+
+            handler_class = type(
+                "ConfiguredWatchdogBridgeHandler",
+                (bridge.WatchdogBridgeHandler,),
+                {"config": config},
+            )
+            server = ThreadingHTTPServer((config.host, 0), handler_class)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://{config.host}:{server.server_port}"
+                self.wait_for_server(base_url)
+
+                prepared = self.request_json(
+                    base_url,
+                    "/codex/prepare",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "prompt": "Run a bounded CPU experiment to compare baseline vs variant with same data and same budget; success criterion accuracy.",
+                        "source": "web",
+                    },
+                )
+                self.assertTrue(prepared["ok"])
+                self.assertEqual(prepared["contract"]["objective"], "bounded_cpu_eval")
+                self.assertTrue(prepared["ready_to_run"])
+                intake_id = prepared["intake_id"]
+                experiment_spec = dict(prepared["experiment_spec"])
+                hypothesis_ids = list(experiment_spec.get("hypothesis_ids") or [])
+                hypothesis_id = hypothesis_ids[0]
+
+                experiment_spec.update(
+                    {
+                        "baseline_spec": {"required": True, "entities": ["baseline_v1"]},
+                        "dataset_refs": ["eval://demo/validation"],
+                        "random_seeds": [42],
+                        "code_reference": {
+                            "commit": "deadbeef",
+                            "paths": ["train.py"],
+                            "status": "resolved",
+                        },
+                        "config_reference": {
+                            "path": "configs/demo_supported_probe.yaml",
+                            "hash": "cfg-003",
+                            "status": "resolved",
+                        },
+                        "repeat_count": 3,
+                        "metric_definitions": [
+                            {
+                                "metric_id": "M-01",
+                                "name": "safe_result_available",
+                                "kind": "binary",
+                                "source": "execution_safe_result_excerpt",
+                                "higher_is_better": True,
+                            },
+                            {
+                                "metric_id": "M-02",
+                                "name": "accuracy_gain",
+                                "kind": "delta",
+                                "source": "runner_metrics",
+                                "higher_is_better": True,
+                                "unit": "fraction",
+                            },
+                        ],
+                        "success_criteria": [
+                            {
+                                "criterion_id": "SC-D1",
+                                "name": "accuracy_gain_positive",
+                                "kind": "metric",
+                                "metric_name": "accuracy_gain",
+                                "target": {"operator": ">", "value": 0.0},
+                            }
+                        ],
+                        "failure_criteria": [
+                            {
+                                "criterion_id": "FC-D1",
+                                "name": "accuracy_gain_exceeds_guardrail",
+                                "kind": "metric_guardrail",
+                                "metric_name": "accuracy_gain",
+                                "target": {"operator": ">", "value": 0.05},
+                            }
+                        ],
+                        "hypothesis_ids": hypothesis_ids,
+                    }
+                )
+
+                intake_root = codex_root / ".codex-bridge" / "intake" / intake_id
+                (intake_root / "EXPERIMENT_SPEC.json").write_text(
+                    json.dumps(experiment_spec, ensure_ascii=False, indent=2) + "\n"
+                )
+                (workspace_root / "research" / "HYPOTHESIS_REGISTRY.jsonl").write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "hypothesis_record.v0.1",
+                            "hypothesis_id": hypothesis_id,
+                            "revision": 1,
+                            "status": "testing",
+                            "claim": "Accuracy can be improved with the variant.",
+                            "confidence": {"value": 0.35},
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+                task_id = "task_20260620_103000_e2esupported"
+                self.write_codex_bridge_script(
+                    codex_root,
+                    task_id=task_id,
+                    result_text="The bounded CPU probe completed and all required support metrics improved over baseline.",
+                    runner_metrics={
+                        "schema_version": "runner_metrics.v0.2",
+                        "task_id": task_id,
+                        "intake_id": intake_id,
+                        "experiment_id": experiment_spec["experiment_id"],
+                        "experiment_spec_digest": experiment_contracts.experiment_spec_digest(experiment_spec),
+                        "producer": {
+                            "kind": "experiment_runner",
+                            "id": "local-runner",
+                            "version": "0.2",
+                        },
+                        "generated_at": "2026-06-20T10:30:00Z",
+                        "metrics": [
+                            {
+                                "metric_id": "M-02",
+                                "name": "accuracy_gain",
+                                "value": 0.031,
+                                "unit": "fraction",
+                                "sample_count": 3,
+                                "artifact_refs": ["artifacts/accuracy_probe.json"],
+                                "baseline_value": 0.0,
+                            }
+                        ],
+                    },
+                )
+
+                queued = self.request_json(
+                    base_url,
+                    "/codex/run",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "intake_id": intake_id,
+                    },
+                )
+                self.assertTrue(queued["ok"])
+                self.assertEqual(queued["task_id"], task_id)
+
+                page = self.request_json(
+                    base_url,
+                    f"/codex/result-page?task_id={task_id}&page=1&page_size=80",
+                )
+                self.assertTrue(page["ok"])
+                self.assertEqual(page["experiment_result"]["assessment_basis"], "runner_metrics")
+                self.assertEqual(page["experiment_result"]["validity"], "valid")
+                self.assertEqual(page["experiment_result"]["provisional_result"], "supported")
+                self.assertEqual(page["experiment_result"]["result"], "supported")
+                self.assertEqual(page["experiment_result"]["final_result"], "supported")
+                self.assertEqual(page["experiment_result"]["adjudication_status"], "accepted")
+                self.assertTrue(page["experiment_result"]["promotion_eligible"])
+                self.assertEqual(page["hypothesis_update"]["status"], "supported")
+                self.assertEqual(page["hypothesis_update"]["status_reason"], "experiment_final_result")
+                self.assertEqual(page["hypothesis_promotion"]["promotion_state"], "candidate_ready")
+                self.assertEqual(page["hypothesis_promotion"]["project_sync"]["status"], "applied")
+                self.assertEqual(page["experiment_promotion"]["promotion_state"], "candidate_ready")
+                self.assertEqual(page["experiment_promotion"]["project_sync"]["status"], "applied")
+                self.assertEqual(page["evaluation_report"]["experiment_assessment"]["result"], "supported")
+                self.assertEqual(page["operator_summary"]["overall_status"], "promotion_ready")
+
+                intake = self.request_json(base_url, f"/codex/intake?intake_id={intake_id}")
+                self.assertTrue(intake["ok"])
+                self.assertEqual(intake["experiment_result"]["final_result"], "supported")
+                self.assertEqual(intake["hypothesis_update"]["status"], "supported")
+                self.assertEqual(intake["hypothesis_promotion"]["project_sync"]["status"], "applied")
+
+                hypothesis_records = [
+                    json.loads(line)
+                    for line in (workspace_root / "research" / "HYPOTHESIS_REGISTRY.jsonl").read_text().strip().splitlines()
+                    if line.strip()
+                ]
+                self.assertEqual(len(hypothesis_records), 1)
+                self.assertEqual(hypothesis_records[0]["status"], "supported")
+                self.assertEqual(hypothesis_records[0]["revision"], 2)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        bridge.STREAM_TOKENS.clear()
+
+    def test_http_e2e_bounded_cpu_eval_promotes_refuted_hypothesis_with_complete_runner_metrics(self):
+        bridge.STREAM_TOKENS.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir(parents=True)
+            (workspace_root / "project_index").mkdir(parents=True)
+            (workspace_root / "research").mkdir(parents=True)
+            codex_root = root / "codex-bridge"
+            self.write_watchdog_doc_search(
+                workspace_root,
+                {
+                    "query": "bounded cpu refuted metric probe status",
+                    "decision": "safe_to_answer",
+                    "warnings": [],
+                    "read_plan": [{"path": "formal/refuted_metric_probe.md", "reason": "primary source"}],
+                    "hits": [{"kind": "current_conclusion", "id": "refuted_metric_probe_status", "score": 6.0}],
+                },
+            )
+            config = self.make_config(workspace_root, codex_root)
+
+            handler_class = type(
+                "ConfiguredWatchdogBridgeHandler",
+                (bridge.WatchdogBridgeHandler,),
+                {"config": config},
+            )
+            server = ThreadingHTTPServer((config.host, 0), handler_class)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://{config.host}:{server.server_port}"
+                self.wait_for_server(base_url)
+
+                prepared = self.request_json(
+                    base_url,
+                    "/codex/prepare",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "prompt": "Run a bounded CPU experiment to compare baseline vs variant with same data and same budget; success criterion accuracy.",
+                        "source": "web",
+                    },
+                )
+                self.assertTrue(prepared["ok"])
+                self.assertEqual(prepared["contract"]["objective"], "bounded_cpu_eval")
+                self.assertTrue(prepared["ready_to_run"])
+                intake_id = prepared["intake_id"]
+                experiment_spec = dict(prepared["experiment_spec"])
+                hypothesis_ids = list(experiment_spec.get("hypothesis_ids") or [])
+                hypothesis_id = hypothesis_ids[0]
+
+                experiment_spec.update(
+                    {
+                        "baseline_spec": {"required": True, "entities": ["baseline_v1"]},
+                        "dataset_refs": ["eval://demo/validation"],
+                        "random_seeds": [7],
+                        "code_reference": {
+                            "commit": "deadbeef",
+                            "paths": ["train.py"],
+                            "status": "resolved",
+                        },
+                        "config_reference": {
+                            "path": "configs/demo_refuted_probe.yaml",
+                            "hash": "cfg-004",
+                            "status": "resolved",
+                        },
+                        "repeat_count": 3,
+                        "metric_definitions": [
+                            {
+                                "metric_id": "M-01",
+                                "name": "safe_result_available",
+                                "kind": "binary",
+                                "source": "execution_safe_result_excerpt",
+                                "higher_is_better": True,
+                            },
+                            {
+                                "metric_id": "M-02",
+                                "name": "latency_delta",
+                                "kind": "delta",
+                                "source": "runner_metrics",
+                                "higher_is_better": False,
+                                "unit": "fraction",
+                            },
+                        ],
+                        "success_criteria": [
+                            {
+                                "criterion_id": "FC-D1",
+                                "name": "latency_regression_detected",
+                                "kind": "falsification",
+                                "metric_name": "latency_delta",
+                                "target": {"operator": ">", "value": 0.0},
+                            }
+                        ],
+                        "failure_criteria": [],
+                        "hypothesis_ids": hypothesis_ids,
+                    }
+                )
+
+                intake_root = codex_root / ".codex-bridge" / "intake" / intake_id
+                (intake_root / "EXPERIMENT_SPEC.json").write_text(
+                    json.dumps(experiment_spec, ensure_ascii=False, indent=2) + "\n"
+                )
+                (workspace_root / "research" / "HYPOTHESIS_REGISTRY.jsonl").write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "hypothesis_record.v0.1",
+                            "hypothesis_id": hypothesis_id,
+                            "revision": 1,
+                            "status": "testing",
+                            "claim": "Latency should not regress with the variant.",
+                            "confidence": {"value": 0.35},
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+                task_id = "task_20260620_103500_e2erefuted"
+                self.write_codex_bridge_script(
+                    codex_root,
+                    task_id=task_id,
+                    result_text="The bounded CPU probe completed and explicit falsification criteria were satisfied.",
+                    runner_metrics={
+                        "schema_version": "runner_metrics.v0.2",
+                        "task_id": task_id,
+                        "intake_id": intake_id,
+                        "experiment_id": experiment_spec["experiment_id"],
+                        "experiment_spec_digest": experiment_contracts.experiment_spec_digest(experiment_spec),
+                        "producer": {
+                            "kind": "experiment_runner",
+                            "id": "local-runner",
+                            "version": "0.2",
+                        },
+                        "generated_at": "2026-06-20T10:35:00Z",
+                        "metrics": [
+                            {
+                                "metric_id": "M-02",
+                                "name": "latency_delta",
+                                "value": 0.042,
+                                "unit": "fraction",
+                                "sample_count": 3,
+                                "artifact_refs": ["artifacts/latency_probe.json"],
+                                "baseline_value": 0.0,
+                            }
+                        ],
+                    },
+                )
+
+                queued = self.request_json(
+                    base_url,
+                    "/codex/run",
+                    method="POST",
+                    payload={
+                        "workspace": "demo",
+                        "intake_id": intake_id,
+                    },
+                )
+                self.assertTrue(queued["ok"])
+                self.assertEqual(queued["task_id"], task_id)
+
+                page = self.request_json(
+                    base_url,
+                    f"/codex/result-page?task_id={task_id}&page=1&page_size=80",
+                )
+                self.assertTrue(page["ok"])
+                self.assertEqual(page["experiment_result"]["assessment_basis"], "runner_metrics")
+                self.assertEqual(page["experiment_result"]["validity"], "valid")
+                self.assertEqual(page["experiment_result"]["provisional_result"], "refuted")
+                self.assertEqual(page["experiment_result"]["result"], "refuted")
+                self.assertEqual(page["experiment_result"]["final_result"], "refuted")
+                self.assertEqual(page["experiment_result"]["adjudication_status"], "accepted")
+                self.assertTrue(page["experiment_result"]["promotion_eligible"])
+                self.assertEqual(page["hypothesis_update"]["status"], "refuted")
+                self.assertEqual(page["hypothesis_update"]["status_reason"], "experiment_final_result")
+                self.assertEqual(page["hypothesis_promotion"]["promotion_state"], "candidate_ready")
+                self.assertEqual(page["hypothesis_promotion"]["project_sync"]["status"], "applied")
+                self.assertEqual(page["experiment_promotion"]["promotion_state"], "candidate_ready")
+                self.assertEqual(page["experiment_promotion"]["project_sync"]["status"], "applied")
+                self.assertEqual(page["evaluation_report"]["experiment_assessment"]["result"], "refuted")
+                self.assertEqual(page["operator_summary"]["overall_status"], "promotion_ready")
+
+                intake = self.request_json(base_url, f"/codex/intake?intake_id={intake_id}")
+                self.assertTrue(intake["ok"])
+                self.assertEqual(intake["experiment_result"]["final_result"], "refuted")
+                self.assertEqual(intake["hypothesis_update"]["status"], "refuted")
+                self.assertEqual(intake["hypothesis_promotion"]["project_sync"]["status"], "applied")
+
+                hypothesis_records = [
+                    json.loads(line)
+                    for line in (workspace_root / "research" / "HYPOTHESIS_REGISTRY.jsonl").read_text().strip().splitlines()
+                    if line.strip()
+                ]
+                self.assertEqual(len(hypothesis_records), 1)
+                self.assertEqual(hypothesis_records[0]["status"], "refuted")
+                self.assertEqual(hypothesis_records[0]["revision"], 2)
             finally:
                 server.shutdown()
                 server.server_close()

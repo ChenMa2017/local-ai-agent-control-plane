@@ -11,6 +11,9 @@ from promotion_policy import (
 )
 
 JsonObject = dict[str, Any]
+PASS_LIKE_SUCCESS_CRITERION_STATUSES = {"pass", "passed", "met", "success", "satisfied"}
+FAIL_LIKE_SUCCESS_CRITERION_STATUSES = {"fail", "failed", "not_met", "unsatisfied"}
+EPISTEMIC_SUCCESS_CRITERION_KINDS = {"metric", "falsification"}
 
 
 def utc_now() -> dt.datetime:
@@ -24,6 +27,14 @@ def _experiment_failure_criteria(experiment_result: JsonObject | None) -> list[J
     if not isinstance(failure_criteria, list):
         return []
     return [item for item in failure_criteria if isinstance(item, dict)]
+
+
+def _success_criterion_is_resolved(item: JsonObject) -> bool:
+    status = str(item.get("status") or "").strip().lower()
+    kind = str(item.get("kind") or "").strip().lower()
+    if kind in EPISTEMIC_SUCCESS_CRITERION_KINDS:
+        return status in PASS_LIKE_SUCCESS_CRITERION_STATUSES | FAIL_LIKE_SUCCESS_CRITERION_STATUSES
+    return status != "missing"
 
 
 def _failure_criteria_summary(failure_criteria: list[JsonObject]) -> JsonObject:
@@ -64,7 +75,11 @@ def build_research_machine_checks(
         for item in (experiment_spec.get("hypothesis_ids") or [])
         if str(item or "").strip()
     ]
-    success_criteria = experiment_spec.get("success_criteria") if isinstance(experiment_spec.get("success_criteria"), list) else []
+    success_criteria = []
+    if isinstance(experiment_result, dict) and isinstance(experiment_result.get("success_criteria"), list):
+        success_criteria = experiment_result.get("success_criteria") or []
+    elif isinstance(experiment_spec.get("success_criteria"), list):
+        success_criteria = experiment_spec.get("success_criteria") or []
     failure_criteria = _experiment_failure_criteria(experiment_result)
     triggered_failure_criteria = [
         str(item.get("name") or item.get("criterion_id") or "").strip()
@@ -74,7 +89,7 @@ def build_research_machine_checks(
     experiment_success_criteria_resolved = True
     if bool(experiment_spec.get("required")):
         experiment_success_criteria_resolved = not any(
-            isinstance(item, dict) and str(item.get("status") or "") == "missing"
+            isinstance(item, dict) and not _success_criterion_is_resolved(item)
             for item in success_criteria
         )
     return {
@@ -101,6 +116,16 @@ def build_research_machine_checks(
         ),
         "runner_metrics_artifact_present": (
             bool(((experiment_result or {}).get("runner_metrics_artifact") or {}).get("present"))
+            if isinstance(experiment_result, dict)
+            else False
+        ),
+        "runner_metrics_artifact_validated": (
+            bool(((experiment_result or {}).get("runner_metrics_artifact") or {}).get("validated"))
+            if isinstance(experiment_result, dict)
+            else False
+        ),
+        "runner_metrics_artifact_producer_allowed": (
+            bool(((experiment_result or {}).get("runner_metrics_artifact") or {}).get("producer_allowed"))
             if isinstance(experiment_result, dict)
             else False
         ),
