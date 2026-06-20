@@ -964,6 +964,10 @@ def build_structural_experiment_result(
     runner_metrics_rejection_reason = str(runner_metrics_metadata.get("rejection_reason") or "").strip()
     if runner_metrics_rejection_reason:
         limitations.append("runner_metrics_rejected")
+    reproducibility_required_for_conclusive_promotion = (
+        provisional_result in {"supported", "refuted"}
+        and bool(missing_reproducibility_fields)
+    )
 
     promotion_eligible = (
         validity == "valid"
@@ -971,6 +975,7 @@ def build_structural_experiment_result(
         and not runner_metrics_rejection_reason
         and not conflicting_success_criteria
         and not triggered_failure_criteria
+        and not reproducibility_required_for_conclusive_promotion
     )
     adjudication_status = "accepted"
     if validity == "invalid":

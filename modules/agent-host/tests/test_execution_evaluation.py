@@ -1155,6 +1155,81 @@ class ExecutionEvaluationTests(unittest.TestCase):
         self.assertEqual(experiment_result["success_criteria"][0]["status"], "pass")
         self.assertEqual(experiment_result["success_criteria"][1]["status"], "not_observed")
 
+    def test_build_experiment_result_requires_reproducibility_contract_for_supported_promotion(self):
+        experiment_result = research_objects.build_experiment_result(
+            {
+                "task_status": "done",
+                "result_available": True,
+                "write_audit": {},
+                "task_id": "task_20260620_092500_reprosupport",
+                "intake_id": "intake_reprosupport",
+                "workspace": "demo",
+                "updated_at": "2026-06-20T09:25:00Z",
+            },
+            {
+                "required": True,
+                "experiment_id": "experiment_repro_support_probe",
+                "hypothesis_ids": ["hypothesis_repro_support_probe"],
+                "baseline_spec": {"required": True, "entities": []},
+                "dataset_refs": [],
+                "random_seeds": [],
+                "code_reference": {},
+                "config_reference": {},
+                "repeat_count": 3,
+                "metric_definitions": [
+                    {
+                        "metric_id": "M-01",
+                        "name": "safe_result_available",
+                        "kind": "binary",
+                        "source": "execution_safe_result_excerpt",
+                        "higher_is_better": True,
+                    },
+                    {
+                        "metric_id": "M-02",
+                        "name": "accuracy_gain",
+                        "kind": "delta",
+                        "source": "runner_metrics",
+                        "higher_is_better": True,
+                    },
+                ],
+                "success_criteria": [
+                    {
+                        "criterion_id": "SC-01",
+                        "name": "accuracy_gain_positive",
+                        "kind": "metric",
+                        "metric_name": "accuracy_gain",
+                        "target": {"operator": ">", "value": 0.0},
+                    }
+                ],
+            },
+            {},
+            {},
+            runner_metrics={
+                "schema_version": "runner_metrics.v0.2",
+                "metrics": [
+                    {
+                        "metric_id": "M-02",
+                        "name": "accuracy_gain",
+                        "value": 0.031,
+                        "baseline_value": 0.0,
+                    }
+                ],
+            },
+            runner_metrics_status={
+                "present": True,
+                "trusted": True,
+            },
+        )
+
+        self.assertEqual(experiment_result["assessment_basis"], "runner_metrics")
+        self.assertEqual(experiment_result["provisional_result"], "supported")
+        self.assertEqual(experiment_result["result"], "inconclusive")
+        self.assertIsNone(experiment_result["final_result"])
+        self.assertEqual(experiment_result["adjudication_status"], "pending_review")
+        self.assertFalse(experiment_result["promotion_eligible"])
+        self.assertIn("reproducibility_contract_incomplete", experiment_result["limitations"])
+        self.assertEqual(experiment_result["reproducibility"]["status"], "contract_incomplete")
+
     def test_build_experiment_result_requires_complete_falsification_criteria_for_refuted_result(self):
         experiment_result = research_objects.build_experiment_result(
             {
@@ -1946,6 +2021,175 @@ class ExecutionEvaluationTests(unittest.TestCase):
             self.assertFalse(attachments["evaluation_report"]["machine_checks"]["runner_metrics_artifact_trusted"])
             self.assertTrue(attachments["evaluation_report"]["machine_checks"]["runner_metrics_artifact_validated"])
             self.assertFalse(attachments["evaluation_report"]["machine_checks"]["runner_metrics_artifact_producer_allowed"])
+
+    def test_maybe_attach_execution_evaluation_blocks_supported_promotion_when_reproducibility_contract_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            deps = self.make_deps(root)
+            config = self.Config(root)
+            intake_id = "intake_supported_repro_gate"
+            intake_root = root / ".codex-bridge" / "intake" / intake_id
+            intake_root.mkdir(parents=True, exist_ok=True)
+            (intake_root / "TASK_CONTRACT.json").write_text(
+                json.dumps(
+                    {
+                        "objective": "bounded_cpu_eval",
+                        "mode": "readonly",
+                        "prompt": "Run the bounded CPU probe and keep the variant only if the primary metric improves.",
+                        "summary": "Bounded CPU supported repro gate",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "EVIDENCE_RETRIEVAL.json").write_text(
+                json.dumps(
+                    {
+                        "query": "bounded cpu supported repro gate",
+                        "decision": "safe_to_answer",
+                        "read_plan": [{"path": "formal/metric_probe.md", "reason": "primary source"}],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "RESEARCH_PROGRAM.json").write_text(
+                json.dumps(
+                    {
+                        "program_id": "demo-program",
+                        "available": True,
+                        "publish_only_after_review": False,
+                        "allowed_conclusion_statuses": ["confirmed", "tentative", "auxiliary_only"],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "HYPOTHESIS_REGISTRY.json").write_text(
+                json.dumps(
+                    {
+                        "registry_status": "active",
+                        "hypotheses": [
+                            {"hypothesis_id": "hypothesis_supported_repro_gate", "summary": "The variant should outperform baseline"}
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            (intake_root / "EXPERIMENT_SPEC.json").write_text(
+                json.dumps(
+                    {
+                        "required": True,
+                        "objective": "bounded_cpu_eval",
+                        "task_type": "bounded_execution",
+                        "hypothesis_ids": ["hypothesis_supported_repro_gate"],
+                        "experiment_id": "experiment_supported_repro_gate",
+                        "baseline_spec": {"required": True, "entities": []},
+                        "dataset_refs": [],
+                        "random_seeds": [],
+                        "code_reference": {},
+                        "config_reference": {},
+                        "repeat_count": 3,
+                        "metric_definitions": [
+                            {
+                                "metric_id": "M-01",
+                                "name": "safe_result_available",
+                                "kind": "binary",
+                                "source": "execution_safe_result_excerpt",
+                                "higher_is_better": True,
+                            },
+                            {
+                                "metric_id": "M-02",
+                                "name": "accuracy_gain",
+                                "kind": "delta",
+                                "source": "runner_metrics",
+                                "higher_is_better": True,
+                            },
+                        ],
+                        "success_criteria": [
+                            {
+                                "criterion_id": "SC-01",
+                                "name": "accuracy_gain_positive",
+                                "kind": "metric",
+                                "metric_name": "accuracy_gain",
+                                "target": {"operator": ">", "value": 0.0},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+            task = {
+                "task_id": "task_20260620_104000_supportedreprogate",
+                "project": "demo",
+                "status": "done",
+                "mode": "readonly",
+                "created_at": "2026-06-20T10:35:00Z",
+                "started_at": "2026-06-20T10:35:05Z",
+                "updated_at": "2026-06-20T10:36:00Z",
+                "ended_at": "2026-06-20T10:36:00Z",
+                "adapter_metadata": {"intake_id": intake_id},
+            }
+            task_dir = root / "task_20260620_104000_supportedreprogate"
+            task_dir.mkdir(parents=True, exist_ok=True)
+            (task_dir / "RUNNER_METRICS.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "runner_metrics.v0.2",
+                        "task_id": task["task_id"],
+                        "intake_id": intake_id,
+                        "experiment_id": "experiment_supported_repro_gate",
+                        "experiment_spec_digest": experiment_contracts.experiment_spec_digest(
+                            json.loads((intake_root / "EXPERIMENT_SPEC.json").read_text())
+                        ),
+                        "producer": {
+                            "kind": "experiment_runner",
+                            "id": "local-runner",
+                            "version": "0.2",
+                        },
+                        "generated_at": "2026-06-20T10:36:00Z",
+                        "metrics": [
+                            {
+                                "metric_id": "M-02",
+                                "value": 0.031,
+                                "unit": "fraction",
+                                "sample_count": 3,
+                                "baseline_value": 0.0,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
+
+            attachments = execution_evaluation.maybe_attach_execution_evaluation(
+                config,
+                task_dir,
+                task,
+                {"text": "The bounded probe completed and the variant beat baseline on the primary metric."},
+                deps,
+            )
+
+            experiment_result = attachments["experiment_result"]
+            self.assertEqual(experiment_result["provisional_result"], "supported")
+            self.assertEqual(experiment_result["result"], "inconclusive")
+            self.assertIsNone(experiment_result["final_result"])
+            self.assertFalse(experiment_result["promotion_eligible"])
+            self.assertIn("reproducibility_contract_incomplete", experiment_result["limitations"])
+            self.assertEqual(attachments["hypothesis_update"]["status"], "testing")
+            self.assertEqual(attachments["hypothesis_update"]["status_reason"], "experiment_not_promotion_eligible")
+            self.assertIn("reproducibility_contract_incomplete", attachments["hypothesis_update"]["status_blockers"])
+            self.assertEqual(attachments["experiment_promotion"]["promotion_state"], "review_required")
+            self.assertEqual(attachments["hypothesis_promotion"]["promotion_state"], "review_required")
 
     def test_maybe_attach_execution_evaluation_rejects_replayed_runner_metrics_hash_from_prior_task(self):
         with tempfile.TemporaryDirectory() as tmp:
