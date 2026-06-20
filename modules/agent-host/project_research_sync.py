@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from hypothesis_state import validate_hypothesis_registry_transition, validate_status_transition
-from research_store import write_json_atomic
+from research_store import write_json_atomic, write_jsonl_atomic
 
 JsonObject = dict[str, Any]
 
@@ -55,9 +55,7 @@ def read_jsonl_records_if_exists(path: Path) -> list[JsonObject]:
 
 
 def write_jsonl_records_atomic(path: Path, records: list[JsonObject]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = "\n".join(json.dumps(item, ensure_ascii=False) for item in records)
-    path.write_text((text + "\n") if text else "")
+    write_jsonl_atomic(path, records)
 
 
 def normalize_current_conclusions_item(update: JsonObject) -> JsonObject:
