@@ -108,12 +108,28 @@ If several teammates test in the same Discord server, each machine should set it
 
 This keeps command names readable and avoids cross-machine collisions in the slash-command picker.
 
-Set environment variables:
+Preferred local secret source:
 
 ```bash
-export DISCORD_BOT_TOKEN="your-discord-bot-token"
-export DISCORD_GUILD_ID="your-test-guild-id"
-export AGENT_HOST_TOKEN="your-agent-host-token"
+mkdir -p ~/.config/agent-host
+nano ~/.config/agent-host/secrets.env
+chmod 600 ~/.config/agent-host/secrets.env
+```
+
+Example:
+
+```bash
+DISCORD_BOT_TOKEN=your-discord-bot-token
+DISCORD_GUILD_ID=your-test-guild-id
+AGENT_HOST_TOKEN=your-agent-host-token
+```
+
+For an interactive shell session, load the same file instead of creating a second secret source:
+
+```bash
+set -a
+. ~/.config/agent-host/secrets.env
+set +a
 ```
 
 Start the Agent Host first:

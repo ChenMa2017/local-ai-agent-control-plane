@@ -3,6 +3,7 @@
   "displayName": "Codex Watchdog",
   "description": "Controls a server-side scheduled Codex watcher from VSCode Remote.",
   "version": "0.1.47",
+  "license": "MIT",
   "publisher": "chenma",
   "engines": {
     "vscode": "^1.92.0"

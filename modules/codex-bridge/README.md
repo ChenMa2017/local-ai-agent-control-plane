@@ -164,6 +164,8 @@ protected path violation status
 
 If the workspace is a Git repository, the audit uses `git status --porcelain`, `git diff --stat`, and `git diff --name-status`. For non-Git workspaces it falls back to a best-effort file snapshot.
 
+For Git-backed `workspace-write` tasks, the bridge now prepares an isolated temporary `git worktree` and runs Codex inside that checkout. This keeps the original checkout cleaner during the task and makes the task-local diff easier to inspect. The isolated worktree starts from `HEAD`, so uncommitted local changes in the original workspace are not automatically included in the writable task context.
+
 Protected paths are checked for writable tasks. The default policy flags paths such as:
 
 ```text

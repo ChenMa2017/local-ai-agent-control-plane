@@ -83,6 +83,25 @@ setTimeout(() => {
   return { root, project, stateDir, configPath };
 }
 
+function runGitLocal(cwd, args) {
+  const result = cp.spawnSync("git", args, {
+    cwd,
+    encoding: "utf8"
+  });
+  assert.strictEqual(result.status, 0, `git command failed\ncwd=${cwd}\nargs=${args.join(" ")}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+  return result;
+}
+
+function makeGitFixture(name, extraConfig = {}) {
+  const fixture = makeFixture(name, extraConfig);
+  runGitLocal(fixture.project, ["init"]);
+  runGitLocal(fixture.project, ["config", "user.name", "Test User"]);
+  runGitLocal(fixture.project, ["config", "user.email", "test@example.com"]);
+  runGitLocal(fixture.project, ["add", "README.md"]);
+  runGitLocal(fixture.project, ["commit", "-m", "initial"]);
+  return fixture;
+}
+
 function taskFile(fixture, id) {
   return path.join(fixture.stateDir, "tasks", id, "task.json");
 }
@@ -302,6 +321,40 @@ async function testWorkspaceWriteGeneratesAudit() {
   assert(result.includes("NOTES.md"), result);
 }
 
+async function testWorkspaceWriteUsesIsolatedGitWorktree() {
+  const fixture = makeGitFixture("write-worktree");
+  const config = JSON.parse(fs.readFileSync(fixture.configPath, "utf8"));
+  config.projects.self.mode = "workspace-write";
+  config.projects.self.allowedModes = ["workspace-write"];
+  fs.writeFileSync(fixture.configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+  const run = runBridge(["run", "--config", fixture.configPath, "--project", "self", "--user", "tester", "isolated write"], {
+    env: {
+      FAKE_CODEX_SLEEP_MS: "10",
+      FAKE_CODEX_WRITE_FILE: "NOTES.md",
+      FAKE_CODEX_WRITE_CONTENT: "# Isolated Notes\\n"
+    }
+  });
+  const id = parseTaskId(run.stdout);
+  const done = await waitForTask(
+    fixture,
+    id,
+    (task) => task.status === "done" && task.worktree_cleanup_status === "removed",
+    "done"
+  );
+
+  assert.strictEqual(done.execution_strategy, "git_worktree");
+  assert.strictEqual(done.worktree_source_dirty, false);
+  assert(done.worktree_head);
+  assert.strictEqual(done.worktree_cleanup_status, "removed");
+  assert.strictEqual(fs.existsSync(path.join(fixture.project, "NOTES.md")), false);
+  assert.strictEqual(fs.existsSync(done.worktree_path), false);
+  assert.strictEqual(done.changed_files_count, 1);
+
+  const originalStatus = runGitLocal(fixture.project, ["status", "--porcelain"]).stdout.trim();
+  assert.strictEqual(originalStatus, "");
+}
+
 async function testProtectedPathViolationIsDetected() {
   const fixture = makeFixture("protected-path");
   const config = JSON.parse(fs.readFileSync(fixture.configPath, "utf8"));
@@ -324,6 +377,40 @@ async function testProtectedPathViolationIsDetected() {
   const result = fs.readFileSync(violation.safe_result_file, "utf8");
   assert(result.includes("Protected path violation: yes"), result);
   assert(!result.includes("should-not-leak"), result);
+}
+
+async function testProtectedPathGuardStopsGitWorkspaceWriteEarly() {
+  const fixture = makeGitFixture("protected-guard", {
+    protectedPathWatchIntervalMs: 50,
+    cancelGraceMs: 100
+  });
+  const config = JSON.parse(fs.readFileSync(fixture.configPath, "utf8"));
+  config.projects.self.mode = "workspace-write";
+  config.projects.self.allowedModes = ["workspace-write"];
+  fs.writeFileSync(fixture.configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+  const run = runBridge(["run", "--config", fixture.configPath, "--project", "self", "--user", "tester", "write protected"], {
+    env: {
+      FAKE_CODEX_SLEEP_MS: "3000",
+      FAKE_CODEX_WRITE_FILE: ".env",
+      FAKE_CODEX_WRITE_CONTENT: "SECRET_TOKEN=guard-stop\\n"
+    }
+  });
+  const id = parseTaskId(run.stdout);
+  const violation = await waitForTask(
+    fixture,
+    id,
+    (task) => task.status === "policy_violation" && task.worktree_cleanup_status === "removed",
+    "policy_violation",
+    12000
+  );
+
+  assert.strictEqual(violation.execution_strategy, "git_worktree");
+  assert.strictEqual(violation.termination_reason, "policy_violation");
+  assert.strictEqual(fs.existsSync(path.join(fixture.project, ".env")), false);
+  assert.strictEqual(fs.existsSync(violation.worktree_path), false);
+  const bridgeLog = fs.readFileSync(path.join(fixture.stateDir, "tasks", id, "bridge.log"), "utf8");
+  assert(bridgeLog.includes("protected_path_guard triggered"), bridgeLog);
 }
 
 async function testWorkspaceWriteLockSerializesSameWorkspace() {
@@ -536,7 +623,9 @@ async function main() {
   await testAdapterMetadataAndIdempotency();
   await testWorkspaceWriteModeUsesWorkspaceSandbox();
   await testWorkspaceWriteGeneratesAudit();
+  await testWorkspaceWriteUsesIsolatedGitWorktree();
   await testProtectedPathViolationIsDetected();
+  await testProtectedPathGuardStopsGitWorkspaceWriteEarly();
   await testWorkspaceWriteLockSerializesSameWorkspace();
   await testNestedWorkspaceWriteLockSerializes();
   await testCancelReleasesWorkspaceWriteLock();

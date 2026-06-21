@@ -86,6 +86,8 @@ policy_violation status
 workspace write lock
 ```
 
+For Git-backed workspaces, `workspace-write` now runs inside an isolated temporary `git worktree` snapshot instead of writing directly into the original checkout. The snapshot is created from `HEAD`, so uncommitted local changes are not automatically included.
+
 ## Bootstrap
 
 For detailed setup instructions, see:
@@ -190,6 +192,17 @@ scripts/check_all.sh
 ```
 
 This runs the module tests and syntax checks that can be run locally.
+GitHub Actions now uses the same script for push / pull request validation.
+
+## License
+
+This repository is released under the MIT License.
+
+See:
+
+```text
+LICENSE
+```
 
 ## Operational Safety Checks
 
@@ -202,6 +215,12 @@ python3 scripts/control_plane.py migrate rollback --dry-run
 ```
 
 It validates config shape, prints redacted reports, detects scattered old installs, and prints a rollback plan. It does not stop services, restart services, delete files, or modify systemd units.
+
+Security and trust-boundary notes are documented in:
+
+```text
+docs/security/threat-model.md
+```
 
 Agent Host also provides safe operational read APIs:
 

@@ -3,6 +3,7 @@
   "displayName": "Codex Bridge",
   "description": "Local-first bridge core that turns external messages into safe, logged Codex tasks.",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "bin": {
     "codex-bridge": "./scripts/codex-bridge.js"
