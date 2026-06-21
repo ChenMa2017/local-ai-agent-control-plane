@@ -287,7 +287,12 @@ async function testWorkspaceWriteModeUsesWorkspaceSandbox() {
     env: { FAKE_CODEX_SLEEP_MS: "10" }
   });
   const id = parseTaskId(run.stdout);
-  const done = await waitForTask(fixture, id, (task) => task.status === "done", "done");
+  const done = await waitForTask(
+    fixture,
+    id,
+    (task) => task.status === "done" && Boolean(task.write_audit_completed_at),
+    "done"
+  );
   assert.strictEqual(done.mode, "workspace-write");
   const bridgeLog = fs.readFileSync(path.join(fixture.stateDir, "tasks", id, "bridge.log"), "utf8");
   assert(bridgeLog.includes("--sandbox workspace-write"), bridgeLog);
@@ -308,7 +313,12 @@ async function testWorkspaceWriteGeneratesAudit() {
     }
   });
   const id = parseTaskId(run.stdout);
-  const done = await waitForTask(fixture, id, (task) => task.status === "done", "done");
+  const done = await waitForTask(
+    fixture,
+    id,
+    (task) => task.status === "done" && Boolean(task.write_audit_completed_at),
+    "done"
+  );
   const taskDir = path.join(fixture.stateDir, "tasks", id);
   assert.strictEqual(done.mode, "workspace-write");
   assert.strictEqual(done.changed_files_count, 1);
@@ -370,7 +380,12 @@ async function testProtectedPathViolationIsDetected() {
     }
   });
   const id = parseTaskId(run.stdout);
-  const violation = await waitForTask(fixture, id, (task) => task.status === "policy_violation", "policy_violation");
+  const violation = await waitForTask(
+    fixture,
+    id,
+    (task) => task.status === "policy_violation" && Boolean(task.write_audit_completed_at),
+    "policy_violation"
+  );
   assert.strictEqual(violation.protected_path_violation, true);
   assert(Array.isArray(violation.protected_path_matches));
   assert(violation.protected_path_matches.some((item) => item.file === ".env"));

@@ -473,6 +473,9 @@ function createWorkspaceWriteRuntime(deps) {
     await fsp.writeFile(diffStatFile(config, task), `${sanitizedDiff.trimEnd()}\n`, "utf8").catch(() => {});
     await fsp.writeFile(changedFilesFile(config, task), `${changedText.trimEnd()}\n`, "utf8").catch(() => {});
     const current = await readTask(config, task.task_id).catch(() => task);
+    const summary = writeSummaryText(audit);
+    await appendWriteSummaryToResult(current, summary);
+    await ensureSafeResult(config, current).catch(() => {});
     const nextStatus = audit.protected_path_violation && current.status === "done" ? "policy_violation" : current.status;
     const patched = await patchTask(config, task.task_id, {
       status: nextStatus,
@@ -488,7 +491,6 @@ function createWorkspaceWriteRuntime(deps) {
       write_audit_completed_at: audit.completed_at,
       termination_reason: nextStatus === "policy_violation" ? "policy_violation" : current.termination_reason || null
     });
-    await appendWriteSummaryToResult(patched, writeSummaryText(audit));
     await appendTaskLog(config, patched, `write audit completed changed_files=${audit.changed_files_count} protected=${audit.protected_path_violation}`);
     return patched;
   }
