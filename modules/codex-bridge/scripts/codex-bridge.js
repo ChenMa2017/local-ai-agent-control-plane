@@ -21,6 +21,7 @@ const DEFAULT_MAX_LOG_CHARS = 20000;
 const DEFAULT_MAX_RESULT_CHARS = 80000;
 const DEFAULT_REFERENCE_CONTEXT_CHARS = 12000;
 const FINAL_STATUSES = new Set(["done", "failed", "cancelled", "timeout", "stale", "policy_violation"]);
+const ACTIVE_STATUSES = new Set(["running", "cancelling", "cancel_requested", "finalizing"]);
 const CANCELLABLE_STATUSES = new Set(["queued", "running", "cancelling", "cancel_requested"]);
 const BOOLEAN_OPTIONS = new Set(["dry-run", "dry_run", "help", "raw", "json", "json-output"]);
 const SUPPORTED_MODES = new Set(["readonly", "workspace-write"]);
@@ -68,6 +69,8 @@ function defaultConfig() {
     watchdogIntervalMs: 1000,
     dryRunStepMs: 450,
     protectedPathWatchIntervalMs: 250,
+    taskLockTimeoutMs: 30000,
+    taskLockStaleMs: 120000,
     redaction: {
       enabled: true,
       redactHomePath: true,
@@ -208,6 +211,8 @@ async function loadConfig(opts = {}) {
   config.watchdogIntervalMs = Math.max(100, Number(config.watchdogIntervalMs || 1000));
   config.dryRunStepMs = Math.max(50, Number(config.dryRunStepMs || 450));
   config.protectedPathWatchIntervalMs = Math.max(50, Number(config.protectedPathWatchIntervalMs || 250));
+  config.taskLockTimeoutMs = Math.max(100, Number(config.taskLockTimeoutMs || 30000));
+  config.taskLockStaleMs = Math.max(1000, Number(config.taskLockStaleMs || 120000));
   config.redaction = Object.assign({}, defaultConfig().redaction, config.redaction || {});
   config.redaction.maxLogChars = Math.max(1000, Number(config.redaction.maxLogChars || DEFAULT_MAX_LOG_CHARS));
   config.redaction.maxResultChars = Math.max(1000, Number(config.redaction.maxResultChars || DEFAULT_MAX_RESULT_CHARS));
@@ -528,12 +533,30 @@ async function reconcileTask(config, task) {
   if (task.status === "running" && deadlineExpired(task)) {
     return taskRunnerRuntime.timeoutTask(config, task);
   }
-  if (!["running", "cancelling", "cancel_requested"].includes(task.status)) {
+  if (!ACTIVE_STATUSES.has(task.status)) {
     return task;
   }
   const workerAlive = await processRuntime.taskWorkerLooksAlive(task);
   if (workerAlive) {
     return task;
+  }
+  if (task.status === "finalizing") {
+    const stale = await transitionTask(config, task.task_id, {
+      expectedStatuses: ["finalizing"],
+      nextStatus: "stale",
+      patch: {
+        ended_at: task.ended_at || nowIso(),
+        finished_at: task.finished_at || nowIso(),
+        termination_reason: "stale",
+        error: "Bridge worker exited before finalization completed."
+      }
+    });
+    if (!stale.__transition || !stale.__transition.stateChanged) {
+      return stale;
+    }
+    await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, stale, "stale_finalizing");
+    await appendTaskLog(config, stale, "reconciled finalizing task to stale");
+    return stale;
   }
   if (task.status === "cancelling" || task.status === "cancel_requested") {
     const cancelled = await transitionTask(config, task.task_id, {
@@ -545,7 +568,7 @@ async function reconcileTask(config, task) {
       termination_reason: "cancelled"
       }
     });
-    if (!cancelled.__transition || !cancelled.__transition.applied) {
+    if (!cancelled.__transition || !cancelled.__transition.stateChanged) {
       return cancelled;
     }
     await writeResultIfEmpty(cancelled, `Task ${task.task_id} was cancelled.\n`);
@@ -563,7 +586,7 @@ async function reconcileTask(config, task) {
     error: "Bridge worker is no longer running."
     }
   });
-  if (!reconciled.__transition || !reconciled.__transition.applied) {
+  if (!reconciled.__transition || !reconciled.__transition.stateChanged) {
     return reconciled;
   }
   await writeResultIfEmpty(reconciled, `Task ${task.task_id} became stale because its worker process is gone.\n`);
@@ -578,7 +601,7 @@ async function activeTaskCount(config, currentTaskId) {
     if (task.task_id === currentTaskId) {
       return false;
     }
-    return task.status === "running" || task.status === "cancelling" || task.status === "cancel_requested";
+    return ACTIVE_STATUSES.has(task.status);
   }).length;
 }
 

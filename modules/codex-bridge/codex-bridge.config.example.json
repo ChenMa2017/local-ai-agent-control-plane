@@ -23,6 +23,8 @@
   "cancelGraceMs": 5000,
   "watchdogIntervalMs": 1000,
   "dryRunStepMs": 450,
+  "taskLockTimeoutMs": 30000,
+  "taskLockStaleMs": 120000,
   "redaction": {
     "enabled": true,
     "redactHomePath": true,

@@ -120,6 +120,42 @@ function createWorkspaceWriteRuntime(deps) {
     return task.write_audit_root_path || task.execution_project_path || task.project_path;
   }
 
+  function transitionStateChanged(task) {
+    return Boolean(task && task.__transition && task.__transition.stateChanged);
+  }
+
+  function shouldUseWorkspaceFinalizing(task) {
+    return Boolean(task && task.mode === "workspace-write" && task.write_audit_path);
+  }
+
+  async function transitionToTerminalStatus(config, task, options) {
+    const expectedStatuses = options.expectedStatuses || [];
+    const nextStatus = String(options.nextStatus || "");
+    const patch = Object.assign({}, options.patch || {});
+    if (!shouldUseWorkspaceFinalizing(task)) {
+      return transitionTask(config, task.task_id, {
+        expectedStatuses,
+        nextStatus,
+        patch
+      });
+    }
+
+    const finishedAt = patch.finished_at || patch.ended_at || nowIso();
+    return transitionTask(config, task.task_id, {
+      expectedStatuses,
+      nextStatus: "finalizing",
+      patch: {
+        finalization_target_status: nextStatus,
+        finalization_requested_at: finishedAt,
+        finalization_exit_code: Object.prototype.hasOwnProperty.call(patch, "exit_code") ? patch.exit_code : null,
+        finalization_exit_signal: Object.prototype.hasOwnProperty.call(patch, "exit_signal") ? patch.exit_signal : null,
+        finalization_error: Object.prototype.hasOwnProperty.call(patch, "error") ? patch.error : null,
+        finalization_termination_reason: Object.prototype.hasOwnProperty.call(patch, "termination_reason") ? patch.termination_reason : null,
+        timeout_at: patch.timeout_at || null
+      }
+    });
+  }
+
   async function prepareWorkspaceWriteExecution(config, task) {
     if (!task || task.mode !== "workspace-write") {
       return task;
@@ -409,11 +445,11 @@ function createWorkspaceWriteRuntime(deps) {
 
   async function finalizeWriteAudit(config, task) {
     if (!task || task.mode !== "workspace-write") {
-      return task;
+      return { task, audit: null };
     }
     const baseline = await readJson(task.write_baseline_path || writeBaselineFile(config, task)).catch(() => null);
     if (!baseline || !baseline.snapshot) {
-      return task;
+      return { task, audit: null };
     }
     const auditRoot = baseline.audit_root_path || taskWriteAuditRootPath(task);
     const afterSnapshot = await snapshotWorkspace(auditRoot);
@@ -476,10 +512,7 @@ function createWorkspaceWriteRuntime(deps) {
     const current = await readTask(config, task.task_id).catch(() => task);
     const summary = writeSummaryText(audit);
     await appendWriteSummaryToResult(current, summary);
-    await ensureSafeResult(config, current).catch(() => {});
-    const nextStatus = audit.protected_path_violation && current.status === "done" ? "policy_violation" : current.status;
     const patched = await patchTask(config, task.task_id, {
-      status: nextStatus,
       write_audit_path: writeAuditFile(config, task),
       diff_stat_file: diffStatFile(config, task),
       changed_files_file: changedFilesFile(config, task),
@@ -489,20 +522,59 @@ function createWorkspaceWriteRuntime(deps) {
       deleted_files_count: audit.deleted_count,
       protected_path_violation: audit.protected_path_violation,
       protected_path_matches: audit.protected_path_matches,
-      write_audit_completed_at: audit.completed_at,
-      termination_reason: nextStatus === "policy_violation" ? "policy_violation" : current.termination_reason || null
+      write_audit_completed_at: audit.completed_at
     });
     await appendTaskLog(config, patched, `write audit completed changed_files=${audit.changed_files_count} protected=${audit.protected_path_violation}`);
-    return patched;
+    return { task: patched, audit };
   }
 
   async function finalizeWorkspaceWriteTask(config, task, reason = "finalize") {
     let current = await readTask(config, task.task_id).catch(() => task);
     if (current && current.mode === "workspace-write") {
-      current = await finalizeWriteAudit(config, current).catch(async (error) => {
-        await appendTaskLog(config, current, `write audit failed: ${error.message}`).catch(() => {});
+      if (current.status !== "finalizing" && current.write_audit_completed_at) {
+        await ensureSafeResult(config, current).catch(() => {});
         return current;
+      }
+      const auditResult = await finalizeWriteAudit(config, current).catch(async (error) => {
+        await appendTaskLog(config, current, `write audit failed: ${error.message}`).catch(() => {});
+        return { task: current, audit: null };
       });
+      current = auditResult.task;
+      if (current.status === "finalizing") {
+        await ensureSafeResult(config, current).catch(() => {});
+        current = await readTask(config, task.task_id).catch(() => current);
+        const targetStatus = String(current.finalization_target_status || "failed");
+        const nextStatus = auditResult.audit && auditResult.audit.protected_path_violation && targetStatus === "done"
+          ? "policy_violation"
+          : targetStatus;
+        const finalized = await transitionTask(config, current.task_id, {
+          expectedStatuses: ["finalizing"],
+          nextStatus,
+          patch: {
+            ended_at: current.finalization_requested_at || current.ended_at || nowIso(),
+            finished_at: current.finalization_requested_at || current.finished_at || nowIso(),
+            exit_code: current.finalization_exit_code,
+            exit_signal: current.finalization_exit_signal,
+            error: current.finalization_error,
+            termination_reason: nextStatus === "policy_violation"
+              ? "policy_violation"
+              : current.finalization_termination_reason || current.termination_reason || null,
+            timeout_at: current.timeout_at || null,
+            finalization_completed_at: nowIso(),
+            finalization_completion_reason: reason,
+            finalization_target_status: null,
+            finalization_requested_at: null,
+            finalization_exit_code: null,
+            finalization_exit_signal: null,
+            finalization_error: null,
+            finalization_termination_reason: null
+          }
+        }).catch(() => current);
+        if (transitionStateChanged(finalized)) {
+          await appendTaskLog(config, finalized, `finalized workspace-write task status=${nextStatus}`).catch(() => {});
+        }
+        current = await readTask(config, task.task_id).catch(() => finalized || current);
+      }
       await releaseWorkspaceWriteLock(config, current, reason).catch(() => {});
       current = await cleanupWorkspaceWriteExecution(config, await readTask(config, task.task_id).catch(() => current), reason).catch(async (error) => {
         await appendTaskLog(config, current, `worktree cleanup failed: ${error.message}`).catch(() => {});
@@ -531,7 +603,7 @@ function createWorkspaceWriteRuntime(deps) {
       protected_path_matches: matches
       }
     });
-    if (!updated.__transition || !updated.__transition.applied) {
+    if (!transitionStateChanged(updated)) {
       return updated;
     }
     await appendTaskLog(config, updated, `${source} triggered matches=${describeProtectedPathMatches(matches)}`).catch(() => {});
@@ -806,6 +878,7 @@ function createWorkspaceWriteRuntime(deps) {
     prepareWorkspaceWriteExecution,
     beginWriteAudit,
     finalizeWorkspaceWriteTask,
+    transitionToTerminalStatus,
     startProtectedPathGuard
   };
 }

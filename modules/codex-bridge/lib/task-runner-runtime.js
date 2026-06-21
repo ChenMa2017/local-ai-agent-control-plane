@@ -27,6 +27,10 @@ function createTaskRunnerRuntime(deps) {
     writeResultIfEmpty
   } = deps;
 
+  function transitionStateChanged(task) {
+    return Boolean(task && task.__transition && task.__transition.stateChanged);
+  }
+
   function spawnWorker(config, id) {
     const args = [entryScript, "__worker", id];
     if (config.__configPath) {
@@ -91,16 +95,16 @@ function createTaskRunnerRuntime(deps) {
       failed = true;
       const message = error && error.stack ? error.stack : error && error.message ? error.message : String(error);
       await fsp.writeFile(task.result_file, `Bridge worker failed before completion:\n\n${message}\n`, "utf8").catch(() => {});
-      const failedTask = await transitionTask(config, task.task_id, {
+      const failedTask = await workspaceWriteRuntime.transitionToTerminalStatus(config, task, {
         expectedStatuses: ["queued", "running", "cancel_requested", "cancelling"],
         nextStatus: "failed",
         patch: {
-        ended_at: nowIso(),
-        finished_at: nowIso(),
-        error: message
+          ended_at: nowIso(),
+          finished_at: nowIso(),
+          error: message
         }
       }).catch(() => {});
-      if (failedTask && failedTask.__transition && failedTask.__transition.applied) {
+      if (transitionStateChanged(failedTask)) {
         await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, failedTask, "worker_failed").catch(() => {});
       }
       await appendTaskLog(config, failedTask || task, `worker failed: ${message.split("\n")[0]}`).catch(() => {});
@@ -126,7 +130,7 @@ function createTaskRunnerRuntime(deps) {
           termination_reason: "cancelled"
           }
         });
-        if (cancelled.__transition && cancelled.__transition.applied) {
+        if (transitionStateChanged(cancelled)) {
           await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancelled_before_start");
           await appendTaskLog(config, cancelled, "cancelled before start");
         }
@@ -145,7 +149,7 @@ function createTaskRunnerRuntime(deps) {
             termination_reason: "cancelled"
             }
           });
-          if (cancelled.__transition && cancelled.__transition.applied) {
+          if (transitionStateChanged(cancelled)) {
             await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancelled_before_lock");
             await appendTaskLog(config, cancelled, "cancelled before acquiring workspace-write lock");
           }
@@ -166,7 +170,7 @@ function createTaskRunnerRuntime(deps) {
         timeout_seconds: config.timeoutSeconds
         }
       });
-      if (!started.__transition || !started.__transition.applied) {
+      if (!transitionStateChanged(started)) {
         if (started.status === "cancelling" || started.status === "cancel_requested") {
           const cancelled = await transitionTask(config, task.task_id, {
             expectedStatuses: ["cancelling", "cancel_requested"],
@@ -177,7 +181,7 @@ function createTaskRunnerRuntime(deps) {
               termination_reason: "cancelled"
             }
           });
-          if (cancelled.__transition && cancelled.__transition.applied) {
+          if (transitionStateChanged(cancelled)) {
             await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancelled_before_running");
             await appendTaskLog(config, cancelled, "cancelled before worker could start");
           }
@@ -193,7 +197,7 @@ function createTaskRunnerRuntime(deps) {
         await runCodexTask(config, started);
       }
       const finalTask = await readTask(config, task.task_id).catch(() => started);
-      if (FINAL_STATUSES.has(finalTask.status)) {
+      if (FINAL_STATUSES.has(finalTask.status) || finalTask.status === "finalizing") {
         await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, finalTask, "worker_finished");
       }
     } catch (error) {
@@ -244,17 +248,18 @@ function createTaskRunnerRuntime(deps) {
     for (const step of steps) {
       if (await wasCancelRequested(config, task)) {
         await fsp.writeFile(task.result_file, `Task ${task.task_id} was cancelled before completion.\n`, "utf8");
-        const cancelled = await transitionTask(config, task.task_id, {
+        const cancelled = await workspaceWriteRuntime.transitionToTerminalStatus(config, task, {
           expectedStatuses: ["running", "cancel_requested", "cancelling", "cancelled"],
           nextStatus: "cancelled",
           patch: {
-          ended_at: nowIso(),
-          finished_at: nowIso(),
-          termination_reason: "cancelled"
+            ended_at: nowIso(),
+            finished_at: nowIso(),
+            termination_reason: "cancelled"
           }
         });
         await taskOutputRuntime.ensureSafeResult(config, cancelled);
-        if (cancelled.__transition && cancelled.__transition.applied) {
+        if (transitionStateChanged(cancelled)) {
+          await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "dry_run_cancelled");
           await appendTaskLog(config, task, "cancelled during dry-run");
         }
         return;
@@ -292,17 +297,20 @@ function createTaskRunnerRuntime(deps) {
       `Prototype takeaway: external text became a whitelisted, logged, queryable task.`
     ].filter((line) => line !== null).join("\n");
     await fsp.writeFile(task.result_file, `${result}\n`, "utf8");
-    const done = await transitionTask(config, task.task_id, {
+    const done = await workspaceWriteRuntime.transitionToTerminalStatus(config, task, {
       expectedStatuses: ["running"],
       nextStatus: "done",
       patch: {
-      ended_at: nowIso(),
-      finished_at: nowIso(),
-      exit_code: 0
+        ended_at: nowIso(),
+        finished_at: nowIso(),
+        exit_code: 0
       }
     });
-    await taskOutputRuntime.ensureSafeResult(config, done);
-    if (done.__transition && done.__transition.applied) {
+    if (done.status === "finalizing") {
+      await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, done, "dry_run_done");
+    }
+    await taskOutputRuntime.ensureSafeResult(config, await readTask(config, task.task_id).catch(() => done));
+    if (transitionStateChanged(done)) {
       await appendTaskLog(config, task, "done dry-run");
     }
   }
@@ -317,17 +325,17 @@ function createTaskRunnerRuntime(deps) {
     }
 
     const now = nowIso();
-    const timedOut = await transitionTask(config, fresh.task_id, {
+    const timedOut = await workspaceWriteRuntime.transitionToTerminalStatus(config, fresh, {
       expectedStatuses: ["running", "cancel_requested"],
       nextStatus: "timeout",
       patch: {
-      timeout_at: now,
-      ended_at: now,
-      finished_at: now,
-      termination_reason: "timeout"
+        timeout_at: now,
+        ended_at: now,
+        finished_at: now,
+        termination_reason: "timeout"
       }
     });
-    if (!timedOut.__transition || !timedOut.__transition.applied) {
+    if (!transitionStateChanged(timedOut)) {
       return timedOut;
     }
     await appendTaskLog(config, timedOut, `timeout reached deadline_at=${fresh.deadline_at || "-"}`);
@@ -337,7 +345,8 @@ function createTaskRunnerRuntime(deps) {
       ended_at: now,
       finished_at: now,
       termination_reason: "timeout",
-      exit_signal: termination.signal
+      exit_signal: termination.signal,
+      finalization_exit_signal: timedOut.status === "finalizing" ? termination.signal : null
     });
     await writeResultIfEmpty(finalTask, `Task ${fresh.task_id} timed out after ${fresh.timeout_seconds || config.timeoutSeconds}s.\n`);
     await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, finalTask, "timeout");
@@ -400,9 +409,13 @@ function createTaskRunnerRuntime(deps) {
           protectedPathGuard.stop();
         }
         closeFiles();
-        const updated = await transitionTask(config, task.task_id, patch);
-        if (FINAL_STATUSES.has(updated.status)) {
-          await taskOutputRuntime.ensureSafeResult(config, updated).catch(() => {});
+        const updated = await workspaceWriteRuntime.transitionToTerminalStatus(config, task, patch);
+        if (updated.status === "finalizing") {
+          await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, updated, "codex_exit").catch(() => {});
+        }
+        const current = await readTask(config, task.task_id).catch(() => updated);
+        if (FINAL_STATUSES.has(current.status)) {
+          await taskOutputRuntime.ensureSafeResult(config, current).catch(() => {});
         }
         await appendTaskLog(config, task, logLine);
         resolve();

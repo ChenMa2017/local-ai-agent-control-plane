@@ -96,6 +96,8 @@ Config fields:
 - `timeoutSeconds`: maximum runtime before the lifecycle watchdog terminates the task and marks it `timeout`.
 - `cancelGraceMs`: how long cancel waits after `SIGTERM` before escalating to `SIGKILL`.
 - `watchdogIntervalMs`: how often the per-task watchdog checks deadline/stale state.
+- `taskLockTimeoutMs`: how long task metadata operations wait for a per-task lock before failing.
+- `taskLockStaleMs`: how old a task lock must be before the bridge will reclaim it when the owner process is no longer alive.
 - `redaction`: safe-output settings for result/log display.
 
 ## Task Lifecycle
@@ -120,6 +122,7 @@ Supported lifecycle statuses:
 ```text
 queued
 running
+finalizing
 cancelling
 cancelled
 done
@@ -139,6 +142,8 @@ node scripts/codex-bridge.js reconcile
 ```
 
 `reconcile` scans existing task metadata. If a task still says `running` or `cancelling` but its bridge worker is gone, it is marked `stale`.
+
+Task metadata writes are guarded by a per-task lock. The bridge records lock ownership on disk and can reclaim a stale lock automatically when the recorded owner PID no longer exists and the lock age exceeds `taskLockStaleMs`.
 
 ## Workspace-Write Governance
 

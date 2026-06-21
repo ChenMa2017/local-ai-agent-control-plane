@@ -31,11 +31,11 @@ function makeRuntime() {
   });
 }
 
-function makeConfig() {
+function makeConfig(overrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-bridge-state-runtime-"));
-  return {
+  return Object.assign({
     __stateDir: path.join(root, "state")
-  };
+  }, overrides);
 }
 
 let nextId = 0;
@@ -73,7 +73,8 @@ async function testTransitionRejectsUnexpectedStatus() {
 
   assert.strictEqual(result.status, "queued");
   assert(result.__transition);
-  assert.strictEqual(result.__transition.applied, false);
+  assert.strictEqual(result.__transition.accepted, false);
+  assert.strictEqual(result.__transition.stateChanged, false);
   assert.strictEqual(result.__transition.reason, "unexpected_status");
 }
 
@@ -89,7 +90,8 @@ async function testFinalStatusImmutableAgainstOverwrite() {
     patch: { finished_at: nowIso() }
   });
   assert.strictEqual(done.status, "done");
-  assert.strictEqual(done.__transition.applied, true);
+  assert.strictEqual(done.__transition.accepted, true);
+  assert.strictEqual(done.__transition.stateChanged, true);
 
   const cancelled = await runtime.transitionTask(config, id, {
     expectedStatuses: ["running", "cancelling"],
@@ -97,8 +99,27 @@ async function testFinalStatusImmutableAgainstOverwrite() {
     patch: { termination_reason: "cancelled" }
   });
   assert.strictEqual(cancelled.status, "done");
-  assert.strictEqual(cancelled.__transition.applied, false);
+  assert.strictEqual(cancelled.__transition.accepted, false);
+  assert.strictEqual(cancelled.__transition.stateChanged, false);
   assert.strictEqual(cancelled.__transition.reason, "final_status_immutable");
+}
+
+async function testTransitionSameTargetDoesNotCountAsStateChange() {
+  const runtime = makeRuntime();
+  const config = makeConfig();
+  const id = taskId();
+  await runtime.writeTask(config, baseTask(config, id, "cancelled"));
+
+  const cancelled = await runtime.transitionTask(config, id, {
+    expectedStatuses: ["cancelled"],
+    nextStatus: "cancelled",
+    patch: { termination_reason: "cancelled" }
+  });
+
+  assert.strictEqual(cancelled.status, "cancelled");
+  assert.strictEqual(cancelled.__transition.accepted, true);
+  assert.strictEqual(cancelled.__transition.stateChanged, false);
+  assert.strictEqual(cancelled.__transition.reason, "already_in_target_state");
 }
 
 async function testConcurrentDoneVsCancelledOnlyOneWins() {
@@ -120,7 +141,7 @@ async function testConcurrentDoneVsCancelledOnlyOneWins() {
     })
   ]);
 
-  const appliedCount = [done, cancelled].filter((task) => task.__transition && task.__transition.applied).length;
+  const appliedCount = [done, cancelled].filter((task) => task.__transition && task.__transition.stateChanged).length;
   assert.strictEqual(appliedCount, 1);
   const finalTask = await runtime.readTask(config, id);
   assert(["done", "cancelled"].includes(finalTask.status));
@@ -145,7 +166,7 @@ async function testConcurrentCancelledVsFailedOnlyOneWins() {
     })
   ]);
 
-  const appliedCount = [cancelled, failed].filter((task) => task.__transition && task.__transition.applied).length;
+  const appliedCount = [cancelled, failed].filter((task) => task.__transition && task.__transition.stateChanged).length;
   assert.strictEqual(appliedCount, 1);
   const finalTask = await runtime.readTask(config, id);
   assert(["cancelled", "failed"].includes(finalTask.status));
@@ -167,12 +188,79 @@ async function testPatchTaskAllowsMetadataOnFinalTask() {
   assert(patched.safe_result_file.endsWith("safe.md"));
 }
 
+async function testPatchTaskRejectsStatusMutation() {
+  const runtime = makeRuntime();
+  const config = makeConfig();
+  const id = taskId();
+  await runtime.writeTask(config, baseTask(config, id, "queued"));
+
+  await assert.rejects(
+    runtime.patchTask(config, id, { status: "done" }),
+    /task status must be changed through transitionTask/
+  );
+}
+
+async function testPatchTaskReclaimsDeadStaleLock() {
+  const runtime = makeRuntime();
+  const config = makeConfig({
+    taskLockTimeoutMs: 250,
+    taskLockStaleMs: 50
+  });
+  const id = taskId();
+  await runtime.writeTask(config, baseTask(config, id, "queued"));
+
+  const lockDir = path.join(config.__stateDir, "tasks", id, ".task.lock");
+  await fs.promises.mkdir(lockDir, { recursive: true });
+  await fs.promises.writeFile(path.join(lockDir, "owner.json"), JSON.stringify({
+    pid: 999999,
+    task_id: id,
+    operation: "patch_task",
+    created_at: "2000-01-01T00:00:00.000Z"
+  }, null, 2));
+
+  const patched = await runtime.patchTask(config, id, {
+    note: "stale lock recovered"
+  });
+
+  assert.strictEqual(patched.note, "stale lock recovered");
+}
+
+async function testPatchTaskDoesNotReclaimLiveLockOwner() {
+  const runtime = makeRuntime();
+  const config = makeConfig({
+    taskLockTimeoutMs: 150,
+    taskLockStaleMs: 50
+  });
+  const id = taskId();
+  await runtime.writeTask(config, baseTask(config, id, "queued"));
+
+  const lockDir = path.join(config.__stateDir, "tasks", id, ".task.lock");
+  await fs.promises.mkdir(lockDir, { recursive: true });
+  await fs.promises.writeFile(path.join(lockDir, "owner.json"), JSON.stringify({
+    pid: process.pid,
+    task_id: id,
+    operation: "patch_task",
+    created_at: "2000-01-01T00:00:00.000Z"
+  }, null, 2));
+
+  await assert.rejects(
+    runtime.patchTask(config, id, { note: "should timeout" }),
+    /Timed out waiting for task lock/
+  );
+
+  await fs.promises.rm(lockDir, { recursive: true, force: true });
+}
+
 async function main() {
   await testTransitionRejectsUnexpectedStatus();
   await testFinalStatusImmutableAgainstOverwrite();
+  await testTransitionSameTargetDoesNotCountAsStateChange();
   await testConcurrentDoneVsCancelledOnlyOneWins();
   await testConcurrentCancelledVsFailedOnlyOneWins();
   await testPatchTaskAllowsMetadataOnFinalTask();
+  await testPatchTaskRejectsStatusMutation();
+  await testPatchTaskReclaimsDeadStaleLock();
+  await testPatchTaskDoesNotReclaimLiveLockOwner();
   console.log("task state runtime tests OK");
 }
 

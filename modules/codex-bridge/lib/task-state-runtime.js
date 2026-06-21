@@ -12,6 +12,7 @@ function createTaskStateRuntime(deps) {
   } = deps;
   const FINAL_TASK_STATUSES = new Set(["done", "failed", "cancelled", "timeout", "stale", "policy_violation"]);
   const TASK_LOCK_TIMEOUT_MS = 30000;
+  const TASK_LOCK_STALE_MS = 120000;
 
   async function readJson(file) {
     let lastError;
@@ -105,17 +106,91 @@ function createTaskStateRuntime(deps) {
     return path.join(taskDir(config, id), ".task.lock");
   }
 
-  async function withTaskLock(config, id, fn) {
+  function taskLockOwnerFile(config, id) {
+    return path.join(taskLockDir(config, id), "owner.json");
+  }
+
+  function taskLockTimeoutMs(config) {
+    return Math.max(100, Number(config.taskLockTimeoutMs || TASK_LOCK_TIMEOUT_MS));
+  }
+
+  function taskLockStaleMs(config) {
+    return Math.max(1000, Number(config.taskLockStaleMs || TASK_LOCK_STALE_MS));
+  }
+
+  function processLooksAlive(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) {
+      return false;
+    }
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return Boolean(error && error.code === "EPERM");
+    }
+  }
+
+  async function readTaskLockOwner(config, id) {
+    return readJson(taskLockOwnerFile(config, id)).catch(() => null);
+  }
+
+  async function writeTaskLockOwner(config, id, operation) {
+    await writeJson(taskLockOwnerFile(config, id), {
+      pid: process.pid,
+      task_id: id,
+      operation: operation || "task_lock",
+      created_at: nowIso()
+    });
+  }
+
+  async function lockAgeMs(config, id, owner) {
+    const createdAt = owner && owner.created_at ? new Date(owner.created_at).getTime() : NaN;
+    if (Number.isFinite(createdAt) && createdAt > 0) {
+      return Math.max(0, Date.now() - createdAt);
+    }
+    const stat = await fsp.stat(taskLockDir(config, id)).catch(() => null);
+    if (!stat) {
+      return 0;
+    }
+    return Math.max(0, Date.now() - Math.round(stat.mtimeMs));
+  }
+
+  async function reclaimStaleTaskLock(config, id) {
+    const owner = await readTaskLockOwner(config, id);
+    const ageMs = await lockAgeMs(config, id, owner);
+    if (ageMs < taskLockStaleMs(config)) {
+      return false;
+    }
+    if (owner && processLooksAlive(owner.pid)) {
+      return false;
+    }
+    await fsp.rm(taskLockDir(config, id), { recursive: true, force: true }).catch(() => {});
+    return true;
+  }
+
+  async function withTaskLock(config, id, fn, options = {}) {
     const lockDir = taskLockDir(config, id);
-    const deadline = Date.now() + TASK_LOCK_TIMEOUT_MS;
+    const deadline = Date.now() + taskLockTimeoutMs(config);
     while (true) {
       try {
         await ensureDir(taskDir(config, id));
         await fsp.mkdir(lockDir);
+        try {
+          await writeTaskLockOwner(config, id, options.operation);
+        } catch (error) {
+          await fsp.rm(lockDir, { recursive: true, force: true }).catch(() => {});
+          throw error;
+        }
         break;
       } catch (error) {
+        if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+          continue;
+        }
         if (!error || error.code !== "EEXIST") {
           throw error;
+        }
+        if (await reclaimStaleTaskLock(config, id)) {
+          continue;
         }
         if (Date.now() > deadline) {
           throw new Error(`Timed out waiting for task lock: ${id}`);
@@ -126,7 +201,7 @@ function createTaskStateRuntime(deps) {
     try {
       return await fn();
     } finally {
-      await fsp.rmdir(lockDir).catch(() => {});
+      await fsp.rm(lockDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -136,12 +211,15 @@ function createTaskStateRuntime(deps) {
   }
 
   async function patchTask(config, id, patch) {
+    if (patch && Object.prototype.hasOwnProperty.call(patch, "status")) {
+      throw new Error("task status must be changed through transitionTask");
+    }
     return withTaskLock(config, id, async () => {
       const task = await readTask(config, id);
       Object.assign(task, patch);
       await writeTask(config, task);
       return task;
-    });
+    }, { operation: "patch_task" });
   }
 
   function annotateTransition(task, meta) {
@@ -168,6 +246,8 @@ function createTaskStateRuntime(deps) {
 
       if (FINAL_TASK_STATUSES.has(currentStatus) && currentStatus !== nextStatus) {
         return annotateTransition(task, {
+          accepted: false,
+          stateChanged: false,
           applied: false,
           reason: "final_status_immutable",
           from: currentStatus,
@@ -177,6 +257,8 @@ function createTaskStateRuntime(deps) {
 
       if (expectedStatuses.size && currentStatus !== nextStatus && !expectedStatuses.has(currentStatus)) {
         return annotateTransition(task, {
+          accepted: false,
+          stateChanged: false,
           applied: false,
           reason: "unexpected_status",
           from: currentStatus,
@@ -184,16 +266,19 @@ function createTaskStateRuntime(deps) {
         });
       }
 
+      const stateChanged = currentStatus !== nextStatus;
       Object.assign(task, patch);
       task.status = nextStatus;
       await writeTask(config, task);
       return annotateTransition(task, {
-        applied: true,
-        reason: currentStatus === nextStatus ? "same_status_patch" : "transition_applied",
+        accepted: true,
+        stateChanged,
+        applied: stateChanged,
+        reason: stateChanged ? "transition_applied" : "already_in_target_state",
         from: currentStatus,
         to: nextStatus
       });
-    });
+    }, { operation: "transition_task" });
   }
 
   async function appendTaskLog(config, task, line) {
