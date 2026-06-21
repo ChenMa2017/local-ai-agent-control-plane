@@ -266,15 +266,25 @@ function createTaskStateRuntime(deps) {
         });
       }
 
-      const stateChanged = currentStatus !== nextStatus;
+      if (currentStatus === nextStatus) {
+        return annotateTransition(task, {
+          accepted: true,
+          stateChanged: false,
+          applied: false,
+          reason: "already_in_target_state",
+          from: currentStatus,
+          to: nextStatus
+        });
+      }
+
       Object.assign(task, patch);
       task.status = nextStatus;
       await writeTask(config, task);
       return annotateTransition(task, {
         accepted: true,
-        stateChanged,
-        applied: stateChanged,
-        reason: stateChanged ? "transition_applied" : "already_in_target_state",
+        stateChanged: true,
+        applied: true,
+        reason: "transition_applied",
         from: currentStatus,
         to: nextStatus
       });

@@ -146,6 +146,7 @@ function createWorkspaceWriteRuntime(deps) {
       nextStatus: "finalizing",
       patch: {
         finalization_target_status: nextStatus,
+        finalization_owner_pid: process.pid,
         finalization_requested_at: finishedAt,
         finalization_exit_code: Object.prototype.hasOwnProperty.call(patch, "exit_code") ? patch.exit_code : null,
         finalization_exit_signal: Object.prototype.hasOwnProperty.call(patch, "exit_signal") ? patch.exit_signal : null,
@@ -531,6 +532,9 @@ function createWorkspaceWriteRuntime(deps) {
   async function finalizeWorkspaceWriteTask(config, task, reason = "finalize") {
     let current = await readTask(config, task.task_id).catch(() => task);
     if (current && current.mode === "workspace-write") {
+      if (current.status === "finalizing" && current.finalization_owner_pid && Number(current.finalization_owner_pid) !== process.pid) {
+        return current;
+      }
       if (current.status !== "finalizing" && current.write_audit_completed_at) {
         await ensureSafeResult(config, current).catch(() => {});
         return current;
@@ -562,6 +566,7 @@ function createWorkspaceWriteRuntime(deps) {
             timeout_at: current.timeout_at || null,
             finalization_completed_at: nowIso(),
             finalization_completion_reason: reason,
+            finalization_owner_pid: null,
             finalization_target_status: null,
             finalization_requested_at: null,
             finalization_exit_code: null,
@@ -592,15 +597,13 @@ function createWorkspaceWriteRuntime(deps) {
       return fresh;
     }
     const finishedAt = nowIso();
-    const updated = await transitionTask(config, fresh.task_id, {
+    const updated = await transitionToTerminalStatus(config, fresh, {
       expectedStatuses: ["running", "cancel_requested", "cancelling"],
       nextStatus: "policy_violation",
       patch: {
-      ended_at: fresh.ended_at || finishedAt,
-      finished_at: fresh.finished_at || finishedAt,
-      termination_reason: "policy_violation",
-      protected_path_violation: true,
-      protected_path_matches: matches
+        ended_at: fresh.ended_at || finishedAt,
+        finished_at: fresh.finished_at || finishedAt,
+        termination_reason: "policy_violation"
       }
     });
     if (!transitionStateChanged(updated)) {
@@ -614,9 +617,13 @@ function createWorkspaceWriteRuntime(deps) {
       termination_reason: "policy_violation",
       protected_path_violation: true,
       protected_path_matches: matches,
-      exit_signal: termination.signal || fresh.exit_signal || null
+      exit_signal: termination.signal || fresh.exit_signal || null,
+      finalization_exit_signal: updated.status === "finalizing" ? (termination.signal || fresh.exit_signal || null) : null
     }).catch(() => updated);
     await writeResultIfEmpty(finalTask, `Task ${fresh.task_id} was stopped because it touched a protected path during execution.\n`);
+    if (updated.status === "finalizing") {
+      await finalizeWorkspaceWriteTask(config, finalTask, source).catch(() => {});
+    }
     return finalTask;
   }
 

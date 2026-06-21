@@ -122,6 +122,35 @@ async function testTransitionSameTargetDoesNotCountAsStateChange() {
   assert.strictEqual(cancelled.__transition.reason, "already_in_target_state");
 }
 
+async function testTransitionSameTargetDoesNotPatchFinalizingMetadata() {
+  const runtime = makeRuntime();
+  const config = makeConfig();
+  const id = taskId();
+  const task = baseTask(config, id, "finalizing");
+  task.finalization_target_status = "timeout";
+  task.finalization_owner_pid = 12345;
+  await runtime.writeTask(config, task);
+
+  const unchanged = await runtime.transitionTask(config, id, {
+    expectedStatuses: ["finalizing"],
+    nextStatus: "finalizing",
+    patch: {
+      finalization_target_status: "failed",
+      finalization_owner_pid: 54321,
+      finalization_exit_signal: "SIGTERM"
+    }
+  });
+
+  assert.strictEqual(unchanged.status, "finalizing");
+  assert.strictEqual(unchanged.__transition.accepted, true);
+  assert.strictEqual(unchanged.__transition.stateChanged, false);
+  assert.strictEqual(unchanged.__transition.applied, false);
+  const persisted = await runtime.readTask(config, id);
+  assert.strictEqual(persisted.finalization_target_status, "timeout");
+  assert.strictEqual(persisted.finalization_owner_pid, 12345);
+  assert.strictEqual(persisted.finalization_exit_signal, undefined);
+}
+
 async function testConcurrentDoneVsCancelledOnlyOneWins() {
   const runtime = makeRuntime();
   const config = makeConfig();
@@ -255,6 +284,7 @@ async function main() {
   await testTransitionRejectsUnexpectedStatus();
   await testFinalStatusImmutableAgainstOverwrite();
   await testTransitionSameTargetDoesNotCountAsStateChange();
+  await testTransitionSameTargetDoesNotPatchFinalizingMetadata();
   await testConcurrentDoneVsCancelledOnlyOneWins();
   await testConcurrentCancelledVsFailedOnlyOneWins();
   await testPatchTaskAllowsMetadataOnFinalTask();

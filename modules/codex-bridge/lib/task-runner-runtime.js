@@ -197,8 +197,10 @@ function createTaskRunnerRuntime(deps) {
         await runCodexTask(config, started);
       }
       const finalTask = await readTask(config, task.task_id).catch(() => started);
-      if (FINAL_STATUSES.has(finalTask.status) || finalTask.status === "finalizing") {
+      if (FINAL_STATUSES.has(finalTask.status)) {
         await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, finalTask, "worker_finished");
+      } else if (finalTask.status === "finalizing" && Number(finalTask.finalization_owner_pid) === process.pid) {
+        await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, finalTask, "worker_finished_retry");
       }
     } catch (error) {
       await markWorkerFailed(error);
@@ -259,7 +261,9 @@ function createTaskRunnerRuntime(deps) {
         });
         await taskOutputRuntime.ensureSafeResult(config, cancelled);
         if (transitionStateChanged(cancelled)) {
-          await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "dry_run_cancelled");
+          if (cancelled.status === "finalizing") {
+            await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "dry_run_cancelled");
+          }
           await appendTaskLog(config, task, "cancelled during dry-run");
         }
         return;
@@ -306,7 +310,7 @@ function createTaskRunnerRuntime(deps) {
         exit_code: 0
       }
     });
-    if (done.status === "finalizing") {
+    if (transitionStateChanged(done) && done.status === "finalizing") {
       await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, done, "dry_run_done");
     }
     await taskOutputRuntime.ensureSafeResult(config, await readTask(config, task.task_id).catch(() => done));
@@ -410,7 +414,7 @@ function createTaskRunnerRuntime(deps) {
         }
         closeFiles();
         const updated = await workspaceWriteRuntime.transitionToTerminalStatus(config, task, patch);
-        if (updated.status === "finalizing") {
+        if (transitionStateChanged(updated) && updated.status === "finalizing") {
           await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, updated, "codex_exit").catch(() => {});
         }
         const current = await readTask(config, task.task_id).catch(() => updated);

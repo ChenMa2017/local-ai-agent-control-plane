@@ -43,22 +43,48 @@ function makeFixture(name, extraConfig = {}) {
   fs.writeFileSync(fakeCodex, `#!/usr/bin/env node
 "use strict";
 const fs = require("fs");
+const path = require("path");
 const args = process.argv.slice(2);
 const outIndex = args.indexOf("--output-last-message");
 const resultFile = outIndex >= 0 ? args[outIndex + 1] : "";
 const ms = Number(process.env.FAKE_CODEX_SLEEP_MS || "10000");
+const writeDelayMs = Number(process.env.FAKE_CODEX_WRITE_DELAY_MS || "0");
+const termExitDelayMs = Number(process.env.FAKE_CODEX_TERM_EXIT_DELAY_MS || "0");
+const termExitCode = Number(process.env.FAKE_CODEX_TERM_EXIT_CODE || "1");
+let finished = false;
 if (process.env.FAKE_CODEX_CAPTURE_PROMPT_FILE) {
   fs.writeFileSync(process.env.FAKE_CODEX_CAPTURE_PROMPT_FILE, args[args.length - 1] || "");
 }
-if (process.env.FAKE_CODEX_WRITE_FILE) {
-  const target = require("path").resolve(process.cwd(), process.env.FAKE_CODEX_WRITE_FILE);
-  fs.mkdirSync(require("path").dirname(target), { recursive: true });
+function writeWorkspaceFile() {
+  if (!process.env.FAKE_CODEX_WRITE_FILE) {
+    return;
+  }
+  const target = path.resolve(process.cwd(), process.env.FAKE_CODEX_WRITE_FILE);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, process.env.FAKE_CODEX_WRITE_CONTENT || "fake write\\n");
 }
-setTimeout(() => {
-  if (resultFile) fs.writeFileSync(resultFile, "fake codex done\\n");
-  process.exit(0);
-}, ms);
+if (process.env.FAKE_CODEX_WRITE_FILE) {
+  if (writeDelayMs > 0) {
+    setTimeout(writeWorkspaceFile, writeDelayMs);
+  } else {
+    writeWorkspaceFile();
+  }
+}
+function finish(code, options = {}) {
+  if (finished) {
+    return;
+  }
+  finished = true;
+  if (resultFile && options.writeResult !== false) {
+    fs.writeFileSync(resultFile, "fake codex done\\n");
+  }
+  process.exit(code);
+}
+const timer = setTimeout(() => finish(0), ms);
+process.on("SIGTERM", () => {
+  clearTimeout(timer);
+  setTimeout(() => finish(termExitCode, { writeResult: false }), termExitDelayMs);
+});
 `);
   fs.chmodSync(fakeCodex, 0o755);
   const config = Object.assign({
@@ -170,6 +196,51 @@ async function testTimeoutTerminatesTask() {
   assert.strictEqual(timedOut.termination_reason, "timeout");
   assert(timedOut.finished_at);
   assert(timedOut.deadline_at);
+}
+
+async function testWorkspaceWriteTimeoutWinsAgainstChildExit() {
+  const fixture = makeGitFixture("write-timeout-race", {
+    timeoutSeconds: 1,
+    watchdogIntervalMs: 50,
+    cancelGraceMs: 100
+  });
+  const config = JSON.parse(fs.readFileSync(fixture.configPath, "utf8"));
+  config.projects.self.mode = "workspace-write";
+  config.projects.self.allowedModes = ["workspace-write"];
+  fs.writeFileSync(fixture.configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+  const run = runBridge(["run", "--config", fixture.configPath, "--project", "self", "--user", "tester", "timeout write"], {
+    env: {
+      FAKE_CODEX_SLEEP_MS: "60000",
+      FAKE_CODEX_TERM_EXIT_DELAY_MS: "25",
+      FAKE_CODEX_TERM_EXIT_CODE: "1",
+      FAKE_CODEX_WRITE_FILE: "NOTES.md",
+      FAKE_CODEX_WRITE_CONTENT: "# Timeout Notes\\n"
+    }
+  });
+  const id = parseTaskId(run.stdout);
+  const timedOut = await waitForTask(
+    fixture,
+    id,
+    (task) => task.status === "timeout" && task.worktree_cleanup_status === "removed" && Boolean(task.write_audit_completed_at),
+    "workspace-write timeout",
+    12000
+  );
+
+  assert.strictEqual(timedOut.termination_reason, "timeout");
+  assert.strictEqual(timedOut.worktree_cleanup_status, "removed");
+  assert.strictEqual(timedOut.changed_files_count, 1);
+  assert.strictEqual(fs.existsSync(timedOut.worktree_path), false);
+
+  const result = fs.readFileSync(timedOut.safe_result_file, "utf8");
+  const writeSummaryCount = (result.match(/## Write Summary/g) || []).length;
+  assert.strictEqual(writeSummaryCount, 1, result);
+
+  const bridgeLog = fs.readFileSync(path.join(fixture.stateDir, "tasks", id, "bridge.log"), "utf8");
+  const auditCompletedCount = (bridgeLog.match(/write audit completed/g) || []).length;
+  const finalizedCount = (bridgeLog.match(/finalized workspace-write task status=timeout/g) || []).length;
+  assert.strictEqual(auditCompletedCount, 1, bridgeLog);
+  assert.strictEqual(finalizedCount, 1, bridgeLog);
 }
 
 async function testDoneTaskCannotBeCancelled() {
@@ -633,6 +704,7 @@ function testCleanupDryRunDoesNotDeleteTasks() {
 async function main() {
   await testRunningTaskCanBeCancelled();
   await testTimeoutTerminatesTask();
+  await testWorkspaceWriteTimeoutWinsAgainstChildExit();
   await testDoneTaskCannotBeCancelled();
   await testStaleTaskReconciles();
   await testAdapterMetadataAndIdempotency();
