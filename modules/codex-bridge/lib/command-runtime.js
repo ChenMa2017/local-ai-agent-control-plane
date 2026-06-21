@@ -15,6 +15,7 @@ function createCommandRuntime(deps) {
     CANCELLABLE_STATUSES,
     nowIso,
     patchTask,
+    transitionTask,
     appendTaskLog,
     terminateTaskProcessGroup,
     writeResultIfEmpty,
@@ -131,7 +132,7 @@ function createCommandRuntime(deps) {
     if (!id) {
       throw new Error("logs requires a task_id.");
     }
-    const task = await reconcileTask(config, await readTask(config, id));
+    let task = await reconcileTask(config, await readTask(config, id));
     const payload = await taskOutputRuntime.logsPayload(config, task, {
       raw: Boolean(opts.raw),
       tail: opts.tail || 80,
@@ -185,39 +186,76 @@ function createCommandRuntime(deps) {
 
     const requestedAt = nowIso();
     if (task.status === "queued") {
-      const cancelled = await patchTask(config, id, {
-        status: "cancelled",
+      const cancelled = await transitionTask(config, id, {
+        expectedStatuses: ["queued"],
+        nextStatus: "cancelled",
+        patch: {
         cancel_requested_at: requestedAt,
         ended_at: requestedAt,
         finished_at: requestedAt,
         termination_reason: "cancelled"
+        }
       });
-      await appendTaskLog(config, cancelled, "cancelled while queued");
-      await terminateTaskProcessGroup(config, cancelled, "cancel");
-      await writeResultIfEmpty(cancelled, `Task ${task.task_id} was cancelled before it started.\n`);
-      await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancel_queued");
-      console.log(`${task.task_id} cancelled.`);
-      return;
+      if (cancelled.__transition && cancelled.__transition.applied) {
+        await appendTaskLog(config, cancelled, "cancelled while queued");
+        await terminateTaskProcessGroup(config, cancelled, "cancel");
+        await writeResultIfEmpty(cancelled, `Task ${task.task_id} was cancelled before it started.\n`);
+        await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancel_queued");
+        console.log(`${task.task_id} cancelled.`);
+        return;
+      }
+      task = await reconcileTask(config, await readTask(config, id));
+      if (FINAL_STATUSES.has(task.status)) {
+        console.log(`${task.task_id} already ${task.status}.`);
+        return;
+      }
     }
 
-    const cancelling = await patchTask(config, id, {
-      status: "cancelling",
+    if (!CANCELLABLE_STATUSES.has(task.status)) {
+      throw new Error(`${task.task_id} cannot be cancelled from status=${task.status}.`);
+    }
+
+    const cancelling = await transitionTask(config, id, {
+      expectedStatuses: ["running", "cancel_requested", "cancelling"],
+      nextStatus: "cancelling",
+      patch: {
       cancel_requested_at: task.cancel_requested_at || requestedAt,
       termination_reason: "cancelled"
+      }
     });
-    await appendTaskLog(config, cancelling, "cancelling by bridge user");
+    if (!cancelling.__transition || !cancelling.__transition.applied) {
+      if (FINAL_STATUSES.has(cancelling.status)) {
+        console.log(`${task.task_id} already ${cancelling.status}.`);
+        return;
+      }
+    }
+    if (cancelling.__transition && cancelling.__transition.applied) {
+      await appendTaskLog(config, cancelling, "cancelling by bridge user");
+    }
     const termination = await terminateTaskProcessGroup(config, cancelling, "cancel");
     const finishedAt = nowIso();
-    const cancelled = await patchTask(config, id, {
-      status: "cancelled",
+    const cancelled = await transitionTask(config, id, {
+      expectedStatuses: ["running", "cancel_requested", "cancelling"],
+      nextStatus: "cancelled",
+      patch: {
       ended_at: finishedAt,
       finished_at: finishedAt,
       termination_reason: "cancelled",
       exit_signal: termination.signal
+      }
     });
-    await writeResultIfEmpty(cancelled, `Task ${task.task_id} was cancelled.\n`);
-    await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancel");
-    await appendTaskLog(config, cancelled, "cancel completed");
+    if (!cancelled.exit_signal && termination.signal) {
+      await patchTask(config, id, { exit_signal: termination.signal }).catch(() => {});
+    }
+    if (!cancelled.__transition || !cancelled.__transition.applied) {
+      console.log(cancelled.status === "cancelled" ? `${task.task_id} cancelled.` : `${task.task_id} already ${cancelled.status}.`);
+      return;
+    }
+    if (cancelled.__transition && cancelled.__transition.applied) {
+      await writeResultIfEmpty(cancelled, `Task ${task.task_id} was cancelled.\n`);
+      await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancel");
+      await appendTaskLog(config, cancelled, "cancel completed");
+    }
     console.log(`${task.task_id} cancelled.`);
   }
 

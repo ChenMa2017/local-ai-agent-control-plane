@@ -10,6 +10,8 @@ function createTaskStateRuntime(deps) {
     sleep,
     reconcileTask
   } = deps;
+  const FINAL_TASK_STATUSES = new Set(["done", "failed", "cancelled", "timeout", "stale", "policy_violation"]);
+  const TASK_LOCK_TIMEOUT_MS = 30000;
 
   async function readJson(file) {
     let lastError;
@@ -99,16 +101,99 @@ function createTaskStateRuntime(deps) {
     return readJson(taskFile(config, id));
   }
 
+  function taskLockDir(config, id) {
+    return path.join(taskDir(config, id), ".task.lock");
+  }
+
+  async function withTaskLock(config, id, fn) {
+    const lockDir = taskLockDir(config, id);
+    const deadline = Date.now() + TASK_LOCK_TIMEOUT_MS;
+    while (true) {
+      try {
+        await ensureDir(taskDir(config, id));
+        await fsp.mkdir(lockDir);
+        break;
+      } catch (error) {
+        if (!error || error.code !== "EEXIST") {
+          throw error;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`Timed out waiting for task lock: ${id}`);
+        }
+        await sleep(50);
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      await fsp.rmdir(lockDir).catch(() => {});
+    }
+  }
+
   async function writeTask(config, task) {
     task.updated_at = nowIso();
     await writeJson(taskFile(config, task.task_id), task);
   }
 
   async function patchTask(config, id, patch) {
-    const task = await readTask(config, id);
-    Object.assign(task, patch);
-    await writeTask(config, task);
+    return withTaskLock(config, id, async () => {
+      const task = await readTask(config, id);
+      Object.assign(task, patch);
+      await writeTask(config, task);
+      return task;
+    });
+  }
+
+  function annotateTransition(task, meta) {
+    Object.defineProperty(task, "__transition", {
+      value: meta,
+      enumerable: false,
+      configurable: true
+    });
     return task;
+  }
+
+  async function transitionTask(config, id, options) {
+    const expectedStatuses = new Set((options.expectedStatuses || []).map((status) => String(status)));
+    const nextStatus = String(options.nextStatus || "").trim();
+    const patch = Object.assign({}, options.patch || {});
+    if (!nextStatus) {
+      throw new Error("transitionTask requires nextStatus.");
+    }
+    delete patch.status;
+
+    return withTaskLock(config, id, async () => {
+      const task = await readTask(config, id);
+      const currentStatus = String(task.status || "");
+
+      if (FINAL_TASK_STATUSES.has(currentStatus) && currentStatus !== nextStatus) {
+        return annotateTransition(task, {
+          applied: false,
+          reason: "final_status_immutable",
+          from: currentStatus,
+          to: nextStatus
+        });
+      }
+
+      if (expectedStatuses.size && currentStatus !== nextStatus && !expectedStatuses.has(currentStatus)) {
+        return annotateTransition(task, {
+          applied: false,
+          reason: "unexpected_status",
+          from: currentStatus,
+          to: nextStatus
+        });
+      }
+
+      Object.assign(task, patch);
+      task.status = nextStatus;
+      await writeTask(config, task);
+      return annotateTransition(task, {
+        applied: true,
+        reason: currentStatus === nextStatus ? "same_status_patch" : "transition_applied",
+        from: currentStatus,
+        to: nextStatus
+      });
+    });
   }
 
   async function appendTaskLog(config, task, line) {
@@ -152,6 +237,7 @@ function createTaskStateRuntime(deps) {
     readTask,
     writeTask,
     patchTask,
+    transitionTask,
     appendTaskLog,
     listTasks
   };

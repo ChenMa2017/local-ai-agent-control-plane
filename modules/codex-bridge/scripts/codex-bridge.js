@@ -105,6 +105,7 @@ const {
   readTask,
   writeTask,
   patchTask,
+  transitionTask,
   appendTaskLog,
   listTasks
 } = taskStateRuntime;
@@ -430,6 +431,7 @@ const workspaceWriteRuntime = createWorkspaceWriteRuntime({
   writeJson,
   readTask,
   patchTask,
+  transitionTask,
   appendTaskLog,
   taskDir,
   realDirectory,
@@ -452,6 +454,7 @@ const taskRunnerRuntime = createTaskRunnerRuntime({
   assertTaskId,
   readTask,
   patchTask,
+  transitionTask,
   appendTaskLog,
   activeTaskCount,
   sleep,
@@ -481,6 +484,7 @@ const commandRuntime = createCommandRuntime({
   CANCELLABLE_STATUSES,
   nowIso,
   patchTask,
+  transitionTask,
   appendTaskLog,
   terminateTaskProcessGroup: processRuntime.terminateTaskProcessGroup,
   writeResultIfEmpty,
@@ -532,24 +536,36 @@ async function reconcileTask(config, task) {
     return task;
   }
   if (task.status === "cancelling" || task.status === "cancel_requested") {
-    const cancelled = await patchTask(config, task.task_id, {
-      status: "cancelled",
+    const cancelled = await transitionTask(config, task.task_id, {
+      expectedStatuses: ["cancelling", "cancel_requested"],
+      nextStatus: "cancelled",
+      patch: {
       ended_at: nowIso(),
       finished_at: nowIso(),
       termination_reason: "cancelled"
+      }
     });
+    if (!cancelled.__transition || !cancelled.__transition.applied) {
+      return cancelled;
+    }
     await writeResultIfEmpty(cancelled, `Task ${task.task_id} was cancelled.\n`);
     await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled);
     await appendTaskLog(config, cancelled, `reconciled ${task.status} task to cancelled`);
     return cancelled;
   }
-  const reconciled = await patchTask(config, task.task_id, {
-    status: "stale",
+  const reconciled = await transitionTask(config, task.task_id, {
+    expectedStatuses: ["running"],
+    nextStatus: "stale",
+    patch: {
     ended_at: nowIso(),
     finished_at: nowIso(),
     termination_reason: "stale",
     error: "Bridge worker is no longer running."
+    }
   });
+  if (!reconciled.__transition || !reconciled.__transition.applied) {
+    return reconciled;
+  }
   await writeResultIfEmpty(reconciled, `Task ${task.task_id} became stale because its worker process is gone.\n`);
   await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, reconciled);
   await appendTaskLog(config, reconciled, `reconciled stale ${task.status} task to stale`);

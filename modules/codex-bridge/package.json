@@ -12,7 +12,7 @@
     "bridge": "node scripts/codex-bridge.js",
     "bridge:demo": "node scripts/codex-bridge.js run --project self --dry-run \"请模拟检查这个项目当前状态\"",
     "check": "node --check scripts/codex-bridge.js",
-    "test": "node tests/lifecycle.test.js && node tests/safe-output.test.js"
+    "test": "node tests/task-state-runtime.test.js && node tests/lifecycle.test.js && node tests/safe-output.test.js"
   },
   "engines": {
     "node": ">=18"

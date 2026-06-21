@@ -17,6 +17,7 @@ function createWorkspaceWriteRuntime(deps) {
     writeJson,
     readTask,
     patchTask,
+    transitionTask,
     appendTaskLog,
     taskDir,
     realDirectory,
@@ -519,18 +520,23 @@ function createWorkspaceWriteRuntime(deps) {
       return fresh;
     }
     const finishedAt = nowIso();
-    const updated = await patchTask(config, fresh.task_id, {
-      status: "policy_violation",
+    const updated = await transitionTask(config, fresh.task_id, {
+      expectedStatuses: ["running", "cancel_requested", "cancelling"],
+      nextStatus: "policy_violation",
+      patch: {
       ended_at: fresh.ended_at || finishedAt,
       finished_at: fresh.finished_at || finishedAt,
       termination_reason: "policy_violation",
       protected_path_violation: true,
       protected_path_matches: matches
+      }
     });
+    if (!updated.__transition || !updated.__transition.applied) {
+      return updated;
+    }
     await appendTaskLog(config, updated, `${source} triggered matches=${describeProtectedPathMatches(matches)}`).catch(() => {});
     const termination = await terminateTaskProcessGroup(config, updated, "policy_violation");
     const finalTask = await patchTask(config, fresh.task_id, {
-      status: "policy_violation",
       ended_at: finishedAt,
       finished_at: finishedAt,
       termination_reason: "policy_violation",

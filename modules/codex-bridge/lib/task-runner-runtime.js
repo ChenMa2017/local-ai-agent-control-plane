@@ -11,6 +11,7 @@ function createTaskRunnerRuntime(deps) {
     assertTaskId,
     readTask,
     patchTask,
+    transitionTask,
     appendTaskLog,
     activeTaskCount,
     sleep,
@@ -90,16 +91,19 @@ function createTaskRunnerRuntime(deps) {
       failed = true;
       const message = error && error.stack ? error.stack : error && error.message ? error.message : String(error);
       await fsp.writeFile(task.result_file, `Bridge worker failed before completion:\n\n${message}\n`, "utf8").catch(() => {});
-      const failedTask = await patchTask(config, task.task_id, {
-        status: "failed",
+      const failedTask = await transitionTask(config, task.task_id, {
+        expectedStatuses: ["queued", "running", "cancel_requested", "cancelling"],
+        nextStatus: "failed",
+        patch: {
         ended_at: nowIso(),
         finished_at: nowIso(),
         error: message
+        }
       }).catch(() => {});
-      if (failedTask) {
+      if (failedTask && failedTask.__transition && failedTask.__transition.applied) {
         await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, failedTask, "worker_failed").catch(() => {});
       }
-      await appendTaskLog(config, task, `worker failed: ${message.split("\n")[0]}`).catch(() => {});
+      await appendTaskLog(config, failedTask || task, `worker failed: ${message.split("\n")[0]}`).catch(() => {});
     }
 
     process.once("uncaughtException", (error) => {
@@ -113,42 +117,73 @@ function createTaskRunnerRuntime(deps) {
       config = await loadConfig(opts);
       task = await readTask(config, taskIdValue);
       if (!(await waitForSlot(config, task))) {
-        const cancelled = await patchTask(config, task.task_id, {
-          status: "cancelled",
+        const cancelled = await transitionTask(config, task.task_id, {
+          expectedStatuses: ["queued", "cancel_requested", "cancelling", "cancelled"],
+          nextStatus: "cancelled",
+          patch: {
           ended_at: nowIso(),
           finished_at: nowIso(),
           termination_reason: "cancelled"
+          }
         });
-        await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancelled_before_start");
-        await appendTaskLog(config, cancelled, "cancelled before start");
+        if (cancelled.__transition && cancelled.__transition.applied) {
+          await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancelled_before_start");
+          await appendTaskLog(config, cancelled, "cancelled before start");
+        }
         return;
       }
 
       if (task.mode === "workspace-write") {
         const locked = await workspaceWriteRuntime.acquireWorkspaceWriteLock(config, task);
         if (!locked) {
-          const cancelled = await patchTask(config, task.task_id, {
-            status: "cancelled",
+          const cancelled = await transitionTask(config, task.task_id, {
+            expectedStatuses: ["queued", "cancel_requested", "cancelling", "cancelled"],
+            nextStatus: "cancelled",
+            patch: {
             ended_at: nowIso(),
             finished_at: nowIso(),
             termination_reason: "cancelled"
+            }
           });
-          await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancelled_before_lock");
-          await appendTaskLog(config, cancelled, "cancelled before acquiring workspace-write lock");
+          if (cancelled.__transition && cancelled.__transition.applied) {
+            await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancelled_before_lock");
+            await appendTaskLog(config, cancelled, "cancelled before acquiring workspace-write lock");
+          }
           return;
         }
         const isolated = await workspaceWriteRuntime.prepareWorkspaceWriteExecution(config, locked);
         task = await workspaceWriteRuntime.beginWriteAudit(config, isolated);
       }
 
-      const started = await patchTask(config, task.task_id, {
-        status: "running",
+      const started = await transitionTask(config, task.task_id, {
+        expectedStatuses: ["queued"],
+        nextStatus: "running",
+        patch: {
         pid: process.pid,
         pgid: process.pid,
         started_at: nowIso(),
         deadline_at: isoAfterSeconds(config.timeoutSeconds),
         timeout_seconds: config.timeoutSeconds
+        }
       });
+      if (!started.__transition || !started.__transition.applied) {
+        if (started.status === "cancelling" || started.status === "cancel_requested") {
+          const cancelled = await transitionTask(config, task.task_id, {
+            expectedStatuses: ["cancelling", "cancel_requested"],
+            nextStatus: "cancelled",
+            patch: {
+              ended_at: nowIso(),
+              finished_at: nowIso(),
+              termination_reason: "cancelled"
+            }
+          });
+          if (cancelled.__transition && cancelled.__transition.applied) {
+            await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, cancelled, "cancelled_before_running");
+            await appendTaskLog(config, cancelled, "cancelled before worker could start");
+          }
+        }
+        return;
+      }
       task = started;
       await appendTaskLog(config, started, `started worker pid=${process.pid}`);
 
@@ -209,14 +244,19 @@ function createTaskRunnerRuntime(deps) {
     for (const step of steps) {
       if (await wasCancelRequested(config, task)) {
         await fsp.writeFile(task.result_file, `Task ${task.task_id} was cancelled before completion.\n`, "utf8");
-        const cancelled = await patchTask(config, task.task_id, {
-          status: "cancelled",
+        const cancelled = await transitionTask(config, task.task_id, {
+          expectedStatuses: ["running", "cancel_requested", "cancelling", "cancelled"],
+          nextStatus: "cancelled",
+          patch: {
           ended_at: nowIso(),
           finished_at: nowIso(),
           termination_reason: "cancelled"
+          }
         });
         await taskOutputRuntime.ensureSafeResult(config, cancelled);
-        await appendTaskLog(config, task, "cancelled during dry-run");
+        if (cancelled.__transition && cancelled.__transition.applied) {
+          await appendTaskLog(config, task, "cancelled during dry-run");
+        }
         return;
       }
       const event = {
@@ -252,14 +292,19 @@ function createTaskRunnerRuntime(deps) {
       `Prototype takeaway: external text became a whitelisted, logged, queryable task.`
     ].filter((line) => line !== null).join("\n");
     await fsp.writeFile(task.result_file, `${result}\n`, "utf8");
-    const done = await patchTask(config, task.task_id, {
-      status: "done",
+    const done = await transitionTask(config, task.task_id, {
+      expectedStatuses: ["running"],
+      nextStatus: "done",
+      patch: {
       ended_at: nowIso(),
       finished_at: nowIso(),
       exit_code: 0
+      }
     });
     await taskOutputRuntime.ensureSafeResult(config, done);
-    await appendTaskLog(config, task, "done dry-run");
+    if (done.__transition && done.__transition.applied) {
+      await appendTaskLog(config, task, "done dry-run");
+    }
   }
 
   async function timeoutTask(config, task) {
@@ -272,17 +317,22 @@ function createTaskRunnerRuntime(deps) {
     }
 
     const now = nowIso();
-    const timedOut = await patchTask(config, fresh.task_id, {
-      status: "timeout",
+    const timedOut = await transitionTask(config, fresh.task_id, {
+      expectedStatuses: ["running", "cancel_requested"],
+      nextStatus: "timeout",
+      patch: {
       timeout_at: now,
       ended_at: now,
       finished_at: now,
       termination_reason: "timeout"
+      }
     });
+    if (!timedOut.__transition || !timedOut.__transition.applied) {
+      return timedOut;
+    }
     await appendTaskLog(config, timedOut, `timeout reached deadline_at=${fresh.deadline_at || "-"}`);
     const termination = await terminateTaskProcessGroup(config, timedOut, "timeout");
     const finalTask = await patchTask(config, fresh.task_id, {
-      status: "timeout",
       timeout_at: now,
       ended_at: now,
       finished_at: now,
@@ -350,7 +400,7 @@ function createTaskRunnerRuntime(deps) {
           protectedPathGuard.stop();
         }
         closeFiles();
-        const updated = await patchTask(config, task.task_id, patch);
+        const updated = await transitionTask(config, task.task_id, patch);
         if (FINAL_STATUSES.has(updated.status)) {
           await taskOutputRuntime.ensureSafeResult(config, updated).catch(() => {});
         }
@@ -361,10 +411,13 @@ function createTaskRunnerRuntime(deps) {
       child.once("error", async (error) => {
         await fsp.writeFile(task.result_file, `Codex runner failed: ${error.message}\n`, "utf8").catch(() => {});
         await finish({
-          status: "failed",
+          expectedStatuses: ["running", "cancel_requested", "cancelling"],
+          nextStatus: "failed",
+          patch: {
           ended_at: nowIso(),
           finished_at: nowIso(),
           error: error.message
+          }
         }, `codex spawn failed: ${error.message}`);
       });
 
@@ -380,12 +433,15 @@ function createTaskRunnerRuntime(deps) {
         }
         const cancelled = fresh.status === "cancel_requested" || fresh.status === "cancelling";
         await finish({
-          status: cancelled ? "cancelled" : code === 0 && !signal ? "done" : "failed",
+          expectedStatuses: ["running", "cancel_requested", "cancelling"],
+          nextStatus: cancelled ? "cancelled" : code === 0 && !signal ? "done" : "failed",
+          patch: {
           ended_at: nowIso(),
           finished_at: nowIso(),
           exit_code: code,
           exit_signal: signal || null,
           termination_reason: cancelled ? "cancelled" : signal ? "signal" : null
+          }
         }, `codex exited code=${code} signal=${signal || ""}`);
       });
 
