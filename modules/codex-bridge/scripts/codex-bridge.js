@@ -8,6 +8,7 @@ const os = require("os");
 const crypto = require("crypto");
 const cp = require("child_process");
 const { createCommandRuntime } = require("../lib/command-runtime");
+const { createProcessRuntime } = require("../lib/process-runtime");
 const { createTaskOutputRuntime } = require("../lib/task-output-runtime");
 const { createTaskRunnerRuntime } = require("../lib/task-runner-runtime");
 const { createTaskStateRuntime } = require("../lib/task-state-runtime");
@@ -393,47 +394,13 @@ function isoAfterSeconds(seconds) {
   return new Date(Date.now() + Math.max(1, Number(seconds || 1)) * 1000).toISOString();
 }
 
-function pidLooksAlive(pid) {
-  const value = Number(pid);
-  if (!Number.isInteger(value) || value <= 0) {
-    return false;
-  }
-  try {
-    process.kill(value, 0);
-    return true;
-  } catch (error) {
-    return error && error.code === "EPERM";
-  }
-}
-
-function processGroupLooksAlive(pgid) {
-  const value = Number(pgid);
-  if (!Number.isInteger(value) || value <= 0) {
-    return false;
-  }
-  try {
-    process.kill(-value, 0);
-    return true;
-  } catch (error) {
-    return error && error.code === "EPERM";
-  }
-}
-
-async function procCmdline(pid) {
-  const value = Number(pid);
-  if (!Number.isInteger(value) || value <= 0) {
-    return "";
-  }
-  return fsp.readFile(`/proc/${value}/cmdline`, "utf8").then((text) => text.replace(/\0/g, " ")).catch(() => "");
-}
-
-async function taskWorkerLooksAlive(task) {
-  if (!pidLooksAlive(task.pid)) {
-    return false;
-  }
-  const cmdline = await procCmdline(task.pid);
-  return cmdline.includes("__worker") && cmdline.includes(task.task_id);
-}
+const processRuntime = createProcessRuntime({
+  fsp,
+  sleep,
+  readTask,
+  appendTaskLog,
+  selfPid: process.pid
+});
 
 const taskOutputRuntime = createTaskOutputRuntime({
   fsp,
@@ -471,8 +438,8 @@ const workspaceWriteRuntime = createWorkspaceWriteRuntime({
   writeResultIfEmpty,
   ensureSafeResult: taskOutputRuntime.ensureSafeResult,
   sanitizeOutput: taskOutputRuntime.sanitizeOutput,
-  terminateTaskProcessGroup,
-  taskWorkerLooksAlive
+  terminateTaskProcessGroup: processRuntime.terminateTaskProcessGroup,
+  taskWorkerLooksAlive: processRuntime.taskWorkerLooksAlive
 });
 
 const taskRunnerRuntime = createTaskRunnerRuntime({
@@ -494,9 +461,9 @@ const taskRunnerRuntime = createTaskRunnerRuntime({
   workspaceWriteRuntime,
   taskOutputRuntime,
   FINAL_STATUSES,
-  taskWorkerLooksAlive,
+  taskWorkerLooksAlive: processRuntime.taskWorkerLooksAlive,
   reconcileTask,
-  terminateTaskProcessGroup,
+  terminateTaskProcessGroup: processRuntime.terminateTaskProcessGroup,
   writeResultIfEmpty
 });
 
@@ -515,7 +482,7 @@ const commandRuntime = createCommandRuntime({
   nowIso,
   patchTask,
   appendTaskLog,
-  terminateTaskProcessGroup,
+  terminateTaskProcessGroup: processRuntime.terminateTaskProcessGroup,
   writeResultIfEmpty,
   workspaceWriteRuntime,
   reconcileAllTasks,
@@ -560,7 +527,7 @@ async function reconcileTask(config, task) {
   if (!["running", "cancelling", "cancel_requested"].includes(task.status)) {
     return task;
   }
-  const workerAlive = await taskWorkerLooksAlive(task);
+  const workerAlive = await processRuntime.taskWorkerLooksAlive(task);
   if (workerAlive) {
     return task;
   }
@@ -794,57 +761,6 @@ async function writeResultIfEmpty(task, text) {
   if (!existing.trim()) {
     await fsp.writeFile(task.result_file, text, "utf8").catch(() => {});
   }
-}
-
-function signalProcessGroup(pgid, signal) {
-  const value = Number(pgid);
-  if (!Number.isInteger(value) || value <= 0) {
-    return false;
-  }
-  if (value === process.pid) {
-    throw new Error("Refusing to signal the current process group.");
-  }
-  try {
-    process.kill(-value, signal);
-    return true;
-  } catch (error) {
-    if (error && error.code === "ESRCH") {
-      return false;
-    }
-    if (error && error.code === "EPERM") {
-      return true;
-    }
-    throw error;
-  }
-}
-
-async function terminateTaskProcessGroup(config, task, reason) {
-  const fresh = await readTask(config, task.task_id).catch(() => task);
-  const pgid = Number(fresh.pgid || fresh.pid);
-  const workerAlive = await taskWorkerLooksAlive(fresh);
-  if (!workerAlive || !processGroupLooksAlive(pgid)) {
-    await appendTaskLog(config, fresh, `${reason}: task process group is already gone`);
-    return { signalled: false, signal: null };
-  }
-
-  await appendTaskLog(config, fresh, `${reason}: sending SIGTERM to pgid=${pgid}`);
-  signalProcessGroup(pgid, "SIGTERM");
-  const deadline = Date.now() + config.cancelGraceMs;
-  while (Date.now() < deadline) {
-    if (!processGroupLooksAlive(pgid)) {
-      return { signalled: true, signal: "SIGTERM" };
-    }
-    await sleep(100);
-  }
-
-  if (processGroupLooksAlive(pgid)) {
-    await appendTaskLog(config, fresh, `${reason}: sending SIGKILL to pgid=${pgid}`);
-    signalProcessGroup(pgid, "SIGKILL");
-    await sleep(200);
-    return { signalled: true, signal: "SIGKILL" };
-  }
-
-  return { signalled: true, signal: "SIGTERM" };
 }
 
 async function main() {
