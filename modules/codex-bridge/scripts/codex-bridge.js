@@ -536,14 +536,14 @@ async function reconcileTask(config, task) {
   if (!ACTIVE_STATUSES.has(task.status)) {
     return task;
   }
-  const workerAlive = await processRuntime.taskWorkerLooksAlive(task);
-  if (workerAlive) {
-    return task;
-  }
   if (task.status === "finalizing") {
     const ownerAlive = processRuntime.pidLooksAlive(task.finalization_owner_pid);
     if (ownerAlive) {
       return task;
+    }
+    const workerAlive = await processRuntime.taskWorkerLooksAlive(task);
+    if (workerAlive) {
+      await processRuntime.terminateTaskProcessGroup(config, task, "abandoned finalization");
     }
     const stale = await transitionTask(config, task.task_id, {
       expectedStatuses: ["finalizing"],
@@ -552,7 +552,7 @@ async function reconcileTask(config, task) {
         ended_at: task.ended_at || nowIso(),
         finished_at: task.finished_at || nowIso(),
         termination_reason: "stale",
-        error: "Bridge worker exited before finalization completed."
+        error: "Finalization owner exited before finalization completed."
       }
     });
     if (!stale.__transition || !stale.__transition.stateChanged) {
@@ -561,6 +561,10 @@ async function reconcileTask(config, task) {
     await workspaceWriteRuntime.finalizeWorkspaceWriteTask(config, stale, "stale_finalizing");
     await appendTaskLog(config, stale, "reconciled finalizing task to stale");
     return stale;
+  }
+  const workerAlive = await processRuntime.taskWorkerLooksAlive(task);
+  if (workerAlive) {
+    return task;
   }
   if (task.status === "cancelling" || task.status === "cancel_requested") {
     const cancelled = await transitionTask(config, task.task_id, {

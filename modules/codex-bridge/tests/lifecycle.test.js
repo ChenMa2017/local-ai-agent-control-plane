@@ -309,6 +309,85 @@ async function testFinalizingOwnerAlivePreventsStaleReconcile() {
   }
 }
 
+async function testFinalizingOwnerDeadStopsWorkerAndRecoversStale() {
+  const fixture = makeFixture("finalizing-owner-dead");
+  const id = "task_20260622_120000_owner02";
+  const worker = cp.spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)", "__worker", id], {
+    cwd: repoRoot,
+    stdio: "ignore",
+    detached: true
+  });
+  worker.unref();
+  const owner = cp.spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], {
+    cwd: repoRoot,
+    stdio: "ignore"
+  });
+  owner.unref();
+
+  try {
+    const dir = path.join(fixture.stateDir, "tasks", id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "result.md"), "pending finalization\n");
+    fs.writeFileSync(path.join(dir, "task.json"), `${JSON.stringify({
+      version: 1,
+      task_id: id,
+      status: "finalizing",
+      user: "tester",
+      project: "self",
+      project_path: fixture.project,
+      mode: "workspace-write",
+      prompt: "owner dead reconcile",
+      dry_run: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+      deadline_at: new Date(Date.now() + 60000).toISOString(),
+      timeout_seconds: 60,
+      pid: worker.pid,
+      pgid: worker.pid,
+      child_pid: null,
+      finalization_owner_pid: owner.pid,
+      finalization_target_status: "timeout",
+      finalization_requested_at: new Date().toISOString(),
+      result_file: path.join(dir, "result.md"),
+      stdout_file: path.join(dir, "stdout.jsonl"),
+      stderr_file: path.join(dir, "stderr.log"),
+      bridge_log_file: path.join(dir, "bridge.log")
+    }, null, 2)}\n`);
+
+    assert(processGroupAlive(worker.pid), `process group ${worker.pid} should be alive before reconcile`);
+    try {
+      process.kill(owner.pid, "SIGTERM");
+    } catch (_error) {
+      // Ignore if the helper process has already exited.
+    }
+    await sleep(250);
+
+    runBridge(["reconcile", "--config", fixture.configPath]);
+    const stale = await waitForTask(fixture, id, (task) => task.status === "stale", "stale owner-dead recovery", 4000);
+    assert.strictEqual(stale.termination_reason, "stale");
+
+    const groupDeadline = Date.now() + 4000;
+    while (Date.now() < groupDeadline && processGroupAlive(worker.pid)) {
+      await sleep(100);
+    }
+    assert(!processGroupAlive(worker.pid), `process group ${worker.pid} should be gone after abandoned finalization recovery`);
+  } finally {
+    try {
+      process.kill(owner.pid, "SIGKILL");
+    } catch (_error) {
+      // Ignore if already gone.
+    }
+    try {
+      process.kill(-worker.pid, "SIGKILL");
+    } catch (_error) {
+      // Ignore if already gone.
+    }
+  }
+}
+
 async function testDoneTaskCannotBeCancelled() {
   const fixture = makeFixture("done");
   const run = runBridge([
@@ -772,6 +851,7 @@ async function main() {
   await testTimeoutTerminatesTask();
   await testWorkspaceWriteTimeoutWinsAgainstChildExit();
   await testFinalizingOwnerAlivePreventsStaleReconcile();
+  await testFinalizingOwnerDeadStopsWorkerAndRecoversStale();
   await testDoneTaskCannotBeCancelled();
   await testStaleTaskReconciles();
   await testAdapterMetadataAndIdempotency();
