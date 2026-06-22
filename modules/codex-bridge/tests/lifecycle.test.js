@@ -243,6 +243,72 @@ async function testWorkspaceWriteTimeoutWinsAgainstChildExit() {
   assert.strictEqual(finalizedCount, 1, bridgeLog);
 }
 
+async function testFinalizingOwnerAlivePreventsStaleReconcile() {
+  const fixture = makeFixture("finalizing-owner");
+  const owner = cp.spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], {
+    cwd: repoRoot,
+    stdio: "ignore"
+  });
+  owner.unref();
+
+  try {
+    const id = "task_20260622_120000_owner01";
+    const dir = path.join(fixture.stateDir, "tasks", id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "result.md"), "pending finalization\n");
+    fs.writeFileSync(path.join(dir, "task.json"), `${JSON.stringify({
+      version: 1,
+      task_id: id,
+      status: "finalizing",
+      user: "tester",
+      project: "self",
+      project_path: fixture.project,
+      mode: "workspace-write",
+      prompt: "owner-aware reconcile",
+      dry_run: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+      deadline_at: new Date(Date.now() + 60000).toISOString(),
+      timeout_seconds: 60,
+      pid: 999999999,
+      pgid: 999999999,
+      child_pid: null,
+      finalization_owner_pid: owner.pid,
+      finalization_target_status: "timeout",
+      finalization_requested_at: new Date().toISOString(),
+      result_file: path.join(dir, "result.md"),
+      stdout_file: path.join(dir, "stdout.jsonl"),
+      stderr_file: path.join(dir, "stderr.log"),
+      bridge_log_file: path.join(dir, "bridge.log")
+    }, null, 2)}\n`);
+
+    runBridge(["status", "--config", fixture.configPath, id]);
+    const stillFinalizing = readTask(fixture, id);
+    assert.strictEqual(stillFinalizing.status, "finalizing");
+    assert.strictEqual(stillFinalizing.finalization_target_status, "timeout");
+
+    try {
+      process.kill(owner.pid, "SIGTERM");
+    } catch (_error) {
+      // Ignore if the helper process has already exited.
+    }
+    await sleep(250);
+
+    runBridge(["reconcile", "--config", fixture.configPath]);
+    const stale = await waitForTask(fixture, id, (task) => task.status === "stale", "stale finalizing recovery", 4000);
+    assert.strictEqual(stale.termination_reason, "stale");
+  } finally {
+    try {
+      process.kill(owner.pid, "SIGKILL");
+    } catch (_error) {
+      // Ignore if already gone.
+    }
+  }
+}
+
 async function testDoneTaskCannotBeCancelled() {
   const fixture = makeFixture("done");
   const run = runBridge([
@@ -705,6 +771,7 @@ async function main() {
   await testRunningTaskCanBeCancelled();
   await testTimeoutTerminatesTask();
   await testWorkspaceWriteTimeoutWinsAgainstChildExit();
+  await testFinalizingOwnerAlivePreventsStaleReconcile();
   await testDoneTaskCannotBeCancelled();
   await testStaleTaskReconciles();
   await testAdapterMetadataAndIdempotency();

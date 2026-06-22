@@ -541,6 +541,10 @@ async function reconcileTask(config, task) {
     return task;
   }
   if (task.status === "finalizing") {
+    const ownerAlive = processRuntime.pidLooksAlive(task.finalization_owner_pid);
+    if (ownerAlive) {
+      return task;
+    }
     const stale = await transitionTask(config, task.task_id, {
       expectedStatuses: ["finalizing"],
       nextStatus: "stale",
