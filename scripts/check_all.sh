@@ -3,33 +3,21 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "== control-plane safety tools =="
-(cd "$ROOT" && python3 -m py_compile scripts/control_plane.py tests/test_control_plane.py && python3 -m unittest tests/test_control_plane.py)
+run_check() {
+  local label="$1"
+  local script_path="$2"
 
-echo
-echo "== codex-bridge =="
-(cd "$ROOT/modules/codex-bridge" && node --check scripts/codex-bridge.js && npm test)
+  echo "== $label =="
+  bash "$script_path"
+  echo
+}
 
-echo
-echo "== agent-host =="
-(cd "$ROOT/modules/agent-host" && python3 -m compileall -q bridge.py agent_host tests && python3 -m unittest discover -s tests)
+run_check "control-plane safety tools" "$ROOT/scripts/ci/check_control_plane.sh"
+run_check "codex-bridge" "$ROOT/scripts/ci/check_codex_bridge.sh"
+run_check "agent-host" "$ROOT/scripts/ci/check_agent_host.sh"
+run_check "discord-adapter py_compile" "$ROOT/scripts/ci/check_discord_adapter_py_compile.sh"
+run_check "discord-adapter unittest" "$ROOT/scripts/ci/run_discord_adapter_unittests.sh"
+run_check "host-ops" "$ROOT/scripts/ci/check_host_ops.sh"
+run_check "codex-watchdog-vscode" "$ROOT/scripts/ci/check_codex_watchdog_vscode.sh"
 
-echo
-echo "== discord-adapter =="
-if [[ -x "$ROOT/modules/discord-adapter/.venv/bin/python" ]]; then
-  PY="$ROOT/modules/discord-adapter/.venv/bin/python"
-else
-  PY="python3"
-fi
-(cd "$ROOT/modules/discord-adapter" && "$PY" -m py_compile bot.py agent_host_client.py tests/test_agent_host_client.py && "$PY" -m unittest discover -s tests)
-
-echo
-echo "== host-ops =="
-(cd "$ROOT/modules/host-ops" && python3 -m py_compile host_ops.py tests/test_host_ops.py && python3 -m unittest discover -s tests)
-
-echo
-echo "== codex-watchdog-vscode =="
-(cd "$ROOT/modules/codex-watchdog-vscode" && node --check extension.js && npm test)
-
-echo
 echo "All checks passed."

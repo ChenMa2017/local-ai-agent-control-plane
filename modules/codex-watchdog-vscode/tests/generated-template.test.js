@@ -352,6 +352,8 @@ async function main() {
     }
   ]);
 
+  // Keep positive current-conclusion fixtures far from real-time staleness cutoffs
+  // so the generated-template suite remains deterministic as calendar time moves on.
   writeJson(projectRoot, "project_index/current_conclusions.json", {
     schema_version: "current_conclusions.v0.1",
     updated_at: "2026-06-16T00:00:00Z",
@@ -365,7 +367,7 @@ async function main() {
         supporting_docs: ["doc_current_best"],
         supporting_experiments: ["exp_model_a"],
         last_reviewed_at: "2026-06-16T00:00:00Z",
-        stale_after_days: 30,
+        stale_after_days: 3650,
         stale_severity: "warning",
         owner: "watchdog",
         invalidated_by: null,
@@ -1721,7 +1723,7 @@ async function main() {
       supporting_docs: ["doc_current_best"],
       supporting_experiments: ["exp_model_a"],
       last_reviewed_at: "2026-06-08T12:00:30Z",
-      stale_after_days: 7,
+      stale_after_days: 3650,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,
@@ -1838,7 +1840,7 @@ async function main() {
       supporting_docs: ["doc_stage06_route_status"],
       supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:00:45Z",
-      stale_after_days: 14,
+      stale_after_days: 3650,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,
@@ -1955,7 +1957,7 @@ async function main() {
       supporting_docs: ["doc_stage06_route_status"],
       supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:00:00Z",
-      stale_after_days: 14,
+      stale_after_days: 3650,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,
@@ -2253,7 +2255,7 @@ async function main() {
       supporting_docs: ["doc_stage06_route_status"],
       supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:30:00Z",
-      stale_after_days: 7,
+      stale_after_days: 3650,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,
@@ -2319,7 +2321,7 @@ async function main() {
       supporting_docs: ["doc_stage06_route_status"],
       supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:31:00Z",
-      stale_after_days: 7,
+      stale_after_days: 3650,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,

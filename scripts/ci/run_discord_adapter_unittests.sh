@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+ROOT="$(ci_repo_root)"
+PYTHON_BIN="${PYTHON_BIN:-$(discord_adapter_python_bin "$ROOT")}"
 LOG_FILE="$(mktemp)"
 
 cleanup() {
