@@ -1079,6 +1079,29 @@ def validate_check_config(config: AdapterConfig, cwd: Path | None = None) -> lis
     def add(name: str, ok: bool, detail: str = "") -> None:
         checks.append((name, ok, detail))
 
+    def looks_like_absolute_path(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        text = value.strip()
+        if not text:
+            return False
+        if text.startswith("/"):
+            return True
+        if len(text) >= 3 and text[1] == ":" and text[2] in ("\\", "/") and text[0].isalpha():
+            return True
+        if text.startswith("\\\\"):
+            return True
+        return False
+
+    def contains_absolute_path(value: Any) -> bool:
+        if looks_like_absolute_path(value):
+            return True
+        if isinstance(value, dict):
+            return any(contains_absolute_path(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(contains_absolute_path(item) for item in value)
+        return False
+
     add("DISCORD_BOT_TOKEN present", bool(config.discord_bot_token))
     add("DISCORD_GUILD_ID present", bool(config.discord_guild_id))
     add("AGENT_HOST_TOKEN present", bool(config.agent_host_token))
@@ -1111,7 +1134,7 @@ def validate_check_config(config: AdapterConfig, cwd: Path | None = None) -> lis
                 str(cwd),
                 os.getcwd(),
             )
-        )
+        ) or contains_absolute_path(workspaces)
         add("/codex/workspaces", workspaces.get("ok") is True and bool(workspaces.get("workspaces")))
         add("/codex/workspaces path redaction", not leaked)
         workspace_ids = {str(item.get("id", "")) for item in workspaces.get("workspaces", [])}
