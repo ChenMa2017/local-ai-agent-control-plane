@@ -45,11 +45,13 @@ jobs:
           python3 -m compileall -q bridge.py agent_host tests
           python3 -m unittest discover -s tests
 
-      - name: Run discord-adapter checks
+      - name: Run discord-adapter py_compile checks
         run: |
           cd modules/discord-adapter
-          python3 -m py_compile bot.py agent_host_client.py tests/test_agent_host_client.py
-          python3 -m unittest discover -s tests
+          python3 -m py_compile bot.py agent_host_client.py tests/test_agent_host_client.py tests/test_agent_host_e2e.py
+
+      - name: Run discord-adapter unittest checks
+        run: bash scripts/ci/run_discord_adapter_unittests.sh
 
       - name: Run host-ops checks
         run: |
