@@ -160,6 +160,26 @@ function processGroupAlive(pgid) {
   }
 }
 
+function processAlive(pid) {
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch (error) {
+    return error && error.code === "EPERM";
+  }
+}
+
+async function waitForProcessExit(pid, label, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processAlive(pid)) {
+      return;
+    }
+    await sleep(50);
+  }
+  assert.fail(`timed out waiting for ${label} pid ${pid} to exit`);
+}
+
 async function testRunningTaskCanBeCancelled() {
   const fixture = makeFixture("cancel");
   const run = runBridge(["run", "--config", fixture.configPath, "--project", "self", "--user", "tester", "slow task"], {
@@ -295,7 +315,7 @@ async function testFinalizingOwnerAlivePreventsStaleReconcile() {
     } catch (_error) {
       // Ignore if the helper process has already exited.
     }
-    await sleep(250);
+    await waitForProcessExit(owner.pid, "finalization owner");
 
     runBridge(["reconcile", "--config", fixture.configPath]);
     const stale = await waitForTask(fixture, id, (task) => task.status === "stale", "stale finalizing recovery", 4000);
@@ -363,7 +383,7 @@ async function testFinalizingOwnerDeadStopsWorkerAndRecoversStale() {
     } catch (_error) {
       // Ignore if the helper process has already exited.
     }
-    await sleep(250);
+    await waitForProcessExit(owner.pid, "abandoned finalization owner");
 
     runBridge(["reconcile", "--config", fixture.configPath]);
     const stale = await waitForTask(fixture, id, (task) => task.status === "stale", "stale owner-dead recovery", 4000);
