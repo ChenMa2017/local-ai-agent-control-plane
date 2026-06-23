@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -175,6 +176,85 @@ class ControlPlaneTests(unittest.TestCase):
             self.assertTrue(report["ok"])
             self.assertIn("rollback_plan_only", codes)
             self.assertIn("Do not delete new state, logs, tasks, or configs during rollback.", report["plan"])
+
+    def test_config_validation_reports_placeholder_and_duplicate_secret_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agent_host = self.write_json(root, "agent.json", self.valid_agent_host(root))
+            discord = self.write_json(root, "discord.json", self.valid_discord())
+            host_ops = self.write_json(root, "host_ops.json", self.valid_host_ops(root))
+            secrets = root / "secrets.env"
+            secrets.write_text(
+                "\n".join(
+                    [
+                        "DISCORD_BOT_TOKEN=replace-with-token",
+                        "DISCORD_GUILD_ID=123456789012345678",
+                        "AGENT_HOST_TOKEN=demo-token",
+                        "AGENT_HOST_TOKEN=demo-token-2",
+                        "AGENT_HOST_ADMIN_TOKEN=changeme",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            secrets.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+            report = control_plane.report_for_config(self.args(agent_host, discord, host_ops, secrets, strict=True))
+            codes = [item["code"] for item in report["findings"]]
+
+            self.assertIn("secrets_env_duplicate_key", codes)
+            self.assertIn("secrets_env_placeholder_value", codes)
+
+    def test_validate_repo_systemd_units_requires_environmentfile_and_no_inline_secrets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            good = root / "good.service"
+            good.write_text(
+                "\n".join(
+                    [
+                        "[Service]",
+                        f"EnvironmentFile={control_plane.DEFAULT_SYSTEMD_ENV_FILE}",
+                        "Environment=PYTHONUNBUFFERED=1",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            bad = root / "bad.service"
+            bad.write_text(
+                "\n".join(
+                    [
+                        "[Service]",
+                        "Environment=DISCORD_BOT_TOKEN=replace-with-token",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            findings = []
+            control_plane.validate_repo_systemd_units((good, bad), findings=findings)
+            codes = {item.code for item in findings}
+
+            self.assertIn("repo_systemd_environmentfile_missing", codes)
+            self.assertIn("repo_systemd_inline_secret_env", codes)
+
+    def test_config_validation_reports_repo_systemd_environmentfile_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agent_host = self.write_json(root, "agent.json", self.valid_agent_host(root))
+            discord = self.write_json(root, "discord.json", self.valid_discord())
+            host_ops = self.write_json(root, "host_ops.json", self.valid_host_ops(root))
+            secrets = root / "secrets.env"
+            secrets.write_text(
+                "DISCORD_BOT_TOKEN=x\nDISCORD_GUILD_ID=y\nAGENT_HOST_TOKEN=z\nAGENT_HOST_ADMIN_TOKEN=q\n",
+                encoding="utf-8",
+            )
+            secrets.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            unit = root / "agent-host-web.service"
+            unit.write_text("[Service]\nEnvironmentFile=/tmp/wrong.env\n", encoding="utf-8")
+
+            with mock.patch.object(control_plane, "REPO_SYSTEMD_UNITS", (unit,)):
+                report = control_plane.report_for_config(self.args(agent_host, discord, host_ops, secrets, strict=True))
+
+            codes = {item["code"] for item in report["findings"]}
+            self.assertIn("repo_systemd_environmentfile_unexpected", codes)
 
 
 if __name__ == "__main__":

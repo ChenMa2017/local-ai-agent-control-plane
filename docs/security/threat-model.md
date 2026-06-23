@@ -50,6 +50,7 @@ configured allowlisted workspaces
 user-owned ~/.config/agent-host/secrets.env
 systemd user services installed by the operator
 configured auth.token_env_map principals in agent-host config
+operator-owned Codex CLI auth state outside Git
 ```
 
 Treated as untrusted or partially trusted:
@@ -91,6 +92,13 @@ secrets stored outside Git in ~/.config/agent-host/secrets.env
 systemd EnvironmentFile instead of inlining tokens in unit files
 discord adapter token lookup by *_env indirection
 agent-host auth.token_env_map support for env-backed bearer tokens
+read-only control-plane validation for secret placeholders, duplicate keys, and repo EnvironmentFile checks
+```
+
+The detailed secret-source contract lives in:
+
+```text
+docs/security/secrets-contract.md
 ```
 
 ## Runtime and Interface Boundaries
@@ -191,6 +199,7 @@ protected path policy is strong audit and policy reporting, but not full OS sand
 single-node local operation is the intended model; distributed trust is out of scope
 Discord and Web entrypoints still depend on correct local operator configuration
 Codex model output can still propose risky actions and must remain policy-bounded
+putting extra shell-scoped credentials into shared secrets.env increases blast radius across local services
 ```
 
 ## Operator Requirements
@@ -201,6 +210,7 @@ Safe operating assumptions:
 keep services behind localhost, LAN/VPN, or SSH tunnel
 protect ~/.config/agent-host/secrets.env with chmod 600
 do not commit config.json, secrets.env, logs, or state artifacts
+keep Agent Host / Discord startup secrets in EnvironmentFile, but keep optional GitHub or Codex/OpenAI credentials shell-scoped unless there is an explicit local need
 review workspace-write enablement deliberately
 keep public docs free of private absolute paths and real tokens
 ```
@@ -213,5 +223,6 @@ The next engineering steps should focus on:
 fixed-clock watchdog test support instead of date-drift-prone fixtures
 single-operator server smoke baseline covering systemd -> agent-host -> adapter -> codex task -> audit -> cleanup
 continued secret-source validation around EnvironmentFile and auth.token_env_map usage
+operator-facing secrets contract and rotation guidance
 additional operator-facing documentation for accepted residual risks and recovery steps
 ```

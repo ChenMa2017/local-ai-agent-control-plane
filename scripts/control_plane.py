@@ -19,6 +19,11 @@ DEFAULT_AGENT_HOST_CONFIG = ROOT / "modules" / "agent-host" / "config.example.js
 DEFAULT_DISCORD_CONFIG = ROOT / "modules" / "discord-adapter" / "config.example.json"
 DEFAULT_HOST_OPS_CONFIG = ROOT / "modules" / "host-ops" / "host_ops.config.example.json"
 DEFAULT_SECRETS_ENV = Path.home() / ".config" / "agent-host" / "secrets.env"
+DEFAULT_SYSTEMD_ENV_FILE = "%h/.config/agent-host/secrets.env"
+REPO_SYSTEMD_UNITS = (
+    ROOT / "systemd" / "user" / "agent-host-web.service",
+    ROOT / "systemd" / "user" / "discord-agent-adapter.service",
+)
 DEFAULT_OLD_ROOT = Path.home() / "Documents" / "My_App_Dev"
 
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -27,6 +32,7 @@ TOKEN_LIKE_RE = re.compile(
     r"(?i)(discord[_-]?bot[_-]?token|agent[_-]?host[_-]?token|authorization:\s*bearer\s+|sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,})"
 )
 SECRET_ENV_RE = re.compile(r"(?i)^(?:[A-Z0-9_]*(?:TOKEN|SECRET|KEY|PASSWORD|PRIVATE)[A-Z0-9_]*)=.*$")
+PLACEHOLDER_SECRET_RE = re.compile(r"(?i)^(?:replace-with-|changeme|demo(?:-|$)|example(?:-|$))")
 
 
 @dataclass
@@ -309,11 +315,93 @@ def validate_secrets(path: Path, findings: list[Finding], required_keys: list[st
     if mode & (stat.S_IRWXG | stat.S_IRWXO):
         findings.append(finding("error", "secrets_env_permissions_too_open", "secrets.env should be chmod 600.", path=str(path), mode=oct(mode)))
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    keys = [line.split("=", 1)[0] for line in lines if line and not line.lstrip().startswith("#") and "=" in line]
+    parsed_entries: list[tuple[str, str]] = []
+    for line in lines:
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        parsed_entries.append((key.strip(), value.strip()))
+    keys = [key for key, _value in parsed_entries]
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for key in keys:
+        if key in seen and key not in duplicates:
+            duplicates.append(key)
+        seen.add(key)
+    for key in duplicates:
+        findings.append(finding("warning", "secrets_env_duplicate_key", "Duplicate key found in secrets.env.", key=key))
+    for key, value in parsed_entries:
+        if PLACEHOLDER_SECRET_RE.match(value):
+            findings.append(
+                finding(
+                    "warning",
+                    "secrets_env_placeholder_value",
+                    "Placeholder-like value found in secrets.env.",
+                    key=key,
+                )
+            )
     expected = required_keys or ["DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "AGENT_HOST_TOKEN"]
     for required in expected:
         if required not in keys:
             findings.append(finding("warning", "secrets_env_key_missing", "Expected key missing from secrets.env.", key=required))
+
+
+def validate_repo_systemd_units(
+    unit_paths: tuple[Path, ...] | None = None,
+    *,
+    findings: list[Finding],
+    expected_env_file: str = DEFAULT_SYSTEMD_ENV_FILE,
+) -> None:
+    if unit_paths is None:
+        unit_paths = REPO_SYSTEMD_UNITS
+    for unit_path in unit_paths:
+        if not unit_path.exists():
+            findings.append(
+                finding(
+                    "error",
+                    "repo_systemd_unit_missing",
+                    "Expected repo systemd unit file is missing.",
+                    path=str(unit_path),
+                )
+            )
+            continue
+        text = unit_path.read_text(encoding="utf-8", errors="replace")
+        envfile_lines = [line.strip() for line in text.splitlines() if line.strip().startswith("EnvironmentFile=")]
+        if not envfile_lines:
+            findings.append(
+                finding(
+                    "error",
+                    "repo_systemd_environmentfile_missing",
+                    "Repo systemd unit must load secrets through EnvironmentFile.",
+                    path=str(unit_path),
+                    expected_env_file=expected_env_file,
+                )
+            )
+        elif f"EnvironmentFile={expected_env_file}" not in envfile_lines:
+            findings.append(
+                finding(
+                    "error",
+                    "repo_systemd_environmentfile_unexpected",
+                    "Repo systemd unit uses an unexpected EnvironmentFile path.",
+                    path=str(unit_path),
+                    expected_env_file=expected_env_file,
+                    declared=envfile_lines,
+                )
+            )
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("Environment="):
+                continue
+            if SECRET_ENV_RE.match(stripped.removeprefix("Environment=").strip()):
+                findings.append(
+                    finding(
+                        "error",
+                        "repo_systemd_inline_secret_env",
+                        "Repo systemd unit should not inline secret-looking Environment= values.",
+                        path=str(unit_path),
+                        line=redact_scalar(stripped),
+                    )
+                )
 
 
 def report_for_config(args: argparse.Namespace) -> dict[str, Any]:
@@ -332,6 +420,7 @@ def report_for_config(args: argparse.Namespace) -> dict[str, Any]:
         findings,
         required_keys=collect_required_secret_keys(agent_host, discord),
     )
+    validate_repo_systemd_units(findings=findings)
     return build_report("config_validation", findings, configs={"agent_host": agent_host, "discord_adapter": discord, "host_ops": host_ops})
 
 

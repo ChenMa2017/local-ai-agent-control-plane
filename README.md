@@ -181,9 +181,12 @@ Example:
 DISCORD_BOT_TOKEN=replace-with-token
 DISCORD_GUILD_ID=replace-with-guild-id
 AGENT_HOST_TOKEN=replace-with-agent-host-token
+AGENT_HOST_ADMIN_TOKEN=replace-with-agent-host-admin-token
 ```
 
 Never commit `config.json`, `.env`, `secrets.env`, task state, or logs.
+
+Keep this file focused on service-startup secrets for Agent Host and the Discord adapter. Codex/OpenAI auth and optional GitHub tokens should remain outside repo config files and should usually stay shell-scoped unless you have an explicit local operator reason to share them through one EnvironmentFile.
 
 ## Development Checks
 
@@ -220,6 +223,7 @@ Security and trust-boundary notes are documented in:
 
 ```text
 docs/security/threat-model.md
+docs/security/secrets-contract.md
 ```
 
 Agent Host also provides safe operational read APIs:
