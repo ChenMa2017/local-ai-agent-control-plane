@@ -3,6 +3,7 @@
 const pythonValidateRuntimeTemplates = {
   validateRuntime: () => `#!/usr/bin/env python3
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,8 +27,20 @@ VALID_RUNNERS = {"cpu", "gpu", "report_only"}
 errors = []
 warnings = []
 
+def current_time_utc():
+    raw = str(os.environ.get("WATCHDOG_FIXED_NOW") or "").strip()
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
 def now_utc():
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return current_time_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 def load_json(path, required=False):
     p = ROOT / path

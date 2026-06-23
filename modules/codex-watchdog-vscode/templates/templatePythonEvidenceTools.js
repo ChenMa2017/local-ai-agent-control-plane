@@ -5,6 +5,7 @@ const pythonEvidenceToolTemplates = {
 import argparse
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +25,19 @@ def parse_timestamp(value):
         raise ValueError("timestamp must be a string or null")
     normalized = value.replace("Z", "+00:00")
     return datetime.fromisoformat(normalized)
+
+
+def current_time_utc():
+    raw = str(os.environ.get("WATCHDOG_FIXED_NOW") or "").strip()
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
 
 
 def load_json(path, errors, required=True, default=None):
@@ -129,7 +143,7 @@ def add_warning_if_stale(conclusion, warnings):
         return
     if not isinstance(stale_after, int) or stale_after < 0:
         return
-    now = datetime.now(timezone.utc)
+    now = current_time_utc()
     if reviewed_at.tzinfo is None:
         reviewed_at = reviewed_at.replace(tzinfo=timezone.utc)
     if now >= reviewed_at + timedelta(days=stale_after):
@@ -632,6 +646,7 @@ if __name__ == "__main__":
   watchdogDocSearch: () => `#!/usr/bin/env python3
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -700,6 +715,19 @@ def parse_timestamp(value):
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
+def current_time_utc():
+    raw = str(os.environ.get("WATCHDOG_FIXED_NOW") or "").strip()
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
+
 def conclusion_is_stale(item):
     reviewed = item.get("last_reviewed_at")
     stale_after_days = item.get("stale_after_days")
@@ -711,7 +739,7 @@ def conclusion_is_stale(item):
         return False
     if reviewed_at.tzinfo is None:
         reviewed_at = reviewed_at.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) >= reviewed_at + timedelta(days=int(stale_after_days))
+    return current_time_utc() >= reviewed_at + timedelta(days=int(stale_after_days))
 
 
 def query_requests_formal_conclusion(lowered_query):

@@ -83,6 +83,18 @@ def int_env(name, fallback=0):
         return fallback
     return value if value >= 0 else fallback
 
+def current_time_utc():
+    raw = str(os.environ.get("WATCHDOG_FIXED_NOW") or "").strip()
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
 def normalized_string_list(value):
     if not isinstance(value, list):
         return []

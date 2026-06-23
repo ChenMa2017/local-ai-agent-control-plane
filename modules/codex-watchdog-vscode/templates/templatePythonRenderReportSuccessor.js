@@ -623,7 +623,7 @@ def write_queue_request_draft(draft, fallback_task_id):
 
 print(data["report_markdown"])
 
-updated = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+updated = current_time_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 successor_task_draft = normalize_successor_task(data.get("successor_task_draft"))
 task_profile_draft = clean_object(data.get("task_profile_draft"))

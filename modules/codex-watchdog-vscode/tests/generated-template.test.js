@@ -10,6 +10,9 @@ const vm = require("vm");
 
 const moduleRoot = path.resolve(__dirname, "..");
 const extensionPath = path.join(moduleRoot, "extension.js");
+const FIXED_WATCHDOG_NOW = "2026-06-15T12:00:00Z";
+const FIXED_WATCHDOG_ENV = { WATCHDOG_FIXED_NOW: FIXED_WATCHDOG_NOW };
+const FIXED_WATCHDOG_NOW_MS = Date.parse(FIXED_WATCHDOG_NOW);
 
 function loadExtensionTestApi(projectRoot) {
   const fakeVscode = {
@@ -123,7 +126,7 @@ function sha256File(filePath) {
 function runRoute(projectRoot, env = {}) {
   const output = run("python3", [path.join(projectRoot, "agent", "bin", "route_skill.py")], {
     cwd: projectRoot,
-    env: { ...process.env, ...env }
+    env: { ...process.env, ...FIXED_WATCHDOG_ENV, ...env }
   });
   return JSON.parse(output);
 }
@@ -133,7 +136,7 @@ function runRender(projectRoot, payload, env = {}) {
   writeJson(projectRoot, "agent/status/render-input.json", payload);
   run("python3", [path.join(projectRoot, "agent", "bin", "render_report.py"), inputPath], {
     cwd: projectRoot,
-    env: { ...process.env, ...env }
+    env: { ...process.env, ...FIXED_WATCHDOG_ENV, ...env }
   });
 }
 
@@ -352,8 +355,8 @@ async function main() {
     }
   ]);
 
-  // Keep positive current-conclusion fixtures far from real-time staleness cutoffs
-  // so the generated-template suite remains deterministic as calendar time moves on.
+  // Current-conclusion staleness stays deterministic because route/render tests
+  // inject WATCHDOG_FIXED_NOW instead of stretching business thresholds.
   writeJson(projectRoot, "project_index/current_conclusions.json", {
     schema_version: "current_conclusions.v0.1",
     updated_at: "2026-06-16T00:00:00Z",
@@ -367,7 +370,7 @@ async function main() {
         supporting_docs: ["doc_current_best"],
         supporting_experiments: ["exp_model_a"],
         last_reviewed_at: "2026-06-16T00:00:00Z",
-        stale_after_days: 3650,
+        stale_after_days: 30,
         stale_severity: "warning",
         owner: "watchdog",
         invalidated_by: null,
@@ -724,12 +727,12 @@ async function main() {
     status: "done"
   });
   const oldDonePath = path.join(projectRoot, "agent", "queue", "done", "old-result.json");
-  const oldDate = new Date(Date.now() - 8 * 60 * 60 * 1000);
+  const oldDate = new Date(FIXED_WATCHDOG_NOW_MS - 8 * 60 * 60 * 1000);
   fs.utimesSync(oldDonePath, oldDate, oldDate);
   let route = runRoute(projectRoot, { WATCHDOG_QUEUE_RESULT_FRESH_MINUTES: "240" });
   assert.notStrictEqual(route.primary_skill, "watchdog-gate-evaluator", "stale done result must not retrigger gate evaluator");
 
-  const freshDate = new Date();
+  const freshDate = new Date(FIXED_WATCHDOG_NOW_MS);
   fs.utimesSync(oldDonePath, freshDate, freshDate);
   route = runRoute(projectRoot, { WATCHDOG_QUEUE_RESULT_FRESH_MINUTES: "240" });
   assert.strictEqual(route.primary_skill, "watchdog-gate-evaluator", "fresh done result should trigger gate evaluator");
@@ -1723,7 +1726,7 @@ async function main() {
       supporting_docs: ["doc_current_best"],
       supporting_experiments: ["exp_model_a"],
       last_reviewed_at: "2026-06-08T12:00:30Z",
-      stale_after_days: 3650,
+      stale_after_days: 7,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,
@@ -1840,7 +1843,7 @@ async function main() {
       supporting_docs: ["doc_stage06_route_status"],
       supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:00:45Z",
-      stale_after_days: 3650,
+      stale_after_days: 14,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,
@@ -1957,7 +1960,7 @@ async function main() {
       supporting_docs: ["doc_stage06_route_status"],
       supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:00:00Z",
-      stale_after_days: 3650,
+      stale_after_days: 14,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,
@@ -2255,7 +2258,7 @@ async function main() {
       supporting_docs: ["doc_stage06_route_status"],
       supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:30:00Z",
-      stale_after_days: 3650,
+      stale_after_days: 7,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,
@@ -2321,7 +2324,7 @@ async function main() {
       supporting_docs: ["doc_stage06_route_status"],
       supporting_experiments: ["exp_stage06_queue_contract"],
       last_reviewed_at: "2026-06-08T12:31:00Z",
-      stale_after_days: 3650,
+      stale_after_days: 7,
       stale_severity: "warning",
       owner: "watchdog",
       invalidated_by: null,

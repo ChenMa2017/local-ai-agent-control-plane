@@ -17,8 +17,20 @@ def int_env(name, default):
 
 RESULT_FRESH_MINUTES = int_env("WATCHDOG_QUEUE_RESULT_FRESH_MINUTES", 240)
 
+def current_time_utc():
+    raw = str(os.environ.get("WATCHDOG_FIXED_NOW") or "").strip()
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
 def now_utc():
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return current_time_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 def load_json(path, default=None):
     try:
@@ -104,7 +116,7 @@ def load_secondary_skills_config(root=ROOT):
 def has_files(*dirs, freshness_minutes=None):
     cutoff = None
     if freshness_minutes is not None:
-        cutoff = datetime.now(timezone.utc).timestamp() - (max(0, int(freshness_minutes)) * 60)
+        cutoff = current_time_utc().timestamp() - (max(0, int(freshness_minutes)) * 60)
     for dirname in dirs:
         d = ROOT / dirname
         if d.is_dir():
