@@ -6,8 +6,9 @@
   "scripts": {
     "check": "bash scripts/check_all.sh",
     "control-plane:validate": "python3 scripts/control_plane.py config validate",
+    "control-plane:server-smoke": "python3 scripts/server_smoke_baseline.py",
     "control-plane:migrate-check": "python3 scripts/control_plane.py migrate check --dry-run",
-    "test:control-plane": "python3 -m unittest tests/test_control_plane.py",
+    "test:control-plane": "python3 -m unittest tests/test_control_plane.py tests/test_server_smoke_baseline.py",
     "test:codex-bridge": "cd modules/codex-bridge && npm test",
     "test:agent-host": "cd modules/agent-host && python3 -m unittest tests/test_bridge.py",
     "test:discord-adapter": "cd modules/discord-adapter && .venv/bin/python -m unittest discover -s tests",

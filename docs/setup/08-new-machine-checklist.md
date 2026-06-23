@@ -114,3 +114,21 @@ scripts/start_services.sh
 /agent_workspaces
 /agent_run workspace:main_codex prompt:请只回复 OK，并说明当前 workspace 名称
 ```
+
+## 11. Real server smoke baseline
+
+After the services are up, run one real operator baseline from the monorepo root:
+
+```bash
+cd "$CONTROL_PLANE_ROOT"
+python3 scripts/server_smoke_baseline.py
+```
+
+Notes:
+
+```text
+default behavior prefers a visible readonly workspace
+it checks health / auth / prepare / run / tasks / status / result-page / intake
+use --workspace <alias> if you want to force a specific workspace
+use --dry-run if you only want the control path receipt
+```

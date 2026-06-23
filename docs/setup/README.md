@@ -17,6 +17,7 @@ Read in this order:
 09-github-ssh.md
 10-operational-safety.md
 11-watchdog-secondary-skills-and-prepare-gates.md
+12-server-smoke-baseline.md
 ```
 
 The normal test workspaces are intentionally small:

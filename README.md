@@ -219,6 +219,29 @@ python3 scripts/control_plane.py migrate rollback --dry-run
 
 It validates config shape, prints redacted reports, detects scattered old installs, and prints a rollback plan. It does not stop services, restart services, delete files, or modify systemd units.
 
+## Operator Smoke Baseline
+
+For a real local operator baseline after systemd services are up, run:
+
+```bash
+python3 scripts/server_smoke_baseline.py
+```
+
+By default it:
+
+- validates the real local Agent Host / Discord config with `scripts/control_plane.py config validate`;
+- checks `agent-host-web.service` and `discord-agent-adapter.service` are active;
+- authenticates against Agent Host with the configured bearer token;
+- walks `health -> whoami -> workspaces -> prepare -> run -> tasks -> status -> result-page -> intake`;
+- prefers a visible `readonly` workspace when no explicit workspace is requested.
+
+If you want an exact workspace or a dry-run receipt instead of a real task, use:
+
+```bash
+python3 scripts/server_smoke_baseline.py --workspace main_codex
+python3 scripts/server_smoke_baseline.py --dry-run
+```
+
 Security and trust-boundary notes are documented in:
 
 ```text
