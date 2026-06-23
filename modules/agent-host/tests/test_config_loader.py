@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import tempfile
 import unittest
@@ -62,6 +63,28 @@ class ConfigLoaderTests(unittest.TestCase):
 
         self.assertEqual(tokens["token-1"].role, "admin")
         self.assertEqual(tokens["token-2"].role, "user")
+
+    def test_load_auth_tokens_reads_token_env_map(self):
+        old_env = dict(os.environ)
+        try:
+            os.environ["AGENT_HOST_ADMIN_TOKEN"] = "env-admin-token"
+            tokens = config_loader.load_auth_tokens(
+                {
+                    "auth": {
+                        "token_env_map": {
+                            "AGENT_HOST_ADMIN_TOKEN": {"user": "chenma", "role": "admin"}
+                        }
+                    }
+                },
+                auth_principal_factory=FakePrincipal,
+                error_factory=self.error_factory,
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        self.assertEqual(tokens["env-admin-token"].user, "chenma")
+        self.assertEqual(tokens["env-admin-token"].role, "admin")
 
     def test_resolve_project_mapping_rejects_unsupported_mode(self):
         with self.assertRaises(FakeBridgeError) as ctx:
@@ -128,6 +151,49 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.host, "127.0.0.1")
         self.assertEqual(config.projects["demo"].label, "Demo")
         self.assertEqual(config.auth_tokens["bearer-1"].user, "chenma")
+
+    def test_load_config_supports_env_backed_auth_tokens(self):
+        old_env = dict(os.environ)
+        try:
+            os.environ["AGENT_HOST_ADMIN_TOKEN"] = "env-admin-token"
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                config_path = root / "config.json"
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            "projects": {
+                                "demo": {
+                                    "path": str(root),
+                                    "default_mode": "readonly",
+                                    "allowed_modes": ["readonly"],
+                                }
+                            },
+                            "auth": {
+                                "token_env_map": {
+                                    "AGENT_HOST_ADMIN_TOKEN": {"user": "chenma", "role": "admin"}
+                                }
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+
+                config = config_loader.load_config(
+                    config_path,
+                    default_codex_bridge_root=root / "codex-bridge-default",
+                    project_name_re=re.compile(r"^[A-Za-z0-9_.-]{1,64}$"),
+                    supported_modes={"readonly", "workspace-write"},
+                    project_factory=FakeProject,
+                    bridge_config_factory=FakeConfig,
+                    auth_principal_factory=FakePrincipal,
+                    error_factory=self.error_factory,
+                )
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        self.assertEqual(config.auth_tokens["env-admin-token"].role, "admin")
 
 
 if __name__ == "__main__":

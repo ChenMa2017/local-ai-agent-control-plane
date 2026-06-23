@@ -22,6 +22,7 @@ DEFAULT_SECRETS_ENV = Path.home() / ".config" / "agent-host" / "secrets.env"
 DEFAULT_OLD_ROOT = Path.home() / "Documents" / "My_App_Dev"
 
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+SAFE_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 TOKEN_LIKE_RE = re.compile(
     r"(?i)(discord[_-]?bot[_-]?token|agent[_-]?host[_-]?token|authorization:\s*bearer\s+|sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,})"
 )
@@ -80,6 +81,8 @@ def redact_config(obj: Any) -> Any:
             key_lower = str(key).lower()
             if key_lower.endswith("_env"):
                 redacted[key] = redact_config(value)
+            elif key_lower.endswith("_env_map") and isinstance(value, dict):
+                redacted[key] = {str(env_name): redact_config(principal) for env_name, principal in value.items()}
             elif any(word in key_lower for word in ("token", "secret", "password", "private_key")):
                 if isinstance(value, dict):
                     redacted[key] = {shape_only(k): "[REDACTED]" for k in value.keys()}
@@ -108,6 +111,34 @@ def path_has_placeholder(path: str) -> bool:
     return "/home/you/" in path or "replace-with-" in path
 
 
+def collect_required_secret_keys(agent_host: dict[str, Any] | None, discord: dict[str, Any] | None) -> list[str]:
+    keys: list[str] = []
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text not in keys:
+            keys.append(text)
+
+    if isinstance(agent_host, dict):
+        auth = agent_host.get("auth")
+        if isinstance(auth, dict):
+            env_map = auth.get("token_env_map")
+            if isinstance(env_map, dict):
+                for env_name in env_map.keys():
+                    add(env_name)
+
+    if isinstance(discord, dict):
+        agent_host_section = discord.get("agent_host")
+        if isinstance(agent_host_section, dict):
+            add(agent_host_section.get("token_env"))
+        discord_section = discord.get("discord")
+        if isinstance(discord_section, dict):
+            add(discord_section.get("bot_token_env"))
+            add(discord_section.get("guild_id_env"))
+
+    return keys
+
+
 def validate_agent_host(config: dict[str, Any], findings: list[Finding], strict: bool) -> None:
     host = config.get("host")
     if host not in ("127.0.0.1", "localhost"):
@@ -122,11 +153,64 @@ def validate_agent_host(config: dict[str, Any], findings: list[Finding], strict:
     if not isinstance(allowed_users, list) or not allowed_users:
         findings.append(finding("error", "agent_host_allowed_users_empty", "allowed_users must be a nonempty list."))
 
-    tokens = config.get("auth", {}).get("tokens")
-    if not isinstance(tokens, dict) or not tokens:
-        findings.append(finding("error", "agent_host_auth_tokens_empty", "auth.tokens must be a nonempty object."))
-    elif any(str(token).startswith("replace-with-") for token in tokens):
-        findings.append(finding("warning", "agent_host_placeholder_token", "auth.tokens contains placeholder token values."))
+    auth = config.get("auth")
+    if not isinstance(auth, dict):
+        findings.append(finding("error", "agent_host_auth_invalid", "auth must be an object."))
+    else:
+        tokens = auth.get("tokens")
+        token_env_map = auth.get("token_env_map")
+        has_inline_tokens = isinstance(tokens, dict) and bool(tokens)
+        has_env_tokens = isinstance(token_env_map, dict) and bool(token_env_map)
+        if not has_inline_tokens and not has_env_tokens:
+            findings.append(
+                finding(
+                    "error",
+                    "agent_host_auth_token_source_empty",
+                    "auth.tokens or auth.token_env_map must be a nonempty object.",
+                )
+            )
+        if has_inline_tokens and any(str(token).startswith("replace-with-") for token in tokens):
+            findings.append(finding("warning", "agent_host_placeholder_token", "auth.tokens contains placeholder token values."))
+        if has_inline_tokens:
+            findings.append(
+                finding(
+                    "warning",
+                    "agent_host_inline_auth_tokens_present",
+                    "Inline auth.tokens are supported for compatibility, but auth.token_env_map plus secrets.env is preferred.",
+                )
+            )
+        if token_env_map is not None and not isinstance(token_env_map, dict):
+            findings.append(finding("error", "agent_host_auth_token_env_map_invalid", "auth.token_env_map must be an object."))
+        elif isinstance(token_env_map, dict):
+            for env_name, principal in token_env_map.items():
+                if not SAFE_ENV_NAME_RE.match(str(env_name)):
+                    findings.append(
+                        finding(
+                            "error",
+                            "agent_host_auth_token_env_name_invalid",
+                            "auth.token_env_map keys must be safe environment variable names.",
+                            env_name=env_name,
+                        )
+                    )
+                if not isinstance(principal, dict):
+                    findings.append(
+                        finding(
+                            "error",
+                            "agent_host_auth_token_env_principal_invalid",
+                            "auth.token_env_map values must be objects.",
+                            env_name=env_name,
+                        )
+                    )
+                    continue
+                if not str(principal.get("user", "")).strip():
+                    findings.append(
+                        finding(
+                            "error",
+                            "agent_host_auth_token_env_user_missing",
+                            "auth.token_env_map entries must define user.",
+                            env_name=env_name,
+                        )
+                    )
 
     bridge_root = config.get("codex_bridge_root")
     if not isinstance(bridge_root, str) or not bridge_root:
@@ -217,7 +301,7 @@ def validate_host_ops(config: dict[str, Any], findings: list[Finding]) -> None:
         findings.append(finding("warning", "host_ops_path_alias_placeholder", "path_aliases contains placeholder paths."))
 
 
-def validate_secrets(path: Path, findings: list[Finding]) -> None:
+def validate_secrets(path: Path, findings: list[Finding], required_keys: list[str] | None = None) -> None:
     if not path.exists():
         findings.append(finding("warning", "secrets_env_missing", "secrets.env was not found.", path=str(path)))
         return
@@ -226,7 +310,8 @@ def validate_secrets(path: Path, findings: list[Finding]) -> None:
         findings.append(finding("error", "secrets_env_permissions_too_open", "secrets.env should be chmod 600.", path=str(path), mode=oct(mode)))
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     keys = [line.split("=", 1)[0] for line in lines if line and not line.lstrip().startswith("#") and "=" in line]
-    for required in ("DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "AGENT_HOST_TOKEN"):
+    expected = required_keys or ["DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "AGENT_HOST_TOKEN"]
+    for required in expected:
         if required not in keys:
             findings.append(finding("warning", "secrets_env_key_missing", "Expected key missing from secrets.env.", key=required))
 
@@ -242,7 +327,11 @@ def report_for_config(args: argparse.Namespace) -> dict[str, Any]:
         validate_discord(discord, findings)
     if host_ops is not None:
         validate_host_ops(host_ops, findings)
-    validate_secrets(Path(args.secrets_env), findings)
+    validate_secrets(
+        Path(args.secrets_env),
+        findings,
+        required_keys=collect_required_secret_keys(agent_host, discord),
+    )
     return build_report("config_validation", findings, configs={"agent_host": agent_host, "discord_adapter": discord, "host_ops": host_ops})
 
 

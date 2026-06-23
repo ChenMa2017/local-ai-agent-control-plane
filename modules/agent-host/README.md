@@ -101,17 +101,17 @@ http://127.0.0.1:8787/
 cp config.example.json config.json
 ```
 
-把 `mattermost_tokens` 改成 Mattermost slash command 的 token。把 `auth.tokens` 配成 Codex 网页/API 的 Bearer Token 映射：
+把 `mattermost_tokens` 改成 Mattermost slash command 的 token。把 `auth.token_env_map` 配成从 `~/.config/agent-host/secrets.env` 读取的 Bearer Token 映射：
 
 ```json
 {
   "auth": {
-    "tokens": {
-      "replace-with-codex-web-token": {
+    "token_env_map": {
+      "AGENT_HOST_ADMIN_TOKEN": {
         "user": "chenma",
         "role": "admin"
       },
-      "replace-with-discord-adapter-token": {
+      "AGENT_HOST_TOKEN": {
         "user": "chenma",
         "role": "user"
       }
@@ -579,6 +579,7 @@ Use this shape:
 DISCORD_BOT_TOKEN=...
 DISCORD_GUILD_ID=...
 AGENT_HOST_TOKEN=...
+AGENT_HOST_ADMIN_TOKEN=...
 ```
 
 Do not write `export DISCORD_BOT_TOKEN=...` in this file. `systemd` `EnvironmentFile` requires plain `KEY=value` lines.

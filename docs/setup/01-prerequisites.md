@@ -50,6 +50,7 @@ Example:
 DISCORD_BOT_TOKEN=replace-with-token
 DISCORD_GUILD_ID=replace-with-guild-id
 AGENT_HOST_TOKEN=replace-with-agent-host-token
+AGENT_HOST_ADMIN_TOKEN=replace-with-agent-host-admin-token
 ```
 
 Do not use `export` in `secrets.env`; systemd `EnvironmentFile` expects `KEY=value`.

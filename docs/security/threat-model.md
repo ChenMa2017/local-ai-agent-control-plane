@@ -49,6 +49,7 @@ repo source code
 configured allowlisted workspaces
 user-owned ~/.config/agent-host/secrets.env
 systemd user services installed by the operator
+configured auth.token_env_map principals in agent-host config
 ```
 
 Treated as untrusted or partially trusted:
@@ -88,7 +89,84 @@ workspace write lock for conflicting write tasks
 read-only Host Ops design
 secrets stored outside Git in ~/.config/agent-host/secrets.env
 systemd EnvironmentFile instead of inlining tokens in unit files
+discord adapter token lookup by *_env indirection
+agent-host auth.token_env_map support for env-backed bearer tokens
 ```
+
+## Runtime and Interface Boundaries
+
+Current boundary expectations:
+
+```text
+Discord and Web UI are adapters only; they call Agent Host and do not execute Codex directly
+Agent Host is the policy and audit gateway for task creation, status, results, and workspace selection
+codex-bridge owns task process lifecycle, finalization, reconciliation, and workspace-write audit artifacts
+watchdog-generated current conclusions are not trusted by default; runner/evaluator boundaries must stay explicit
+```
+
+Task lifecycle hardening now specifically relies on:
+
+```text
+finalization ownership
+abandoned-finalization recovery
+workspace-write lock and write-summary artifacts
+safe/public result shaping for adapter-facing responses
+```
+
+## Workspace Isolation Modes
+
+The system currently supports two practical workspace execution shapes:
+
+```text
+direct workspace execution:
+  Codex runs against the configured project root directly
+
+git worktree isolated execution:
+  Codex writes into an isolated worktree for bounded write tasks
+```
+
+Security posture difference:
+
+```text
+direct workspace execution is simpler but relies more heavily on allowlists, protected-path policy, and audit review
+git worktree isolation reduces accidental mutation scope and is preferred for higher-risk write flows
+```
+
+## Adapter Privacy Contract
+
+Adapter-facing responses should follow these privacy rules:
+
+```text
+Discord and Web UI should expose workspace aliases, modes, and safe summaries
+they should not expose absolute local paths
+they should not expose raw tokens, bearer headers, or Codex auth material
+raw=true style responses must remain policy-bounded and not be reachable through Discord
+```
+
+This contract is currently enforced through safe output shaping, path redaction, and adapter-side validation such as the Discord `/codex/workspaces` path-leak checks.
+
+## CI and Server Smoke Boundary
+
+Repository CI is intended to prove:
+
+```text
+syntax correctness
+unit and component behavior
+task lifecycle regressions
+adapter formatting and privacy regressions
+```
+
+Repository CI is not intended to prove:
+
+```text
+real Codex login state
+real Discord gateway behavior
+systemd installation health on one operator machine
+real workspace permissions on the deployment host
+GPU-backed or long-duration experiments
+```
+
+Those checks belong to a server-side smoke baseline run in a trusted operator environment.
 
 ## What This System Is Trying To Prevent
 
@@ -132,8 +210,8 @@ keep public docs free of private absolute paths and real tokens
 The next engineering steps should focus on:
 
 ```text
-git worktree isolated write-task execution
-stronger protected-path prevention before task completion, not only post-run reporting
-more explicit secret-source documentation and validation across modules
-continued decomposition and test coverage for large critical files such as codex-bridge.js
+fixed-clock watchdog test support instead of date-drift-prone fixtures
+single-operator server smoke baseline covering systemd -> agent-host -> adapter -> codex task -> audit -> cleanup
+continued secret-source validation around EnvironmentFile and auth.token_env_map usage
+additional operator-facing documentation for accepted residual risks and recovery steps
 ```

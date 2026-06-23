@@ -8,12 +8,12 @@
     "chenma"
   ],
   "auth": {
-    "tokens": {
-      "replace-with-codex-web-token": {
+    "token_env_map": {
+      "AGENT_HOST_ADMIN_TOKEN": {
         "user": "chenma",
         "role": "admin"
       },
-      "replace-with-discord-adapter-token": {
+      "AGENT_HOST_TOKEN": {
         "user": "chenma",
         "role": "user"
       }

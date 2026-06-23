@@ -1,11 +1,30 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from pathlib import Path
 from typing import Any, Callable
 
 JsonObject = dict[str, Any]
 ErrorFactory = Callable[[str, int], Exception]
+ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def parse_auth_principal(
+    raw_principal: Any,
+    *,
+    auth_principal_factory: Callable[..., Any],
+    error_factory: ErrorFactory,
+    label: str,
+) -> Any:
+    if not isinstance(raw_principal, dict):
+        raise error_factory(f"{label} entries must be objects", 500)
+    user = str(raw_principal.get("user", "")).strip()
+    role = str(raw_principal.get("role", "user")).strip() or "user"
+    if not user:
+        raise error_factory(f"{label} entry missing user", 500)
+    return auth_principal_factory(user=user, role=role)
 
 
 def load_auth_tokens(
@@ -14,24 +33,51 @@ def load_auth_tokens(
     auth_principal_factory: Callable[..., Any],
     error_factory: ErrorFactory,
 ) -> dict[str, Any]:
-    raw_tokens = data.get("auth", {}).get("tokens", {})
+    auth = data.get("auth", {})
+    if auth is None:
+        auth = {}
+    if not isinstance(auth, dict):
+        raise error_factory("auth must be an object", 500)
+
+    raw_tokens = auth.get("tokens", {})
     if raw_tokens is None:
         raw_tokens = {}
     if not isinstance(raw_tokens, dict):
         raise error_factory("auth.tokens must be an object", 500)
 
+    raw_token_env_map = auth.get("token_env_map", {})
+    if raw_token_env_map is None:
+        raw_token_env_map = {}
+    if not isinstance(raw_token_env_map, dict):
+        raise error_factory("auth.token_env_map must be an object", 500)
+
     tokens: dict[str, Any] = {}
     for token, raw_principal in raw_tokens.items():
-        token = str(token)
+        token = str(token).strip()
         if not token:
             raise error_factory("auth token may not be empty", 500)
-        if not isinstance(raw_principal, dict):
-            raise error_factory("auth token entries must be objects", 500)
-        user = str(raw_principal.get("user", "")).strip()
-        role = str(raw_principal.get("role", "user")).strip() or "user"
-        if not user:
-            raise error_factory("auth token entry missing user", 500)
-        tokens[token] = auth_principal_factory(user=user, role=role)
+        tokens[token] = parse_auth_principal(
+            raw_principal,
+            auth_principal_factory=auth_principal_factory,
+            error_factory=error_factory,
+            label="auth token",
+        )
+
+    for env_name, raw_principal in raw_token_env_map.items():
+        env_name = str(env_name).strip()
+        if not ENV_NAME_RE.match(env_name):
+            raise error_factory(f"auth.token_env_map has invalid environment variable name: {env_name!r}", 500)
+        token = os.environ.get(env_name, "").strip()
+        if not token:
+            raise error_factory(f"auth.token_env_map environment variable {env_name} is required", 500)
+        if token in tokens:
+            raise error_factory(f"duplicate auth token resolved from environment variable {env_name}", 500)
+        tokens[token] = parse_auth_principal(
+            raw_principal,
+            auth_principal_factory=auth_principal_factory,
+            error_factory=error_factory,
+            label=f"auth.token_env_map[{env_name}]",
+        )
     return tokens
 
 

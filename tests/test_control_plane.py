@@ -29,8 +29,9 @@ class ControlPlaneTests(unittest.TestCase):
             "port": 8787,
             "allowed_users": ["chenma"],
             "auth": {
-                "tokens": {
-                    "demo": {"user": "chenma", "role": "admin"},
+                "token_env_map": {
+                    "AGENT_HOST_ADMIN_TOKEN": {"user": "chenma", "role": "admin"},
+                    "AGENT_HOST_TOKEN": {"user": "chenma", "role": "user"},
                 }
             },
             "codex_bridge_root": str(project_path),
@@ -93,6 +94,7 @@ class ControlPlaneTests(unittest.TestCase):
                         "DISCORD_BOT_TOKEN=demo",
                         "DISCORD_GUILD_ID=123456789012345678",
                         "AGENT_HOST_TOKEN=demo",
+                        "AGENT_HOST_ADMIN_TOKEN=demo-admin",
                     ]
                 ),
                 encoding="utf-8",
@@ -105,7 +107,7 @@ class ControlPlaneTests(unittest.TestCase):
             self.assertTrue(report["ok"])
             self.assertNotIn("DISCORD_BOT_TOKEN=demo", text)
             self.assertNotIn("AGENT_HOST_TOKEN=demo", text)
-            self.assertIn("[REDACTED", text)
+            self.assertIn("AGENT_HOST_ADMIN_TOKEN", text)
 
     def test_config_validation_rejects_invalid_default_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -117,7 +119,10 @@ class ControlPlaneTests(unittest.TestCase):
             discord = self.write_json(root, "discord.json", self.valid_discord())
             host_ops = self.write_json(root, "host_ops.json", self.valid_host_ops(root))
             secrets = root / "secrets.env"
-            secrets.write_text("DISCORD_BOT_TOKEN=x\nDISCORD_GUILD_ID=y\nAGENT_HOST_TOKEN=z\n", encoding="utf-8")
+            secrets.write_text(
+                "DISCORD_BOT_TOKEN=x\nDISCORD_GUILD_ID=y\nAGENT_HOST_TOKEN=z\nAGENT_HOST_ADMIN_TOKEN=q\n",
+                encoding="utf-8",
+            )
             secrets.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
             report = control_plane.report_for_config(self.args(agent_host, discord, host_ops, secrets, strict=True))
@@ -137,6 +142,28 @@ class ControlPlaneTests(unittest.TestCase):
             self.assertTrue(report["ok"])
             self.assertTrue(report["dry_run"])
             self.assertIn("old_installs", report)
+
+    def test_config_validation_accepts_legacy_inline_auth_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.valid_agent_host(root)
+            config["auth"] = {
+                "tokens": {
+                    "legacy-token": {"user": "chenma", "role": "admin"},
+                }
+            }
+            agent_host = self.write_json(root, "agent.json", config)
+            discord = self.write_json(root, "discord.json", self.valid_discord())
+            host_ops = self.write_json(root, "host_ops.json", self.valid_host_ops(root))
+            secrets = root / "secrets.env"
+            secrets.write_text("DISCORD_BOT_TOKEN=x\nDISCORD_GUILD_ID=y\nAGENT_HOST_TOKEN=z\n", encoding="utf-8")
+            secrets.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+            report = control_plane.report_for_config(self.args(agent_host, discord, host_ops, secrets, strict=True))
+            codes = {item["code"] for item in report["findings"]}
+
+            self.assertTrue(report["ok"])
+            self.assertIn("agent_host_inline_auth_tokens_present", codes)
 
     def test_rollback_is_plan_only(self):
         with tempfile.TemporaryDirectory() as tmp:

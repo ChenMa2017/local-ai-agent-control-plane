@@ -46,21 +46,28 @@ Set `codex_bridge_root`:
 "codex_bridge_root": "$CONTROL_PLANE_ROOT/modules/codex-bridge"
 ```
 
-Add auth tokens in `config.json`:
+Map auth tokens to environment variables in `config.json`:
 
 ```json
 "auth": {
-  "tokens": {
-    "replace-with-codex-web-token": {
+  "token_env_map": {
+    "AGENT_HOST_ADMIN_TOKEN": {
       "user": "chenma",
       "role": "admin"
     },
-    "replace-with-discord-adapter-token": {
+    "AGENT_HOST_TOKEN": {
       "user": "chenma",
       "role": "user"
     }
   }
 }
+```
+
+Load those values from `~/.config/agent-host/secrets.env` before manual checks:
+
+```bash
+. ~/.config/agent-host/secrets.env
+python3 bridge.py --config config.json --check-config
 ```
 
 Check config:
@@ -85,15 +92,15 @@ Useful API checks:
 
 ```bash
 curl http://127.0.0.1:8787/health
-curl -H "Authorization: Bearer $AGENT_HOST_TOKEN" http://127.0.0.1:8787/codex/workspaces
-curl -H "Authorization: Bearer $AGENT_HOST_TOKEN" http://127.0.0.1:8787/codex/capabilities
+curl -H "Authorization: Bearer $AGENT_HOST_ADMIN_TOKEN" http://127.0.0.1:8787/codex/workspaces
+curl -H "Authorization: Bearer $AGENT_HOST_ADMIN_TOKEN" http://127.0.0.1:8787/codex/capabilities
 ```
 
 Prepare intake is now a first-class API:
 
 ```bash
 curl -X POST http://127.0.0.1:8787/codex/prepare \
-  -H "Authorization: Bearer $AGENT_HOST_TOKEN" \
+  -H "Authorization: Bearer $AGENT_HOST_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"workspace":"main_codex","prompt":"请先帮我定义一个 bounded CPU baseline experiment"}'
 ```
