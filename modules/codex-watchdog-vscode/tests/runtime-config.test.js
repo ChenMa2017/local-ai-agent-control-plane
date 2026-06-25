@@ -2,17 +2,42 @@
 
 const assert = require("assert");
 const fs = require("fs");
-const fsp = require("fs/promises");
+const fsp = fs.promises;
 const os = require("os");
 const path = require("path");
 const { createRuntimeConfigHelpers } = require("../runtime/runtimeConfig");
+
+async function rmCompat(target, options = {}) {
+  if (typeof fsp.rm === "function") {
+    await fsp.rm(target, options);
+    return;
+  }
+  const recursive = Boolean(options.recursive);
+  const force = Boolean(options.force);
+  try {
+    if (recursive) {
+      await fsp.rmdir(target, { recursive: true });
+    } else {
+      await fsp.unlink(target);
+    }
+  } catch (error) {
+    if (force && error && error.code === "ENOENT") {
+      return;
+    }
+    if (force && !recursive && error && error.code === "EISDIR") {
+      await fsp.rmdir(target, { recursive: true });
+      return;
+    }
+    throw error;
+  }
+}
 
 async function withTempDir(run) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-watchdog-runtime-config-"));
   try {
     await run(root);
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await rmCompat(root, { recursive: true, force: true });
   }
 }
 

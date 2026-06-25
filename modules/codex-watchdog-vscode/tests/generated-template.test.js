@@ -14,6 +14,31 @@ const FIXED_WATCHDOG_NOW = "2026-06-15T12:00:00Z";
 const FIXED_WATCHDOG_ENV = { WATCHDOG_FIXED_NOW: FIXED_WATCHDOG_NOW };
 const FIXED_WATCHDOG_NOW_MS = Date.parse(FIXED_WATCHDOG_NOW);
 
+function rmSyncCompat(target, options = {}) {
+  if (typeof fs.rmSync === "function") {
+    fs.rmSync(target, options);
+    return;
+  }
+  const recursive = Boolean(options.recursive);
+  const force = Boolean(options.force);
+  try {
+    if (recursive) {
+      fs.rmdirSync(target, { recursive: true });
+    } else {
+      fs.unlinkSync(target);
+    }
+  } catch (error) {
+    if (force && error && error.code === "ENOENT") {
+      return;
+    }
+    if (force && !recursive && error && error.code === "EISDIR") {
+      fs.rmdirSync(target, { recursive: true });
+      return;
+    }
+    throw error;
+  }
+}
+
 function loadExtensionTestApi(projectRoot) {
   const fakeVscode = {
     workspace: {
@@ -562,8 +587,8 @@ async function main() {
     assert.ok(fs.existsSync(path.join(watcherHome, "auth.json")));
     assert.ok(fs.existsSync(path.join(watcherHome, "models_cache.json")));
   } finally {
-    fs.rmSync(watcherHome, { recursive: true, force: true });
-    fs.rmSync(mainCodexHome, { recursive: true, force: true });
+    rmSyncCompat(watcherHome, { recursive: true, force: true });
+    rmSyncCompat(mainCodexHome, { recursive: true, force: true });
   }
 
   const realBoundRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-watchdog-bind-real-"));
@@ -589,14 +614,14 @@ async function main() {
     assert.match(migratedConfig, /^sandbox_mode = "read-only"$/m);
   } finally {
     try {
-      fs.rmSync(linkedRoot, { recursive: true, force: true });
+      rmSyncCompat(linkedRoot, { recursive: true, force: true });
     } catch (_error) {}
     try {
-      fs.rmSync(realBoundRoot, { recursive: true, force: true });
+      rmSyncCompat(realBoundRoot, { recursive: true, force: true });
     } catch (_error) {}
     if (migratedWatcherHome) {
       try {
-        fs.rmSync(migratedWatcherHome, { recursive: true, force: true });
+        rmSyncCompat(migratedWatcherHome, { recursive: true, force: true });
       } catch (_error) {}
     }
   }
@@ -655,8 +680,8 @@ async function main() {
     assert.strictEqual(drift.needsReinstall, true, "stale unit files should require reinstall");
     assert.match(drift.text, /timer-install|Start Guard/i);
   } finally {
-    fs.rmSync(driftRoot, { recursive: true, force: true });
-    fs.rmSync(driftUnitDir, { recursive: true, force: true });
+    rmSyncCompat(driftRoot, { recursive: true, force: true });
+    rmSyncCompat(driftUnitDir, { recursive: true, force: true });
   }
 
   writeJson(projectRoot, "agent/RUN_STATE.json", {
@@ -684,10 +709,10 @@ async function main() {
   assert.ok(runtimeClarity.signals.some((signal) => /Review pending is active/.test(signal.text)));
   assert.ok(runtimeClarity.signals.some((signal) => /running and failed queue records coexist/i.test(signal.text)));
   assert.ok(runtimeClarity.signals.some((signal) => /reconciliation last ran/i.test(signal.text)));
-  fs.rmSync(path.join(projectRoot, "agent", "control", "PAUSE"), { force: true });
-  fs.rmSync(path.join(projectRoot, "agent", "status", "SUPERVISOR_STALE_STATE_RECONCILIATION.json"), { force: true });
-  fs.rmSync(path.join(projectRoot, "agent", "queue", "running", "job.json"), { force: true });
-  fs.rmSync(path.join(projectRoot, "agent", "queue", "failed", "old.json"), { force: true });
+  rmSyncCompat(path.join(projectRoot, "agent", "control", "PAUSE"), { force: true });
+  rmSyncCompat(path.join(projectRoot, "agent", "status", "SUPERVISOR_STALE_STATE_RECONCILIATION.json"), { force: true });
+  rmSyncCompat(path.join(projectRoot, "agent", "queue", "running", "job.json"), { force: true });
+  rmSyncCompat(path.join(projectRoot, "agent", "queue", "failed", "old.json"), { force: true });
   writeJson(projectRoot, "agent/RUN_STATE.json", {
     blocker_type: "none"
   });
@@ -2342,7 +2367,8 @@ async function main() {
   const reviewOnlyConclusions = JSON.parse(fs.readFileSync(path.join(projectRoot, "project_index", "current_conclusions.json"), "utf8"));
   assert.ok(!reviewOnlyConclusions.items.some((item) => item.topic_id === "review_required_route_conclusion"));
   const reviewProposalDir = path.join(projectRoot, "research", "proposals", "current_conclusions");
-  const reviewProposalName = fs.readdirSync(reviewProposalDir).sort().at(-1);
+  const reviewProposalNames = fs.readdirSync(reviewProposalDir).sort();
+  const reviewProposalName = reviewProposalNames[reviewProposalNames.length - 1];
   const reviewProposal = JSON.parse(fs.readFileSync(path.join(reviewProposalDir, reviewProposalName), "utf8"));
   assert.strictEqual(reviewProposal.current_conclusion_update.topic_id, "review_required_route_conclusion");
   assert.strictEqual(reviewProposal.current_conclusion_evidence_search.decision, "safe_to_answer");

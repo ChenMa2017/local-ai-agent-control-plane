@@ -537,7 +537,7 @@ async function testServiceAssemblySmoke() {
   const assembly = createServiceAssembly({
     vscode,
     fs: require("fs"),
-    fsp: require("fs/promises"),
+    fsp: require("fs").promises,
     path: require("path"),
     os: require("os"),
     crypto: require("crypto"),

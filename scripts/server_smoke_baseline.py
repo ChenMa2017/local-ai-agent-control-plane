@@ -31,9 +31,10 @@ DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_TIMEOUT_SECONDS = 180.0
 DEFAULT_HTTP_TIMEOUT_SECONDS = 15.0
 DEFAULT_PROMPT = (
-    "This is a local server smoke baseline. "
-    "Please return a short safe confirmation that the task ran successfully. "
-    "Do not modify files unless the configured mode explicitly requires it."
+    "Please report whether top-level README.md exists. "
+    "If it exists, summarize it in one short safe paragraph. "
+    "If it does not exist, answer exactly: README.md not found. "
+    "Scope: top-level README.md only."
 )
 
 FINAL_TASK_STATUSES = {"done", "failed", "cancelled", "timeout", "stale", "policy_violation"}

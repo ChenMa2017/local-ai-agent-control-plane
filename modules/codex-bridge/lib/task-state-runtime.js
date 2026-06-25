@@ -35,6 +35,30 @@ function createTaskStateRuntime(deps) {
     await fsp.rename(temp, file);
   }
 
+  async function removeDirRecursive(target) {
+    if (!target) {
+      return;
+    }
+    if (typeof fsp.rm === "function") {
+      await fsp.rm(target, { recursive: true, force: true });
+      return;
+    }
+    if (typeof fsp.rmdir === "function") {
+      await fsp.rmdir(target, { recursive: true }).catch(async (error) => {
+        if (error && error.code === "ENOENT") {
+          return;
+        }
+        if (error && error.code === "ENOTDIR") {
+          await fsp.unlink(target).catch(() => {});
+          return;
+        }
+        throw error;
+      });
+      return;
+    }
+    throw new Error("fs.promises rm/rmdir recursive removal is unavailable");
+  }
+
   function taskId() {
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "_");
     return `task_${stamp}_${crypto.randomBytes(3).toString("hex")}`;
@@ -164,7 +188,7 @@ function createTaskStateRuntime(deps) {
     if (owner && processLooksAlive(owner.pid)) {
       return false;
     }
-    await fsp.rm(taskLockDir(config, id), { recursive: true, force: true }).catch(() => {});
+    await removeDirRecursive(taskLockDir(config, id)).catch(() => {});
     return true;
   }
 
@@ -178,7 +202,7 @@ function createTaskStateRuntime(deps) {
         try {
           await writeTaskLockOwner(config, id, options.operation);
         } catch (error) {
-          await fsp.rm(lockDir, { recursive: true, force: true }).catch(() => {});
+          await removeDirRecursive(lockDir).catch(() => {});
           throw error;
         }
         break;
@@ -201,7 +225,7 @@ function createTaskStateRuntime(deps) {
     try {
       return await fn();
     } finally {
-      await fsp.rm(lockDir, { recursive: true, force: true }).catch(() => {});
+      await removeDirRecursive(lockDir).catch(() => {});
     }
   }
 

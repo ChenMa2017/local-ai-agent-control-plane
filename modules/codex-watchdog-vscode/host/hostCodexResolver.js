@@ -65,7 +65,8 @@ function createHostCodexResolver({
         }
       }
     }
-    return candidates.sort().at(-1) || "";
+    const sorted = candidates.sort();
+    return sorted[sorted.length - 1] || "";
   }
 
   function validateConfiguredCodexBin(value) {

@@ -9,6 +9,23 @@ const crypto = require("crypto");
 
 const { createTaskStateRuntime } = require("../lib/task-state-runtime");
 
+async function removeDirRecursive(target) {
+  if (typeof fs.promises.rm === "function") {
+    await fs.promises.rm(target, { recursive: true, force: true });
+    return;
+  }
+  await fs.promises.rmdir(target, { recursive: true }).catch(async (error) => {
+    if (error && error.code === "ENOENT") {
+      return;
+    }
+    if (error && error.code === "ENOTDIR") {
+      await fs.promises.unlink(target).catch(() => {});
+      return;
+    }
+    throw error;
+  });
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -17,9 +34,9 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function makeRuntime() {
+function makeRuntime(overrides = {}) {
   return createTaskStateRuntime({
-    fsp: fs.promises,
+    fsp: overrides.fsp || fs.promises,
     path,
     crypto,
     nowIso,
@@ -254,6 +271,33 @@ async function testPatchTaskReclaimsDeadStaleLock() {
   assert.strictEqual(patched.note, "stale lock recovered");
 }
 
+async function testPatchTaskReclaimsDeadStaleLockWithoutRm() {
+  const compatFsp = Object.assign({}, fs.promises);
+  delete compatFsp.rm;
+  const runtime = makeRuntime({ fsp: compatFsp });
+  const config = makeConfig({
+    taskLockTimeoutMs: 250,
+    taskLockStaleMs: 50
+  });
+  const id = taskId();
+  await runtime.writeTask(config, baseTask(config, id, "queued"));
+
+  const lockDir = path.join(config.__stateDir, "tasks", id, ".task.lock");
+  await fs.promises.mkdir(lockDir, { recursive: true });
+  await fs.promises.writeFile(path.join(lockDir, "owner.json"), JSON.stringify({
+    pid: 999999,
+    task_id: id,
+    operation: "patch_task",
+    created_at: "2000-01-01T00:00:00.000Z"
+  }, null, 2));
+
+  const patched = await runtime.patchTask(config, id, {
+    note: "stale lock recovered without rm"
+  });
+
+  assert.strictEqual(patched.note, "stale lock recovered without rm");
+}
+
 async function testPatchTaskDoesNotReclaimLiveLockOwner() {
   const runtime = makeRuntime();
   const config = makeConfig({
@@ -277,7 +321,7 @@ async function testPatchTaskDoesNotReclaimLiveLockOwner() {
     /Timed out waiting for task lock/
   );
 
-  await fs.promises.rm(lockDir, { recursive: true, force: true });
+  await removeDirRecursive(lockDir);
 }
 
 async function main() {
@@ -290,6 +334,7 @@ async function main() {
   await testPatchTaskAllowsMetadataOnFinalTask();
   await testPatchTaskRejectsStatusMutation();
   await testPatchTaskReclaimsDeadStaleLock();
+  await testPatchTaskReclaimsDeadStaleLockWithoutRm();
   await testPatchTaskDoesNotReclaimLiveLockOwner();
   console.log("task state runtime tests OK");
 }
