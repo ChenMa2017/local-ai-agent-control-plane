@@ -15,6 +15,6 @@
     "test": "node tests/task-state-runtime.test.js && node tests/lifecycle.test.js && node tests/safe-output.test.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=12.22.0"
   }
 }

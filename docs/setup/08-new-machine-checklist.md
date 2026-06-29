@@ -21,6 +21,15 @@ git --version
 codex --version
 ```
 
+Target baseline:
+
+```text
+Node.js 20.x recommended
+Node.js 12.22.x is the current legacy compatibility floor
+Python >= 3.10
+Node 12 is legacy-only compatibility, not the long-term development baseline
+```
+
 ## 3. Install module dependencies
 
 ```bash

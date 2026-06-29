@@ -117,6 +117,20 @@ pip install -r requirements.txt
 
 The Agent Host and Host Ops currently use the Python standard library only.
 
+## Runtime Baseline
+
+Current repository runtime contract:
+
+- GitHub Actions CI runs Python `3.10` and Node.js `20.x`.
+- Local development should use Node.js `20.x`.
+- The current legacy server compatibility floor is Node.js `12.22.x`.
+- Control-plane scripts require Python `3.10+`.
+
+Legacy note:
+
+- selected `codex-bridge` / `codex-watchdog-vscode` runtime paths intentionally keep Node 12.22-compatible fallbacks for older server installs;
+- Node 12 is EOL and should be treated as a temporary compatibility floor, not the long-term development or CI baseline for this repository.
+
 ## Generated Watchdog Files
 
 `modules/codex-watchdog-vscode` generates project-local watchdog scripts, schemas, prompts, skills, and helper docs. The generated project records a public-safe manifest:
@@ -194,8 +208,8 @@ Keep this file focused on service-startup secrets for Agent Host and the Discord
 scripts/check_all.sh
 ```
 
-This runs the module tests and syntax checks that can be run locally.
-GitHub Actions now uses the same script for push / pull request validation.
+This first checks the declared runtime baseline, then runs the module tests and syntax checks that can be run locally.
+GitHub Actions enforces the same runtime baseline and the same module-level CI scripts on push / pull request validation.
 
 ## License
 

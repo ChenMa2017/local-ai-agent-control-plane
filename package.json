@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "description": "Monorepo for the local Discord/Web controlled Codex Agent Host.",
+  "engines": {
+    "node": ">=12.22.0"
+  },
   "scripts": {
     "check": "bash scripts/check_all.sh",
+    "check:runtime-baseline": "bash scripts/ci/check_runtime_baseline.sh",
     "control-plane:validate": "python3 scripts/control_plane.py config validate",
     "control-plane:server-smoke": "python3 scripts/server_smoke_baseline.py",
     "control-plane:migrate-check": "python3 scripts/control_plane.py migrate check --dry-run",

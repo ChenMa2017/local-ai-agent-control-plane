@@ -14,11 +14,19 @@ codex --version
 Expected:
 
 ```text
-Node.js >= 18
+Node.js 20.x recommended for local development
+Node.js 12.22.x is the current legacy compatibility floor
 Python >= 3.10
 Git configured with user.name and user.email
 GitHub SSH key installed
 Codex CLI installed and authenticated locally
+```
+
+Legacy server note:
+
+```text
+selected codex-bridge / watchdog runtime paths intentionally keep Node 12.22-compatible fallbacks
+Node 12 is EOL and should be treated as a temporary compatibility floor, not the long-term development or CI baseline
 ```
 
 Recommended directory layout:

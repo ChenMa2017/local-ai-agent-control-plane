@@ -28,6 +28,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r modules/discord-adapter/requirements.txt
 
+      - name: Check runtime baseline
+        run: bash scripts/ci/check_runtime_baseline.sh
+
       - name: Run control-plane safety tools
         run: bash scripts/ci/check_control_plane.sh
 

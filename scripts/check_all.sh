@@ -12,6 +12,7 @@ run_check() {
   echo
 }
 
+run_check "runtime baseline" "$ROOT/scripts/ci/check_runtime_baseline.sh"
 run_check "control-plane safety tools" "$ROOT/scripts/ci/check_control_plane.sh"
 run_check "codex-bridge" "$ROOT/scripts/ci/check_codex_bridge.sh"
 run_check "agent-host" "$ROOT/scripts/ci/check_agent_host.sh"
